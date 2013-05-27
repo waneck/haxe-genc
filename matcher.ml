@@ -1133,6 +1133,45 @@ let rec collapse_case el = match el with
 	| [] ->
 		assert false
 
+let transform_extractors mctx stl cases =
+	let rec loop cl = match cl with
+		| (epat,eg,e) :: cl ->
+			let ex = ref [] in
+			let exc = ref 0 in
+			let rec find_ex e = match fst e with
+				| EBinop(OpArrow, ((EConst(Ident s),_) as e1), e2) ->
+					let p = pos e in
+					let ec = EConst (Ident ("__ex" ^ string_of_int (!exc))),snd e in
+					let ecall = ECall(e1,[ec]),p in
+					ex := (ecall,e2) :: !ex;
+					incr exc;
+					ec
+				| _ ->
+					Ast.map_expr find_ex e
+			in
+			let p = pos epat in
+			let epat = find_ex epat in
+			if !exc = 0 then (epat,eg,e) :: loop cl else begin
+				let esubjects = EArrayDecl (List.map fst !ex),p in
+				let case1 = [EArrayDecl (List.map snd !ex),p],None,e in
+				let cases = match cl with
+					| [] -> [case1]
+					| [(EConst (Ident "_"),_),_,e] -> case1 :: [[(EConst (Ident "_"),p)],None,e]
+					| _ ->
+						let cl2 = List.map (fun (epat,eg,e) -> [epat],eg,e) (loop cl) in
+						let st = match stl with st :: stl -> st | _ -> error "Unsupported" p in
+						let subj = st_to_texpr mctx st in
+						let e_subj = Interp.make_ast subj in
+						case1 :: [[(EConst (Ident "_"),p)],None,Some (ESwitch(e_subj,cl2,None),p)]
+				in
+				let eswitch = (ESwitch(esubjects,cases,None)),p in
+				(epat,None,Some eswitch) :: loop cl
+			end
+		| [] ->
+			[]
+	in
+	loop cases
+
 let match_expr ctx e cases def with_type p =
 	let need_val,with_type,tmono = match with_type with
 		| NoValue -> false,NoValue,None
@@ -1205,6 +1244,7 @@ let match_expr ctx e cases def with_type p =
 		List.iter (fun e -> match fst e with EBinop(OpOr,_,_) -> mctx.toplevel_or <- true; | _ -> ()) el;
 		collapse_case el,eg,e
 	) cases in
+	let cases = transform_extractors mctx stl cases in
 	let add_pattern_locals (pat,locals) =
 		PMap.iter (fun n (v,p) -> ctx.locals <- PMap.add n v ctx.locals) locals;
 		pat
@@ -1271,7 +1311,7 @@ let match_expr ctx e cases def with_type p =
 	let check_unused () =
 		let unused p =
 			display_error ctx "This pattern is unused" p;
-			let old_error = ctx.on_error in
+ 			let old_error = ctx.on_error in
 			ctx.on_error <- (fun ctx s p -> ctx.on_error <- old_error; raise Exit);
 	 		let check_expr e p =
 				try begin match fst e with
@@ -1306,7 +1346,7 @@ let match_expr ctx e cases def with_type p =
 		(* compile decision tree *)
 		let dt = compile mctx stl pl in
 		(* check for unused patterns *)
-		check_unused();
+		(* check_unused(); *)
 		(* determine type of switch statement *)
 		let t = if not need_val then
 			mk_mono()

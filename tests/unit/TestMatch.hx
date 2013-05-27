@@ -21,6 +21,15 @@ enum NE {
 	A(?x:Int);
 }
 
+enum MiniType {
+	MTString(t:MiniRef<String>, tl:Array<MiniType>);
+	MTInt(t:MiniRef<Int>, tl:Array<MiniType>);
+}
+
+typedef MiniRef<T> = {
+	public function get():T;
+}
+
 class TestMatch extends Test {
 	static macro function getErrorMessage(e:Expr) {
 		var result = try {
@@ -416,6 +425,55 @@ class TestMatch extends Test {
 		eq(f(t), "foo");
 	}
 
+	function testExtractors() {
+		function f(i) {
+			return switch(i) {
+				case 1,2,3: 1;
+				case even => true: 2;
+				case 4: throw "unreachable";
+				case _: 3;
+			}
+		}
+		
+		eq(1, f(1));
+		eq(1, f(2));
+		eq(1, f(3));
+		eq(2, f(4));
+		eq(3, f(5));
+		eq(3, f(7));
+		eq(3, f(9));
+		eq(2, f(6));
+		eq(2, f(8));
+		
+		function ref<T>(t:T):MiniRef<T> return {
+			get: function() return t
+		}
+		
+		function deref<T>(ref:MiniRef<T>) return ref.get();
+
+		function f(t:MiniType) {
+			return switch (t) {
+				case MTString(deref => "Foo", []): "Foo";
+				case MTString(deref => "Bar" | "Baz", _): "BarBaz";
+				case MTInt(deref => i, []): 'Int:$i';
+				case MTString(_): "OtherString";
+				case _: "Other";
+			}
+		}
+		
+		eq("Foo", f(MTString(ref("Foo"), [])));
+		eq("BarBaz", f(MTString(ref("Bar"), [])));
+		eq("BarBaz", f(MTString(ref("Baz"), [])));
+		eq("OtherString", f(MTString(ref("a"), [])));
+		eq("OtherString", f(MTString(ref(""), [])));
+		eq("Int:12", f(MTInt(ref(12), [])));
+		eq("Other", f(MTInt(ref(12), [MTInt(ref(10),[])])));
+	}
+	
+	function even(i:Int) {
+		return i & 1 == 0;
+	}
+	
 	#if false
 	 //all lines marked as // unused should give an error
 	function testRedundance() {
