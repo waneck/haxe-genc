@@ -468,6 +468,23 @@ class TestMatch extends Test {
 		eq("OtherString", f(MTString(ref(""), [])));
 		eq("Int:12", f(MTInt(ref(12), [])));
 		eq("Other", f(MTInt(ref(12), [MTInt(ref(10),[])])));
+		
+		function ispair(arr : Array<Int>) : haxe.ds.Option<{a : Int, b : Int}> {
+			return (arr.length == 2)?Some({ a : arr[0], b : arr[1] }):None;
+		}
+
+		function g(i : Array<Int>) {
+			return switch(i) {
+				case [x]: 1;
+				case ispair => Some(p) : p.a+p.b;
+				case arr: 3;
+			}
+		}
+
+		eq(3, g([]));
+		eq(1, g([1]));
+		eq(5, g([2, 3]));
+		eq(3, g([2, 3, 4]));		
 	}
 	
 	function even(i:Int) {
