@@ -484,7 +484,20 @@ class TestMatch extends Test {
 		eq(3, g([]));
 		eq(1, g([1]));
 		eq(5, g([2, 3]));
-		eq(3, g([2, 3, 4]));		
+		eq(3, g([2, 3, 4]));
+		
+		var anon = {
+			odd: function(i) return i & 1 != 0
+		};
+		
+		var i = 9;
+		var r = switch(i) {
+			case 1: 1;
+			case anon.odd => true: 2;
+			case 9: 3;
+			case _: 4;
+		}
+		eq(2, r);
 	}
 	
 	function even(i:Int) {
