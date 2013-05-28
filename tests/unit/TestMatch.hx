@@ -498,6 +498,22 @@ class TestMatch extends Test {
 			case _: 4;
 		}
 		eq(2, r);
+		
+		function mul(i1,i2) return i1 * i2;
+		
+		function check(i) {
+			return switch(i) {
+				case 1: 1;
+				case mul(4) => 8: 2;
+				case mul(5) => 15: 3;
+				case _: 4;
+			}
+		}
+		
+		eq(1, check(1));
+		eq(2, check(2));
+		eq(3, check(3));
+		eq(4, check(4));
 	}
 	
 	function even(i:Int) {
