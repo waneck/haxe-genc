@@ -1153,7 +1153,7 @@ let transform_extractors mctx stl cases =
 			let epat = find_ex epat in
 			if !exc = 0 then (epat,eg,e) :: loop cl else begin
 				let esubjects = EArrayDecl (List.map fst !ex),p in
-				let case1 = [EArrayDecl (List.map snd !ex),p],None,e in
+				let case1 = [EArrayDecl (List.map snd !ex),p],eg,e in
 				let cases = match cl with
 					| [] -> [case1]
 					| [(EConst (Ident "_"),_),_,e] -> case1 :: [[(EConst (Ident "_"),p)],None,e]

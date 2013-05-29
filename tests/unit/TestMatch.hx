@@ -533,6 +533,7 @@ class TestMatch extends Test {
 		function h(i : Array<Int>) {
 			return switch(i) {
 				case [x]: 1;
+				case isPair => Some({ a : a, b : b }) if (a < 0): 42;
 				case isPair => Some({ a : is(even) => Some(a), b : b }) : a+b;
 				case isPair => Some({ a : isNot(even) => Some(a), b : b }) : a*b;
 				case testArgs.bind(1, "foo") => "[99,98,97]": 99;
@@ -546,6 +547,7 @@ class TestMatch extends Test {
 		eq(5, h([2, 3]));
 		eq(3, h([1, 3]));
 		eq(3, h([2, 3, 4]));
+		eq(42, h([-1, 3]));
 		eq(99, h([99,98,97]));		
 	}
 	
