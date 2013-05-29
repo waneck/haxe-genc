@@ -1142,11 +1142,7 @@ let transform_extractors mctx stl cases =
 				| EBinop(OpArrow, e1, e2) ->
 					let p = pos e in
 					let ec = EConst (Ident ("__ex" ^ string_of_int (!exc))),snd e in
-					let ecall = match fst e1 with
-						| EConst(Ident _) | EField _ -> ECall(e1,[ec]),p
-						| ECall(((EConst(Ident _) | EField _),_) as e1,el) -> ECall(e1,el @ [ec]),p
-						| _ -> error "Unrecognized extractor function" p
-					in
+					let ecall = ECall(e1,[ec]),p in
 					ex := (ecall,e2) :: !ex;
 					incr exc;
 					ec

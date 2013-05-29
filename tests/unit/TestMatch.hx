@@ -1,4 +1,5 @@
 package unit;
+import haxe.ds.Option;
 import haxe.macro.Expr;
 
 enum Tree<T> {
@@ -504,8 +505,8 @@ class TestMatch extends Test {
 		function check(i) {
 			return switch(i) {
 				case 1: 1;
-				case mul(4) => 8: 2;
-				case mul(5) => 15: 3;
+				case mul.bind(4) => 8: 2;
+				case mul.bind(5) => 15: 3;
 				case _: 4;
 			}
 		}
@@ -514,6 +515,38 @@ class TestMatch extends Test {
 		eq(2, check(2));
 		eq(3, check(3));
 		eq(4, check(4));
+		
+		
+		function isPair<T>(t:Array<T>) return t.length == 2 ? Some({a:t[0], b:t[1]}) : None;
+
+		function is<T>(pred : T -> Bool) return function (x : T) {
+			return pred(x)?Some(x):None;
+		}
+
+		function isNot<T>(pred : T -> Bool) return function (x : T) {
+			return (!pred(x))?Some(x):None;
+		}
+
+		function testArgs<T>(i:Int, s:String, t:T) {
+			return Std.string(t);
+		}
+		function h(i : Array<Int>) {
+			return switch(i) {
+				case [x]: 1;
+				case isPair => Some({ a : is(even) => Some(a), b : b }) : a+b;
+				case isPair => Some({ a : isNot(even) => Some(a), b : b }) : a*b;
+				case testArgs.bind(1, "foo") => "[99,98,97]": 99;
+				case arr: 3;
+			}
+		}
+		
+		eq(3, h([]));
+		eq(1, h([1]));
+		eq(1, h([2]));
+		eq(5, h([2, 3]));
+		eq(3, h([1, 3]));
+		eq(3, h([2, 3, 4]));
+		eq(99, h([99,98,97]));		
 	}
 	
 	function even(i:Int) {
