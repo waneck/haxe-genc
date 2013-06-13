@@ -68,7 +68,7 @@ class Log {
 				untyped __call__('_hx_trace', v + extra, infos);
 			}
 			else
-				untyped __call__('_hx_trace', v, infos);		
+				untyped __call__('_hx_trace', v, infos);
 		#elseif cpp
 			if (infos!=null && infos.customParams!=null) {
 				var extra:String = "";
@@ -94,6 +94,8 @@ class Log {
 			#elseif java
 			untyped __java__("java.lang.System.out.println(str)");
 			#end
+		#elseif c
+			untyped __trace(v);
 		#end
 	}
 

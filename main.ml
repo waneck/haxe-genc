@@ -869,6 +869,9 @@ try
 			cp_libs := "hxjava" :: !cp_libs;
 			set_platform Java dir;
 		),"<directory> : generate Java code into target directory");
+		("-c",Arg.String (fun dir ->
+			set_platform C dir;
+		),"<directory> : generate C code into target directory");
 		("-xml",Arg.String (fun file ->
 			Parser.use_doc := true;
 			xml_out := Some file
@@ -1169,6 +1172,9 @@ try
 		| Cpp ->
 			add_std "cpp";
 			"cpp"
+		| C ->
+			add_std "c";
+			"c"
 		| Cs ->
 			Gencs.before_generate com;
 			add_std "cs"; "cs"
@@ -1295,6 +1301,9 @@ try
 		| Java ->
 			Common.log com ("Generating Java in : " ^ com.file);
 			Genjava.generate com;
+		| C ->
+			Common.log com ("Generating C in : " ^ com.file);
+			Genc.generate com;
 		);
 	end;
 	Sys.catch_break false;
