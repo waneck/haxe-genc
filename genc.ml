@@ -545,7 +545,13 @@ let generate_class ctx c =
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
 	let ctors = List.map (fun s -> PMap.find s en.e_constrs) en.e_names in
+	let path = path_to_name en.e_path in
 
+	(* forward declare enum type *)
+	print ctx "typedef struct %s %s" path path;
+	newline ctx;
+
+	(* generate constructor types *)
 	spr ctx "// constructor structure";
 	let ctors = List.map (fun ef ->
 		newline ctx;
@@ -566,10 +572,11 @@ let generate_enum ctx en =
 			{ ef with ef_type = TFun([],ef.ef_type)}
 	) ctors in
 
+	(* generate enum type *)
 	newline ctx;
 	spr ctx "// enum structure";
 	newline ctx;
-	spr ctx "typedef struct {";
+	print ctx "typedef struct %s{" path;
 	let b = open_block ctx in
 	newline ctx;
 	spr ctx "int index";
@@ -588,10 +595,9 @@ let generate_enum ctx en =
 	print ctx "} %s" (path_to_name en.e_path);
 	newline ctx;
 
+	(* generate constructor functions *)
 	spr ctx "// constructor functions";
-
 	List.iter (fun ef ->
-		let path = path_to_name en.e_path in
 		newline ctx;
 		match ef.ef_type with
 		| TFun(args,ret) ->
