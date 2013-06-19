@@ -150,11 +150,21 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TConst(TThis) ->
 		spr ctx "this"
 	| TCall({eexpr = TLocal({v_name = "__trace"})},[e1]) ->
-		spr ctx "printf(\"%s\",";
+		spr ctx "printf(\"%s\\n\",";
 		generate_expr ctx e1;
 		spr ctx ")";
 	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
 		spr ctx code
+	| TCall({eexpr = TField(e1,FInstance(c,cf))},el) ->
+		add_dependency ctx c;
+		spr ctx (full_field_name c cf);
+		spr ctx "(";
+		generate_expr ctx e1;
+		List.iter (fun e ->
+			spr ctx ",";
+			generate_expr ctx e
+		) el;
+		spr ctx ")"
 	| TCall(e1, el) ->
 		spr ctx "(";
 		generate_expr ctx e1;
@@ -224,6 +234,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TUnop(op,Prefix,e1) ->
 		begin match op with
 		| Increment ->
+			(* TODO: sanitize *)
 			generate_expr ctx e1;
 			spr ctx " = ";
 			generate_expr ctx e1;
