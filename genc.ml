@@ -106,6 +106,10 @@ let close_type_context ctx =
 let expr_debug ctx e =
 	Printf.sprintf "%s: %s" ctx.fctx.field.cf_name (s_expr (s_type (print_context())) e)
 
+let block e = match e.eexpr with
+	| TBlock _ -> e
+	| _ -> mk (TBlock [e]) e.etype e.epos
+
 let mk_ccode ctx s =
 	mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
 
@@ -166,9 +170,8 @@ let rec generate_expr ctx e = match e.eexpr with
 		) el;
 		spr ctx ")"
 	| TCall(e1, el) ->
-		spr ctx "(";
 		generate_expr ctx e1;
-		spr ctx ")(";
+		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")"
 	| TTypeExpr (TClassDecl c) ->
@@ -219,18 +222,20 @@ let rec generate_expr ctx e = match e.eexpr with
 		generate_expr ctx e2;
 		spr ctx ")";
 	| TWhile(e1,e2,NormalWhile) ->
-		spr ctx "while(";
+		spr ctx "while";
 		generate_expr ctx e1;
-		spr ctx ")";
 		generate_expr ctx e2;
+	| TIf(e1,e2,e3) ->
+		spr ctx "if";
+		generate_expr ctx e1;
+		generate_expr ctx (block e2);
+		(match e3 with None -> () | Some e3 ->
+			spr ctx " else ";
+			generate_expr ctx (block e3))
 	| TBinop(op,e1,e2) ->
-		spr ctx "(";
 		generate_expr ctx e1;
-		spr ctx ")";
-		spr ctx (s_binop op);
-		spr ctx "(";
+		print ctx " %s " (s_binop op);
 		generate_expr ctx e2;
-		spr ctx ")";
 	| TUnop(op,Prefix,e1) ->
 		begin match op with
 		| Increment ->
