@@ -6,12 +6,14 @@ type context = {
 	com : Common.context;
 	cvar : tvar;
 	mutable num_temp_funcs : int;
+	mutable num_labels : int;
 }
 
 type function_context = {
 	field : tclass_field;
 	expr : texpr option;
 	mutable local_vars : tvar list;
+	mutable loop_stack : string option list;
 }
 
 type type_context = {
@@ -34,6 +36,7 @@ let newline ctx =
 	| '{' | ':' | ' '
 	| '}' when Buffer.length ctx.buf > 1 && Buffer.nth ctx.buf (Buffer.length ctx.buf - 2) != '"' ->
 		print ctx "\n%s" ctx.tabs
+	| '\t' -> ()
 	| _ ->
 		print ctx ";\n%s" ctx.tabs
 
@@ -74,6 +77,7 @@ let mk_type_context con path =
 			local_vars = [];
 			field = null_field;
 			expr = None;
+			loop_stack = [];
 		};
 		dependencies = PMap.empty;
 	}
@@ -135,7 +139,8 @@ let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 let declare_var ctx v = if not (List.mem v ctx.local_vars) then ctx.local_vars <- v :: ctx.local_vars
 
 let rec generate_expr ctx e = match e.eexpr with
-	| TBlock([]) -> spr ctx "{ }"
+	| TBlock([]) ->
+		spr ctx "{ }"
 	| TBlock(el) ->
 		spr ctx "{";
 		let b = open_block ctx in
@@ -151,6 +156,10 @@ let rec generate_expr ctx e = match e.eexpr with
 		print ctx "\"%s\"" s
 	| TConst(TInt i) ->
 		print ctx "%ld" i
+	| TConst(TBool true) ->
+		spr ctx "TRUE"
+	| TConst(TBool false) ->
+		spr ctx "FALSE"
 	| TConst(TThis) ->
 		spr ctx "this"
 	| TCall({eexpr = TLocal({v_name = "__trace"})},[e1]) ->
@@ -224,11 +233,29 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TWhile(e1,e2,NormalWhile) ->
 		spr ctx "while";
 		generate_expr ctx e1;
-		generate_expr ctx e2;
+		ctx.fctx.loop_stack <- None :: ctx.fctx.loop_stack;
+		generate_expr ctx (block e2);
+		begin match ctx.fctx.loop_stack with
+		| ls :: l ->
+			(match ls with None -> () | Some s -> print ctx "%s:" s);
+			ctx.fctx.loop_stack <- l;
+		| _ ->
+			assert false
+		end
 	| TContinue ->
 		spr ctx "continue";
 	| TBreak _ ->
-		spr ctx "break";
+		let label = match ctx.fctx.loop_stack with
+			| (Some s) :: _ -> s
+			| None :: l ->
+				let s = Printf.sprintf "_hx_label%i" ctx.con.num_labels in
+				ctx.con.num_labels <- ctx.con.num_labels + 1;
+				ctx.fctx.loop_stack <- (Some s) :: l;
+				s
+			| [] ->
+				assert false
+		in
+		print ctx "goto %s" label;
 	| TIf(e1,e2,e3) ->
 		spr ctx "if";
 		generate_expr ctx e1;
@@ -240,20 +267,34 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "switch";
 		generate_expr ctx e1;
 		spr ctx "{";
+		let generate_case_expr e =
+			let b = open_block ctx in
+			List.iter (fun e ->
+				newline ctx;
+				generate_expr ctx e;
+			) (match e.eexpr with TBlock el -> el | _ -> [e]);
+			newline ctx;
+			spr ctx "break";
+			b();
+		in
 		let b = open_block ctx in
 		newline ctx;
 		List.iter (fun (el,e) ->
 			spr ctx "case ";
 			concat ctx "," (generate_expr ctx) el;
 			spr ctx ":";
-			generate_expr ctx (Codegen.concat e (mk TBreak ctx.con.com.basic.tvoid e.epos));
+			generate_case_expr e;
+			newline ctx;
 		) cases;
-		(match edef with None -> () | Some e ->
-			spr ctx "default:";
-			generate_expr ctx (block e));
+		begin match edef with
+			| None -> ()
+			| Some e ->
+				spr ctx "default:";
+				generate_case_expr e;
+		end;
 		b();
+		newline ctx;
 		spr ctx "}";
-		newline ctx
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
 		print ctx " %s " (s_binop op);
@@ -331,6 +372,7 @@ let mk_function_context ctx cf =
 		field = cf;
 		local_vars = !locals;
 		expr = e;
+		loop_stack = [];
 	}
 
 let generate_function_header ctx c cf =
@@ -463,5 +505,6 @@ let generate com =
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
 		num_temp_funcs = 0;
+		num_labels = 0;
 	} in
 	List.iter (generate_type con) com.types
