@@ -23,7 +23,7 @@ type type_context = {
 	buf_h : Buffer.t;
 	mutable buf : Buffer.t;
 	mutable tabs : string;
-	mutable curclass : tclass;
+	mutable curpath : path;
 	mutable fctx : function_context;
 	mutable dependencies : (path,bool) PMap.t;
 }
@@ -72,7 +72,7 @@ let mk_type_context con path =
 		buf_c = buf_c;
 		buf_h = buf_h;
 		tabs = "";
-		curclass = null_class;
+		curpath = path;
 		fctx = {
 			local_vars = [];
 			field = null_field;
@@ -86,9 +86,9 @@ let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "
 let path_to_header_path (pack,name) = match pack with [] -> name ^ ".h" | _ -> String.concat "/" pack ^ "/" ^ name ^ ".h"
 
 let close_type_context ctx =
-	let n = "_h" ^ path_to_name ctx.curclass.cl_path in
+	let n = "_h" ^ path_to_name ctx.curpath in
 	let ch_h = open_out_bin (ctx.file_path_no_ext ^ ".h") in
-
+	print_endline ("Writing to " ^ (ctx.file_path_no_ext ^ ".h"));
 	output_string ch_h ("#ifndef " ^ n ^ "\n");
 	output_string ch_h ("#define " ^ n ^ "\n");
 	output_string ch_h "#define GC_NOT_DLL\n";
@@ -103,7 +103,7 @@ let close_type_context ctx =
 	close_out ch_h;
 
 	let ch_c = open_out_bin (ctx.file_path_no_ext ^ ".c") in
-	output_string ch_c ("#include \"" ^ (snd ctx.curclass.cl_path) ^ ".h\"\n");
+	output_string ch_c ("#include \"" ^ (snd ctx.curpath) ^ ".h\"\n");
 	output_string ch_c (Buffer.contents ctx.buf_c);
 	close_out ch_c
 
@@ -128,9 +128,10 @@ let mk_ccode ctx s =
 	mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
 
 let full_field_name c cf = (path_to_name c.cl_path) ^ "_" ^ cf.cf_name
+let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
-let add_dependency ctx c =
-	if c != ctx.curclass then ctx.dependencies <- PMap.add c.cl_path true ctx.dependencies
+let add_dependency ctx path =
+	if path <> ctx.curpath then ctx.dependencies <- PMap.add path true ctx.dependencies
 
 let s_type ctx t = match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
@@ -140,8 +141,11 @@ let s_type ctx t = match follow t with
 	| TInst({cl_path = [],"Array"},[_]) -> "GArray*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
-		add_dependency ctx c;
+		add_dependency ctx c.cl_path;
 		(path_to_name c.cl_path) ^ "*"
+	| TEnum(en,_) ->
+		add_dependency ctx en.e_path;
+		(path_to_name en.e_path) ^ "*"
 	| _ -> "void*"
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
@@ -186,7 +190,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
 		spr ctx code
 	| TCall({eexpr = TField(e1,FInstance(c,cf))},el) ->
-		add_dependency ctx c;
+		add_dependency ctx c.cl_path;
 		spr ctx (full_field_name c cf);
 		spr ctx "(";
 		generate_expr ctx e1;
@@ -208,7 +212,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		(* shouldn't happen? *)
 		assert false
 	| TField(_,FStatic(c,cf)) ->
-		add_dependency ctx c;
+		add_dependency ctx c.cl_path;
 		spr ctx (full_field_name c cf)
 	| TField(e1,fa) ->
 		let n = field_name fa in
@@ -220,7 +224,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TObjectDecl _ ->
 		spr ctx "0";
 	| TNew(c,_,el) ->
-		add_dependency ctx c;
+		add_dependency ctx c.cl_path;
 		spr ctx (full_field_name c (match c.cl_constructor with None -> assert false | Some cf -> cf));
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
@@ -521,11 +525,17 @@ let generate_class ctx c =
 		print ctx "int main() {\n\tGC_INIT();\n\t%s();\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ()
 
+let generate_enum ctx en =
+	()
+
 let generate_type con mt = match mt with
-	| TClassDecl c ->
+	| TClassDecl c when not c.cl_extern ->
 		let ctx = mk_type_context con c.cl_path in
-		ctx.curclass <- c;
 		generate_class ctx c;
+		close_type_context ctx;
+	| TEnumDecl en when not en.e_extern ->
+		let ctx = mk_type_context con en.e_path in
+		generate_enum ctx en;
 		close_type_context ctx;
 	| _ ->
 		()
