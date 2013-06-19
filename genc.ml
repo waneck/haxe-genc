@@ -325,19 +325,11 @@ let rec generate_expr ctx e = match e.eexpr with
 		print ctx " %s " (s_binop op);
 		generate_expr ctx e2;
 	| TUnop(op,Prefix,e1) ->
-		begin match op with
-		| Increment ->
-			(* TODO: sanitize *)
-			generate_expr ctx e1;
-			spr ctx " = ";
-			generate_expr ctx e1;
-			spr ctx " + 1";
-		| _ ->
-			assert false
-		end
+		spr ctx (s_unop op);
+		generate_expr ctx e1;
 	| TUnop(op,Postfix,e1) ->
-		(* TODO *)
-		assert false
+		generate_expr ctx e1;
+		spr ctx (s_unop op);
 	| TParenthesis e1 ->
 		spr ctx "(";
 		generate_expr ctx e1;
