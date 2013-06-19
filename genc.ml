@@ -114,6 +114,16 @@ let block e = match e.eexpr with
 	| TBlock _ -> e
 	| _ -> mk (TBlock [e]) e.etype e.epos
 
+let begin_loop ctx =
+	ctx.fctx.loop_stack <- None :: ctx.fctx.loop_stack;
+	fun () ->
+		match ctx.fctx.loop_stack with
+		| ls :: l ->
+			(match ls with None -> () | Some s -> print ctx "%s:" s);
+			ctx.fctx.loop_stack <- l;
+		| _ ->
+			assert false
+
 let mk_ccode ctx s =
 	mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
 
@@ -156,6 +166,13 @@ let rec generate_expr ctx e = match e.eexpr with
 		print ctx "\"%s\"" s
 	| TConst(TInt i) ->
 		print ctx "%ld" i
+	| TConst(TFloat s) ->
+		print ctx "%sd" s
+	| TConst(TNull) ->
+		spr ctx "NULL"
+	| TConst(TSuper) ->
+		(* TODO: uhm... *)
+		()
 	| TConst(TBool true) ->
 		spr ctx "TRUE"
 	| TConst(TBool false) ->
@@ -185,6 +202,11 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx ")"
 	| TTypeExpr (TClassDecl c) ->
 		spr ctx (path_to_name c.cl_path);
+	| TTypeExpr (TEnumDecl e) ->
+		spr ctx (path_to_name e.e_path);
+	| TTypeExpr (TTypeDecl _ | TAbstractDecl _) ->
+		(* shouldn't happen? *)
+		assert false
 	| TField(_,FStatic(c,cf)) ->
 		add_dependency ctx c;
 		spr ctx (full_field_name c cf)
@@ -203,6 +225,8 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
+	| TReturn None ->
+		spr ctx "return"
 	| TReturn (Some e1) ->
 		spr ctx "return (";
 		generate_expr ctx e1;
@@ -233,15 +257,16 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TWhile(e1,e2,NormalWhile) ->
 		spr ctx "while";
 		generate_expr ctx e1;
-		ctx.fctx.loop_stack <- None :: ctx.fctx.loop_stack;
+		let l = begin_loop ctx in
 		generate_expr ctx (block e2);
-		begin match ctx.fctx.loop_stack with
-		| ls :: l ->
-			(match ls with None -> () | Some s -> print ctx "%s:" s);
-			ctx.fctx.loop_stack <- l;
-		| _ ->
-			assert false
-		end
+		l()
+	| TWhile(e1,e2,DoWhile) ->
+		spr ctx "do";
+		let l = begin_loop ctx in
+		generate_expr ctx (block e2);
+		spr ctx " while";
+		generate_expr ctx e1;
+		l()
 	| TContinue ->
 		spr ctx "continue";
 	| TBreak _ ->
@@ -310,6 +335,9 @@ let rec generate_expr ctx e = match e.eexpr with
 		| _ ->
 			assert false
 		end
+	| TUnop(op,Postfix,e1) ->
+		(* TODO *)
+		assert false
 	| TParenthesis e1 ->
 		spr ctx "(";
 		generate_expr ctx e1;
@@ -317,8 +345,18 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TArrayDecl _ ->
 		(* handled in function context pass *)
 		assert false
-	| t ->
-		print_endline (expr_debug ctx e)
+	| TMeta(_,e) ->
+		generate_expr ctx e
+	| TCast(e,_) ->
+		(* TODO: make this do something *)
+		generate_expr ctx e
+	| TEnumParameter _
+	| TThrow _
+	| TTry _
+	| TPatMatch _
+	| TFor _
+	| TFunction _ ->
+		print_endline ("Not implemented yet: " ^ (expr_debug ctx e))
 
 let mk_array_decl ctx el t p =
 	let ts = match follow t with
