@@ -236,6 +236,24 @@ let rec generate_expr ctx e = match e.eexpr with
 		(match e3 with None -> () | Some e3 ->
 			spr ctx " else ";
 			generate_expr ctx (block e3))
+	| TSwitch(e1,cases,edef) ->
+		spr ctx "switch";
+		generate_expr ctx e1;
+		spr ctx "{";
+		let b = open_block ctx in
+		newline ctx;
+		List.iter (fun (el,e) ->
+			spr ctx "case ";
+			concat ctx "," (generate_expr ctx) el;
+			spr ctx ":";
+			generate_expr ctx (Codegen.concat e (mk TBreak ctx.con.com.basic.tvoid e.epos));
+		) cases;
+		(match edef with None -> () | Some e ->
+			spr ctx "default:";
+			generate_expr ctx (block e));
+		b();
+		spr ctx "}";
+		newline ctx
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
 		print ctx " %s " (s_binop op);
