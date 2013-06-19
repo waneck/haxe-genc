@@ -102,10 +102,13 @@ let close_type_context ctx =
 	output_string ch_h "\n#endif";
 	close_out ch_h;
 
-	let ch_c = open_out_bin (ctx.file_path_no_ext ^ ".c") in
-	output_string ch_c ("#include \"" ^ (snd ctx.curpath) ^ ".h\"\n");
-	output_string ch_c (Buffer.contents ctx.buf_c);
-	close_out ch_c
+	let sc = Buffer.contents ctx.buf_c in
+	if String.length sc > 0 then begin
+		let ch_c = open_out_bin (ctx.file_path_no_ext ^ ".c") in
+		output_string ch_c ("#include \"" ^ (snd ctx.curpath) ^ ".h\"\n");
+		output_string ch_c sc;
+		close_out ch_c
+	end
 
 let expr_debug ctx e =
 	Printf.sprintf "%s: %s" ctx.fctx.field.cf_name (s_expr (s_type (print_context())) e)
@@ -199,6 +202,10 @@ let rec generate_expr ctx e = match e.eexpr with
 			generate_expr ctx e
 		) el;
 		spr ctx ")"
+	| TCall({eexpr = TField(_,FEnum(en,ef))},el) ->
+		print ctx "new_%s(" (full_enum_field_name en ef);
+		concat ctx "," (generate_expr ctx) el;
+		spr ctx ")"
 	| TCall(e1, el) ->
 		generate_expr ctx e1;
 		spr ctx "(";
@@ -214,6 +221,8 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TField(_,FStatic(c,cf)) ->
 		add_dependency ctx c.cl_path;
 		spr ctx (full_field_name c cf)
+	| TField(_,FEnum(en,ef)) ->
+		print ctx "new_%s()" (full_enum_field_name en ef)
 	| TField(e1,fa) ->
 		let n = field_name fa in
 		spr ctx "(";
@@ -346,7 +355,15 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TCast(e,_) ->
 		(* TODO: make this do something *)
 		generate_expr ctx e
-	| TEnumParameter _
+	| TEnumParameter (e1,ef,i) ->
+		generate_expr ctx e1;
+		begin match follow e1.etype with
+			| TEnum(en,_) ->
+				let s,_,_ = match ef.ef_type with TFun(args,_) -> List.nth args i | _ -> assert false in
+				print ctx "->args.%s.%s" ef.ef_name s;
+			| _ ->
+				assert false
+		end
 	| TThrow _
 	| TTry _
 	| TPatMatch _
@@ -526,7 +543,76 @@ let generate_class ctx c =
 	| _ -> ()
 
 let generate_enum ctx en =
-	()
+	ctx.buf <- ctx.buf_h;
+	let ctors = List.map (fun s -> PMap.find s en.e_constrs) en.e_names in
+
+	spr ctx "// constructor structure";
+	let ctors = List.map (fun ef ->
+		newline ctx;
+		match follow ef.ef_type with
+		| TFun(args,_) ->
+			spr ctx "typedef struct {";
+			let b = open_block ctx in
+			List.iter (fun (n,_,t) ->
+				newline ctx;
+				print ctx "%s %s" (s_type ctx t) n;
+			) args;
+			b();
+			newline ctx;
+			print ctx "} %s" (full_enum_field_name en ef);
+			ef
+		| _ ->
+			print ctx "typedef void* %s" (full_enum_field_name en ef);
+			{ ef with ef_type = TFun([],ef.ef_type)}
+	) ctors in
+
+	newline ctx;
+	spr ctx "// enum structure";
+	newline ctx;
+	spr ctx "typedef struct {";
+	let b = open_block ctx in
+	newline ctx;
+	spr ctx "int index";
+	newline ctx;
+	spr ctx "union {";
+	let b2 = open_block ctx in
+	List.iter (fun ef ->
+		newline ctx;
+		print ctx "%s %s" (full_enum_field_name en ef) ef.ef_name
+	) ctors;
+	b2();
+	newline ctx;
+	spr ctx "} args";
+	b();
+	newline ctx;
+	print ctx "} %s" (path_to_name en.e_path);
+	newline ctx;
+
+	spr ctx "// constructor functions";
+
+	List.iter (fun ef ->
+		let path = path_to_name en.e_path in
+		newline ctx;
+		match ef.ef_type with
+		| TFun(args,ret) ->
+			print ctx "%s new_%s(%s) {" (s_type ctx ret) (full_enum_field_name en ef) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args));
+			let b = open_block ctx in
+			newline ctx;
+			print ctx "%s* this = (%s*) GC_MALLOC(sizeof(%s))" path path path;
+			newline ctx ;
+			print ctx "this->index = %i" ef.ef_index;
+			List.iter (fun (n,_,_) ->
+				newline ctx;
+				print ctx "this->args.%s.%s = %s" ef.ef_name n n;
+			) args;
+			newline ctx;
+			spr ctx "return this";
+			b();
+			newline ctx;
+			spr ctx "}"
+		| _ ->
+			assert false
+	) ctors
 
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
