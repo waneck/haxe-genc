@@ -225,6 +225,10 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "while";
 		generate_expr ctx e1;
 		generate_expr ctx e2;
+	| TContinue ->
+		spr ctx "continue";
+	| TBreak _ ->
+		spr ctx "break";
 	| TIf(e1,e2,e3) ->
 		spr ctx "if";
 		generate_expr ctx e1;
@@ -251,6 +255,9 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx e1;
 		spr ctx ")";
+	| TArrayDecl _ ->
+		(* handled in function context pass *)
+		assert false
 	| t ->
 		print_endline (expr_debug ctx e)
 
