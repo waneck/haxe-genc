@@ -93,7 +93,7 @@ let close_type_context ctx =
 	output_string ch_h ("#define " ^ n ^ "\n");
 	output_string ch_h "#define GC_NOT_DLL\n";
 	output_string ch_h "#include \"gc.h\"\n";
-	output_string ch_h "#include \"glib/garray.h\"\n";
+	(* output_string ch_h "#include \"glib/garray.h\"\n"; *)
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path _ ->
 		output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
@@ -511,7 +511,8 @@ let generate_class ctx c =
 		print ctx "} %s" (path_to_name c.cl_path);
 		newline ctx;
 		spr ctx "\n";
-	end;
+	end else
+    print ctx "typedef void* %s // empty member structure\n;" (path_to_name c.cl_path);
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
