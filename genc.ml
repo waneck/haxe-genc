@@ -7,6 +7,8 @@ type context = {
 	cvar : tvar;
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
+	mutable num_anon_types : int;
+	mutable anon_types : (string,string) PMap.t;
 }
 
 type function_context = {
@@ -149,6 +151,25 @@ let s_type ctx t = match follow t with
 	| TEnum(en,_) ->
 		add_dependency ctx en.e_path;
 		(path_to_name en.e_path) ^ "*"
+	| TAnon a ->
+		begin match !(a.a_status) with
+		| Statics c -> "Class_" ^ (path_to_name c.cl_path) ^ "*"
+		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
+		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
+		| _ ->
+			let fields = PMap.fold (fun cf acc -> cf :: acc) a.a_fields [] in
+			let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
+			let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) cf.cf_type)) fields) in
+			begin
+				try PMap.find id ctx.con.anon_types
+				with Not_found ->
+					ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
+					let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
+					ctx.con.anon_types <- PMap.add id s ctx.con.anon_types;
+					s
+			end;
+			"void*"
+		end
 	| _ -> "void*"
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
@@ -638,5 +659,7 @@ let generate com =
 		cvar = alloc_var "__c" t_dynamic;
 		num_temp_funcs = 0;
 		num_labels = 0;
+		num_anon_types = -1;
+		anon_types = PMap.empty;
 	} in
 	List.iter (generate_type con) com.types
