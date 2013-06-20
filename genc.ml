@@ -138,6 +138,17 @@ let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 let add_dependency ctx path =
 	if path <> ctx.curpath then ctx.dependencies <- PMap.add path true ctx.dependencies
 
+let anon_signature ctx fields =
+	let fields = PMap.fold (fun cf acc -> cf :: acc) fields [] in
+	let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
+	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) cf.cf_type)) fields) in
+	try fst (PMap.find id ctx.con.anon_types)
+	with Not_found ->
+		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
+		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
+		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
+		s
+
 let s_type ctx t = match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
@@ -158,18 +169,7 @@ let s_type ctx t = match follow t with
 		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
 		| _ ->
 			add_dependency ctx (["hxc"],"AnonTypes");
-			let fields = PMap.fold (fun cf acc -> cf :: acc) a.a_fields [] in
-			let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
-			let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) cf.cf_type)) fields) in
-			let s = begin
-				try fst (PMap.find id ctx.con.anon_types)
-				with Not_found ->
-					ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
-					let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
-					ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
-					s
-			end in
-			s ^ "*"
+			(anon_signature ctx a.a_fields) ^ "*"
 		end
 	| _ -> "void*"
 
@@ -252,7 +252,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		print ctx ")->%s" n
 	| TLocal v ->
 		spr ctx v.v_name;
-	| TObjectDecl _ ->
+	| TObjectDecl fl ->
 		spr ctx "0";
 	| TNew(c,_,el) ->
 		add_dependency ctx c.cl_path;
