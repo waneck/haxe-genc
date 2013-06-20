@@ -8,7 +8,7 @@ type context = {
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
 	mutable num_anon_types : int;
-	mutable anon_types : (string,string) PMap.t;
+	mutable anon_types : (string,string * tclass_field list) PMap.t;
 }
 
 type function_context = {
@@ -157,18 +157,19 @@ let s_type ctx t = match follow t with
 		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
 		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
 		| _ ->
+			add_dependency ctx (["hxc"],"AnonTypes");
 			let fields = PMap.fold (fun cf acc -> cf :: acc) a.a_fields [] in
 			let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
 			let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) cf.cf_type)) fields) in
-			begin
-				try PMap.find id ctx.con.anon_types
+			let s = begin
+				try fst (PMap.find id ctx.con.anon_types)
 				with Not_found ->
 					ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
 					let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
-					ctx.con.anon_types <- PMap.add id s ctx.con.anon_types;
+					ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
 					s
-			end;
-			"void*"
+			end in
+			s ^ "*"
 		end
 	| _ -> "void*"
 
@@ -653,6 +654,24 @@ let generate_type con mt = match mt with
 	| _ ->
 		()
 
+let generate_hxc_files con =
+	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
+	spr ctx "// Anonymous types";
+	PMap.iter (fun _ (s,cfl) ->
+		newline ctx;
+		print ctx "typedef struct %s {" s;
+		let b = open_block ctx in
+		List.iter (fun cf ->
+			newline ctx;
+			print ctx "%s %s" (s_type ctx cf.cf_type) cf.cf_name;
+		) cfl;
+		b();
+		newline ctx;
+		print ctx "} %s" s;
+	) con.anon_types;
+	newline ctx;
+	close_type_context ctx
+
 let generate com =
 	let con = {
 		com = com;
@@ -662,4 +681,5 @@ let generate com =
 		num_anon_types = -1;
 		anon_types = PMap.empty;
 	} in
-	List.iter (generate_type con) com.types
+	List.iter (generate_type con) com.types;
+	generate_hxc_files con
