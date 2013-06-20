@@ -253,7 +253,11 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TLocal v ->
 		spr ctx v.v_name;
 	| TObjectDecl fl ->
-		spr ctx "0";
+		let s = match follow e.etype with TAnon a -> anon_signature ctx a.a_fields | _ -> assert false in
+		let fl = List.sort (fun (n1,_) (n2,_) -> compare n1 n2) fl in
+		print ctx "new_%s(" s;
+		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> e) fl);
+		spr ctx ")";
 	| TNew(c,_,el) ->
 		add_dependency ctx c.cl_path;
 		spr ctx (full_field_name c (match c.cl_constructor with None -> assert false | Some cf -> cf));
@@ -656,7 +660,7 @@ let generate_type con mt = match mt with
 
 let generate_hxc_files con =
 	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
-	spr ctx "// Anonymous types";
+	spr ctx "// structures";
 	PMap.iter (fun _ (s,cfl) ->
 		newline ctx;
 		print ctx "typedef struct %s {" s;
@@ -670,6 +674,32 @@ let generate_hxc_files con =
 		print ctx "} %s" s;
 	) con.anon_types;
 	newline ctx;
+	spr ctx "// constructor forward declarations";
+	PMap.iter (fun _ (s,cfl) ->
+		newline ctx;
+		print ctx "%s* new_%s(%s)" s s (String.concat "," (List.map (fun cf -> Printf.sprintf "%s %s" (s_type ctx cf.cf_type) cf.cf_name) cfl));
+	) con.anon_types;
+	newline ctx;
+
+	ctx.buf <- ctx.buf_c;
+
+	spr ctx "// constructor definitions";
+	PMap.iter (fun _ (s,cfl) ->
+		newline ctx;
+		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> Printf.sprintf "%s %s" (s_type ctx cf.cf_type) cf.cf_name) cfl));
+		let b = open_block ctx in
+		newline ctx;
+		print ctx "%s* this = (%s*) GC_MALLOC(sizeof(%s))" s s s;
+		List.iter (fun cf ->
+			newline ctx;
+			print ctx "this->%s = %s" cf.cf_name cf.cf_name;
+		) cfl;
+		newline ctx;
+		spr ctx "return this";
+		b();
+		newline ctx;
+		spr ctx "}"
+	) con.anon_types;
 	close_type_context ctx
 
 let generate com =
