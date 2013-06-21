@@ -695,6 +695,9 @@ let generate_class ctx c =
 		print ctx "} %s" (path_to_name c.cl_path);
 		newline ctx;
 		spr ctx "\n";
+	end else begin
+		print ctx "typedef struct %s { void* dummy; } %s" (path_to_name c.cl_path) (path_to_name c.cl_path);
+		newline ctx;
 	end;
 
 	let svar_inits = DynArray.create () in
