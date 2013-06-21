@@ -171,7 +171,6 @@ let anon_signature ctx fields =
 	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
 	try fst (PMap.find id ctx.con.anon_types)
 	with Not_found ->
-		print_endline ("Not found: " ^ id);
 		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
 		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
 		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
