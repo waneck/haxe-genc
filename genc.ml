@@ -265,6 +265,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TTypeExpr (TClassDecl c) ->
 		spr ctx (path_to_name c.cl_path);
 	| TTypeExpr (TEnumDecl e) ->
+		add_dependency ctx e.e_path;
 		spr ctx (path_to_name e.e_path);
 	| TTypeExpr (TTypeDecl _ | TAbstractDecl _) ->
 		(* shouldn't happen? *)
@@ -273,6 +274,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf)
 	| TField(_,FEnum(en,ef)) ->
+		add_dependency ctx en.e_path;
 		print ctx "new_%s()" (full_enum_field_name en ef)
 	| TField(e1,fa) ->
 		let n = field_name fa in
@@ -414,6 +416,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		generate_expr ctx e1;
 		begin match follow e1.etype with
 			| TEnum(en,_) ->
+				add_dependency ctx en.e_path;
 				let s,_,_ = match ef.ef_type with TFun(args,_) -> List.nth args i | _ -> assert false in
 				print ctx "->args.%s.%s" ef.ef_name s;
 			| _ ->
