@@ -209,7 +209,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TConst(TInt i) ->
 		print ctx "%ld" i
 	| TConst(TFloat s) ->
-		print ctx "%sd" s
+		print ctx "%s" s
 	| TConst(TNull) ->
 		spr ctx "NULL"
 	| TConst(TSuper) ->
@@ -588,7 +588,9 @@ let generate_class ctx c =
 	(* check if we have the main class *)
 	match ctx.con.com.main_class with
 	| Some path when path = c.cl_path ->
-		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
+		add_dependency ctx (["c";"hxc"],"Exception");
+		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ()
 
 let generate_enum ctx en =
@@ -606,7 +608,8 @@ let generate_enum ctx en =
 		newline ctx;
 		match follow ef.ef_type with
 		| TFun(args,_) ->
-			spr ctx "typedef struct {";
+			let name = full_enum_field_name en ef in
+			print ctx "typedef struct %s {" name;
 			let b = open_block ctx in
 			List.iter (fun (n,_,t) ->
 				newline ctx;
@@ -614,7 +617,7 @@ let generate_enum ctx en =
 			) args;
 			b();
 			newline ctx;
-			print ctx "} %s" (full_enum_field_name en ef);
+			print ctx "} %s" name;
 			ef
 		| _ ->
 			print ctx "typedef void* %s" (full_enum_field_name en ef);
