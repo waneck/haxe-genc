@@ -100,8 +100,11 @@ let close_type_context ctx =
 	output_string ch_h "#include <setjmp.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path b ->
-		if b then output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
-		else output_string ch_h (Printf.sprintf "#include <%s>\n" (path_to_header_path path))
+		let name = path_to_name path in
+		if b then begin
+			if path = (["hxc"],"AnonTypes") || path = (["c";"hxc"],"Exception") then output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+			else output_string ch_h (Printf.sprintf "typedef struct %s %s;\n"  name name)
+		end else output_string ch_h (Printf.sprintf "#include <%s>\n" (path_to_header_path path))
 	) ctx.dependencies;
 	output_string ch_h (Buffer.contents ctx.buf_h);
 	output_string ch_h "\n#endif";
@@ -111,6 +114,9 @@ let close_type_context ctx =
 	if String.length sc > 0 then begin
 		let ch_c = open_out_bin (ctx.file_path_no_ext ^ ".c") in
 		output_string ch_c ("#include \"" ^ (snd ctx.curpath) ^ ".h\"\n");
+		PMap.iter (fun path b ->
+			if b then output_string ch_c ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+		) ctx.dependencies;
 		output_string ch_c sc;
 		close_out ch_c
 	end
@@ -146,6 +152,16 @@ let add_dependency ctx path =
 
 let add_class_dependency ctx c =
 	if not c.cl_extern then add_dependency ctx c.cl_path
+
+let add_type_dependency ctx t = match follow t with
+	| TInst(c,_) ->
+		add_class_dependency ctx c
+	| TEnum(en,_) ->
+		add_dependency ctx en.e_path
+	| TAnon _ ->
+		add_dependency ctx (["hxc"],"AnonTypes");
+	| _ ->
+		()
 
 let anon_signature ctx fields =
 	let fields = PMap.fold (fun cf acc -> cf :: acc) fields [] in
@@ -269,7 +285,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		let s = match follow e.etype with TAnon a -> anon_signature ctx a.a_fields | _ -> assert false in
 		let fl = List.sort (fun (n1,_) (n2,_) -> compare n1 n2) fl in
 		print ctx "new_%s(" s;
-		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> e) fl);
+		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
 		spr ctx ")";
 	| TNew(c,_,el) ->
 		add_class_dependency ctx c;
@@ -647,6 +663,19 @@ let generate_enum ctx en =
 	print ctx "} %s" (path_to_name en.e_path);
 	newline ctx;
 
+	spr ctx "// constructor forward declarations";
+	List.iter (fun ef ->
+		newline ctx;
+		match ef.ef_type with
+		| TFun(args,ret) ->
+			print ctx "%s new_%s(%s)" (s_type ctx ret) (full_enum_field_name en ef) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args));
+		| _ ->
+			assert false
+	) ctors;
+	newline ctx;
+
+	ctx.buf <- ctx.buf_c;
+
 	(* generate constructor functions *)
 	spr ctx "// constructor functions";
 	List.iter (fun ef ->
@@ -686,6 +715,14 @@ let generate_type con mt = match mt with
 
 let generate_hxc_files con =
 	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
+
+	spr ctx "// forward declarations";
+	PMap.iter (fun _ (s,_) ->
+		newline ctx;
+		print ctx "typedef struct %s %s" s s;
+	) con.anon_types;
+	newline ctx;
+
 	spr ctx "// structures";
 	PMap.iter (fun _ (s,cfl) ->
 		newline ctx;
