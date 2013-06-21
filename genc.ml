@@ -245,10 +245,11 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "FALSE"
 	| TConst(TThis) ->
 		spr ctx "this"
-	| TCall({eexpr = TLocal({v_name = "__trace"})},[e1]) ->
-		spr ctx "printf(\"%s\\n\",";
+	| TCall({eexpr = TLocal({v_name = "__call"})},e1 :: el) ->
 		generate_expr ctx e1;
-		spr ctx ")";
+		spr ctx "(";
+		concat ctx "," (generate_expr ctx) el;
+		spr ctx ")"
 	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
 		spr ctx code
 	| TCall({eexpr = TField(e1,FInstance(c,cf))},el) ->
