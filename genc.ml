@@ -488,11 +488,12 @@ let mk_function_context ctx cf =
 			add_dependency ctx (["c";"hxc"],"Exception");
 			let esubj = mk_ccode ctx "(setjmp(*c_hxc_Exception_push()))" in
 			let epop = mk_ccode ctx "c_hxc_Exception_pop()" in
+			let epopassign = mk_ccode ctx "jmp_buf* _hx_jmp_buf = c_hxc_Exception_pop()" in
 			let c1 = [mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
 				let eassign = mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
-				let e = Codegen.concat eassign (Codegen.concat e epop) in
+				let e = Codegen.concat eassign (Codegen.concat epopassign e) in
 				let e = mk (TBlock [e]) e.etype e.epos in
 				if v.v_type == t_dynamic then begin
 					def := Some e;
