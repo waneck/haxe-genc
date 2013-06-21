@@ -228,7 +228,53 @@ let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
 let declare_var ctx v = if not (List.mem v ctx.local_vars) then ctx.local_vars <- v :: ctx.local_vars
 
-let rec generate_expr ctx e = match e.eexpr with
+(** separate special behaviour from raw code handling *)
+let rec handle_special_call ctx e = match e.eexpr with
+	| TCall({eexpr = TLocal({v_name = "__trace"})},[e1]) ->
+		spr ctx "printf(\"%s\\n\",";
+		generate_expr ctx e1;
+		spr ctx ")";
+		true
+	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
+		spr ctx code;
+		true
+	| TCall({eexpr = TLocal({v_name = "__call__"})},{eexpr = TConst(TString name)} :: p) ->
+		print ctx "%s(" name;
+		concat ctx "," (generate_expr ctx) p;
+		spr ctx ")";
+		true
+	(* pointer functions *)
+	| TCall({eexpr = TField(ethis,FInstance({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("__get"|"__set") } as cf)))}, p) ->
+		spr ctx "(";
+		generate_expr ctx ethis;
+		spr ctx "[";
+		(match cf.cf_name, p with
+		| "__get", [i] ->
+			generate_expr ctx i;
+			spr ctx "])"
+		| "__set", [i;v] ->
+			generate_expr ctx i;
+			spr ctx "] = ";
+			generate_expr ctx v;
+			spr ctx ")"
+		| _ -> assert false);
+		true
+	| TCall({eexpr = TField(_,FStatic({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("add"|"increment") } as cf)))}, p) ->
+		spr ctx "(";
+		(match cf.cf_name, p with
+		| "add", [a;o] ->
+			generate_expr ctx a;
+			spr ctx " + ";
+			generate_expr ctx o
+		| "increment", [a] ->
+			generate_expr ctx a;
+			spr ctx "++"
+		| _ -> assert false);
+		spr ctx ")";
+		true
+	| _ -> false
+
+and generate_expr ctx e = match e.eexpr with
 	| TBlock([]) ->
 		spr ctx "{ }"
 	| TBlock(el) ->
@@ -259,12 +305,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "FALSE"
 	| TConst(TThis) ->
 		spr ctx "this"
-	| TCall({eexpr = TLocal({v_name = "__trace"})},[e1]) ->
-		spr ctx "printf(\"%s\\n\",";
-		generate_expr ctx e1;
-		spr ctx ")";
-	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
-		spr ctx code
+	| TCall _ when handle_special_call ctx e -> ()
 	| TCall({eexpr = TField(e1,FInstance(c,cf))},el) ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
