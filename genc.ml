@@ -7,6 +7,10 @@ type context = {
 	cvar : tvar;
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
+	mutable num_anon_types : int;
+	mutable num_identified_types : int;
+	mutable anon_types : (string,string * tclass_field list) PMap.t;
+	mutable type_ids : (string,int) PMap.t;
 }
 
 type function_context = {
@@ -93,10 +97,16 @@ let close_type_context ctx =
 	output_string ch_h ("#define " ^ n ^ "\n");
 	output_string ch_h "#define GC_NOT_DLL\n";
 	output_string ch_h "#include \"gc.h\"\n";
-	(* output_string ch_h "#include \"glib/garray.h\"\n"; *)
+	(* TODO: get rid of these *)
+	output_string ch_h "#include \"glib/garray.h\"\n";
+	output_string ch_h "#include <setjmp.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
-	PMap.iter (fun path _ ->
-		output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+	PMap.iter (fun path b ->
+		let name = path_to_name path in
+		if b then begin
+			if path = (["hxc"],"AnonTypes") || path = (["c";"hxc"],"Exception") then output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+			else output_string ch_h (Printf.sprintf "typedef struct %s %s;\n"  name name)
+		end else output_string ch_h (Printf.sprintf "#include <%s>\n" (path_to_header_path path))
 	) ctx.dependencies;
 	output_string ch_h (Buffer.contents ctx.buf_h);
 	output_string ch_h "\n#endif";
@@ -106,6 +116,9 @@ let close_type_context ctx =
 	if String.length sc > 0 then begin
 		let ch_c = open_out_bin (ctx.file_path_no_ext ^ ".c") in
 		output_string ch_c ("#include \"" ^ (snd ctx.curpath) ^ ".h\"\n");
+		PMap.iter (fun path b ->
+			if b then output_string ch_c ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+		) ctx.dependencies;
 		output_string ch_c sc;
 		close_out ch_c
 	end
@@ -130,11 +143,38 @@ let begin_loop ctx =
 let mk_ccode ctx s =
 	mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
 
+let mk_int ctx i p =
+	mk (TConst (TInt (Int32.of_int i))) ctx.con.com.basic.tint p
+
 let full_field_name c cf = (path_to_name c.cl_path) ^ "_" ^ cf.cf_name
 let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
 let add_dependency ctx path =
 	if path <> ctx.curpath then ctx.dependencies <- PMap.add path true ctx.dependencies
+
+let add_class_dependency ctx c =
+	if not c.cl_extern then add_dependency ctx c.cl_path
+
+let add_type_dependency ctx t = match follow t with
+	| TInst(c,_) ->
+		add_class_dependency ctx c
+	| TEnum(en,_) ->
+		add_dependency ctx en.e_path
+	| TAnon _ ->
+		add_dependency ctx (["hxc"],"AnonTypes");
+	| _ ->
+		()
+
+let anon_signature ctx fields =
+	let fields = PMap.fold (fun cf acc -> cf :: acc) fields [] in
+	let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
+	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) cf.cf_type)) fields) in
+	try fst (PMap.find id ctx.con.anon_types)
+	with Not_found ->
+		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
+		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
+		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
+		s
 
 let s_type ctx t = match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
@@ -144,12 +184,30 @@ let s_type ctx t = match follow t with
 	| TInst({cl_path = [],"Array"},[_]) -> "GArray*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		(path_to_name c.cl_path) ^ "*"
 	| TEnum(en,_) ->
-		add_dependency ctx en.e_path;
+		if not en.e_extern then add_dependency ctx en.e_path;
 		(path_to_name en.e_path) ^ "*"
+	| TAnon a ->
+		begin match !(a.a_status) with
+		| Statics c -> "Class_" ^ (path_to_name c.cl_path) ^ "*"
+		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
+		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
+		| _ ->
+			add_dependency ctx (["hxc"],"AnonTypes");
+			(anon_signature ctx a.a_fields) ^ "*"
+		end
 	| _ -> "void*"
+
+let get_type_id ctx t =
+	let id = Type.s_type (print_context()) t in
+	try
+		PMap.find id ctx.con.type_ids
+	with Not_found ->
+		ctx.con.num_identified_types <- ctx.con.num_identified_types + 1;
+		ctx.con.type_ids <- PMap.add id ctx.con.num_identified_types ctx.con.type_ids;
+		ctx.con.num_identified_types
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
@@ -174,7 +232,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TConst(TInt i) ->
 		print ctx "%ld" i
 	| TConst(TFloat s) ->
-		print ctx "%sd" s
+		print ctx "%s" s
 	| TConst(TNull) ->
 		spr ctx "NULL"
 	| TConst(TSuper) ->
@@ -193,7 +251,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
 		spr ctx code
 	| TCall({eexpr = TField(e1,FInstance(c,cf))},el) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
 		spr ctx "(";
 		generate_expr ctx e1;
@@ -214,14 +272,16 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TTypeExpr (TClassDecl c) ->
 		spr ctx (path_to_name c.cl_path);
 	| TTypeExpr (TEnumDecl e) ->
+		add_dependency ctx e.e_path;
 		spr ctx (path_to_name e.e_path);
 	| TTypeExpr (TTypeDecl _ | TAbstractDecl _) ->
 		(* shouldn't happen? *)
 		assert false
 	| TField(_,FStatic(c,cf)) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf)
 	| TField(_,FEnum(en,ef)) ->
+		add_dependency ctx en.e_path;
 		print ctx "new_%s()" (full_enum_field_name en ef)
 	| TField(e1,fa) ->
 		let n = field_name fa in
@@ -230,10 +290,14 @@ let rec generate_expr ctx e = match e.eexpr with
 		print ctx ")->%s" n
 	| TLocal v ->
 		spr ctx v.v_name;
-	| TObjectDecl _ ->
-		spr ctx "0";
+	| TObjectDecl fl ->
+		let s = match follow e.etype with TAnon a -> anon_signature ctx a.a_fields | _ -> assert false in
+		let fl = List.sort (fun (n1,_) (n2,_) -> compare n1 n2) fl in
+		print ctx "new_%s(" s;
+		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
+		spr ctx ")";
 	| TNew(c,_,el) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		spr ctx (full_field_name c (match c.cl_constructor with None -> assert false | Some cf -> cf));
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
@@ -347,7 +411,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx e1;
 		spr ctx ")";
-	| TArrayDecl _ ->
+	| TArrayDecl _ | TTry _ ->
 		(* handled in function context pass *)
 		assert false
 	| TMeta(_,e) ->
@@ -359,13 +423,19 @@ let rec generate_expr ctx e = match e.eexpr with
 		generate_expr ctx e1;
 		begin match follow e1.etype with
 			| TEnum(en,_) ->
+				add_dependency ctx en.e_path;
 				let s,_,_ = match ef.ef_type with TFun(args,_) -> List.nth args i | _ -> assert false in
 				print ctx "->args.%s.%s" ef.ef_name s;
 			| _ ->
 				assert false
 		end
-	| TThrow _
-	| TTry _
+	| TThrow e1 ->
+		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
+		add_dependency ctx (["c";"hxc"],"Exception");
+		spr ctx "c_hxc_Exception_thrownObject = ";
+		generate_expr ctx e1;
+		newline ctx;
+		print ctx "(longjmp(*c_hxc_Exception_peek(),%i))" (get_type_id ctx e1.etype);
 	| TPatMatch _
 	| TFor _
 	| TFunction _ ->
@@ -413,6 +483,24 @@ let mk_function_context ctx cf =
 			end
 		| TArrayDecl el ->
 			mk_array_decl ctx el e.etype e.epos
+		| TTry (e1,cl) ->
+			ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
+			add_dependency ctx (["c";"hxc"],"Exception");
+			let esubj = mk_ccode ctx "(setjmp(*c_hxc_Exception_push()))" in
+			let epop = mk_ccode ctx "c_hxc_Exception_pop()" in
+			let c1 = [mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
+			let def = ref None in
+			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
+				let eassign = mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
+				let e = Codegen.concat eassign (Codegen.concat e epop) in
+				let e = mk (TBlock [e]) e.etype e.epos in
+				if v.v_type == t_dynamic then begin
+					def := Some e;
+					None;
+				end else
+					Some ([mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
+			) cl) in
+			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
 		| _ -> Type.map_expr loop e
 	in
 	let e = match cf.cf_expr with
@@ -540,7 +628,9 @@ let generate_class ctx c =
 	(* check if we have the main class *)
 	match ctx.con.com.main_class with
 	| Some path when path = c.cl_path ->
-		print ctx "int main() {\n\tGC_INIT();\n\t%s();\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
+		add_dependency ctx (["c";"hxc"],"Exception");
+		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ()
 
 let generate_enum ctx en =
@@ -558,7 +648,8 @@ let generate_enum ctx en =
 		newline ctx;
 		match follow ef.ef_type with
 		| TFun(args,_) ->
-			spr ctx "typedef struct {";
+			let name = full_enum_field_name en ef in
+			print ctx "typedef struct %s {" name;
 			let b = open_block ctx in
 			List.iter (fun (n,_,t) ->
 				newline ctx;
@@ -566,7 +657,7 @@ let generate_enum ctx en =
 			) args;
 			b();
 			newline ctx;
-			print ctx "} %s" (full_enum_field_name en ef);
+			print ctx "} %s" name;
 			ef
 		| _ ->
 			print ctx "typedef void* %s" (full_enum_field_name en ef);
@@ -595,6 +686,19 @@ let generate_enum ctx en =
 	newline ctx;
 	print ctx "} %s" (path_to_name en.e_path);
 	newline ctx;
+
+	spr ctx "// constructor forward declarations";
+	List.iter (fun ef ->
+		newline ctx;
+		match ef.ef_type with
+		| TFun(args,ret) ->
+			print ctx "%s new_%s(%s)" (s_type ctx ret) (full_enum_field_name en ef) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args));
+		| _ ->
+			assert false
+	) ctors;
+	newline ctx;
+
+	ctx.buf <- ctx.buf_c;
 
 	(* generate constructor functions *)
 	spr ctx "// constructor functions";
@@ -633,11 +737,69 @@ let generate_type con mt = match mt with
 	| _ ->
 		()
 
+let generate_hxc_files con =
+	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
+
+	spr ctx "// forward declarations";
+	PMap.iter (fun _ (s,_) ->
+		newline ctx;
+		print ctx "typedef struct %s %s" s s;
+	) con.anon_types;
+	newline ctx;
+
+	spr ctx "// structures";
+	PMap.iter (fun _ (s,cfl) ->
+		newline ctx;
+		print ctx "typedef struct %s {" s;
+		let b = open_block ctx in
+		List.iter (fun cf ->
+			newline ctx;
+			print ctx "%s %s" (s_type ctx cf.cf_type) cf.cf_name;
+		) cfl;
+		b();
+		newline ctx;
+		print ctx "} %s" s;
+	) con.anon_types;
+	newline ctx;
+	spr ctx "// constructor forward declarations";
+	PMap.iter (fun _ (s,cfl) ->
+		newline ctx;
+		print ctx "%s* new_%s(%s)" s s (String.concat "," (List.map (fun cf -> Printf.sprintf "%s %s" (s_type ctx cf.cf_type) cf.cf_name) cfl));
+	) con.anon_types;
+	newline ctx;
+
+	ctx.buf <- ctx.buf_c;
+
+	spr ctx "// constructor definitions";
+	PMap.iter (fun _ (s,cfl) ->
+		newline ctx;
+		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> Printf.sprintf "%s %s" (s_type ctx cf.cf_type) cf.cf_name) cfl));
+		let b = open_block ctx in
+		newline ctx;
+		print ctx "%s* this = (%s*) GC_MALLOC(sizeof(%s))" s s s;
+		List.iter (fun cf ->
+			newline ctx;
+			print ctx "this->%s = %s" cf.cf_name cf.cf_name;
+		) cfl;
+		newline ctx;
+		spr ctx "return this";
+		b();
+		newline ctx;
+		spr ctx "}"
+	) con.anon_types;
+	close_type_context ctx
+
 let generate com =
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
 		num_temp_funcs = 0;
 		num_labels = 0;
+		num_anon_types = -1;
+		(* this has to start at 0 so the first type id is 1 *)
+		num_identified_types = 0;
+		anon_types = PMap.empty;
+		type_ids = PMap.empty;
 	} in
-	List.iter (generate_type con) com.types
+	List.iter (generate_type con) com.types;
+	generate_hxc_files con
