@@ -697,19 +697,32 @@ let generate_class ctx c =
 		spr ctx "\n";
 	end;
 
+	let svar_inits = DynArray.create () in
+
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
 		spr ctx "// static vars\n";
 		DynArray.iter (fun cf ->
 			print ctx "%s %s" (s_type ctx cf.cf_type) (full_field_name c cf);
+			newline ctx;
 			match cf.cf_expr with
-			| None -> newline ctx
+			| None -> ()
 			| Some e ->
-				spr ctx " = ";
-				generate_expr ctx e;
-				newline ctx
+				DynArray.add svar_inits (cf,e)
 		) svars;
 	end;
+
+	if not (DynArray.empty svars) then begin
+		ctx.buf <- ctx.buf_c;
+		spr ctx "// static var inits\n";
+		DynArray.iter (fun (cf,e) ->
+			print ctx "%s %s = " (s_type ctx cf.cf_type) (full_field_name c cf);
+			generate_expr ctx e;
+			newline ctx
+		) svar_inits;
+	end;
+
+	ctx.buf <- ctx.buf_h;
 
 	(* generate forward declarations of functions *)
 	if not (DynArray.empty methods) then begin
