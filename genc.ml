@@ -95,10 +95,13 @@ let close_type_context ctx =
 	output_string ch_h ("#define " ^ n ^ "\n");
 	output_string ch_h "#define GC_NOT_DLL\n";
 	output_string ch_h "#include \"gc.h\"\n";
+	(* TODO: get rid of these *)
 	output_string ch_h "#include \"glib/garray.h\"\n";
+	output_string ch_h "#include <setjmp.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
-	PMap.iter (fun path _ ->
-		output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+	PMap.iter (fun path b ->
+		if b then output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+		else output_string ch_h (Printf.sprintf "#include <%s>\n" (path_to_header_path path))
 	) ctx.dependencies;
 	output_string ch_h (Buffer.contents ctx.buf_h);
 	output_string ch_h "\n#endif";
@@ -132,11 +135,17 @@ let begin_loop ctx =
 let mk_ccode ctx s =
 	mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
 
+let mk_int ctx i p =
+	mk (TConst (TInt (Int32.of_int i))) ctx.con.com.basic.tint p
+
 let full_field_name c cf = (path_to_name c.cl_path) ^ "_" ^ cf.cf_name
 let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
 let add_dependency ctx path =
 	if path <> ctx.curpath then ctx.dependencies <- PMap.add path true ctx.dependencies
+
+let add_class_dependency ctx c =
+	if not c.cl_extern then add_dependency ctx c.cl_path
 
 let anon_signature ctx fields =
 	let fields = PMap.fold (fun cf acc -> cf :: acc) fields [] in
@@ -157,10 +166,10 @@ let s_type ctx t = match follow t with
 	| TInst({cl_path = [],"Array"},[_]) -> "GArray*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		(path_to_name c.cl_path) ^ "*"
 	| TEnum(en,_) ->
-		add_dependency ctx en.e_path;
+		if not en.e_extern then add_dependency ctx en.e_path;
 		(path_to_name en.e_path) ^ "*"
 	| TAnon a ->
 		begin match !(a.a_status) with
@@ -172,6 +181,10 @@ let s_type ctx t = match follow t with
 			(anon_signature ctx a.a_fields) ^ "*"
 		end
 	| _ -> "void*"
+
+let get_type_id ctx t =
+	(* TODO *)
+	1
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
@@ -215,7 +228,7 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
 		spr ctx code
 	| TCall({eexpr = TField(e1,FInstance(c,cf))},el) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
 		spr ctx "(";
 		generate_expr ctx e1;
@@ -241,7 +254,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		(* shouldn't happen? *)
 		assert false
 	| TField(_,FStatic(c,cf)) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf)
 	| TField(_,FEnum(en,ef)) ->
 		print ctx "new_%s()" (full_enum_field_name en ef)
@@ -259,7 +272,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> e) fl);
 		spr ctx ")";
 	| TNew(c,_,el) ->
-		add_dependency ctx c.cl_path;
+		add_class_dependency ctx c;
 		spr ctx (full_field_name c (match c.cl_constructor with None -> assert false | Some cf -> cf));
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
@@ -373,7 +386,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx e1;
 		spr ctx ")";
-	| TArrayDecl _ ->
+	| TArrayDecl _ | TTry _ ->
 		(* handled in function context pass *)
 		assert false
 	| TMeta(_,e) ->
@@ -390,8 +403,10 @@ let rec generate_expr ctx e = match e.eexpr with
 			| _ ->
 				assert false
 		end
-	| TThrow _
-	| TTry _
+	| TThrow e1 ->
+		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
+		add_dependency ctx (["c";"hxc"],"Exception");
+		print ctx "(longjmp(*c_hxc_Exception_peek(),%i))" (get_type_id ctx e1.etype);
 	| TPatMatch _
 	| TFor _
 	| TFunction _ ->
@@ -439,6 +454,14 @@ let mk_function_context ctx cf =
 			end
 		| TArrayDecl el ->
 			mk_array_decl ctx el e.etype e.epos
+		| TTry (e1,cl) ->
+			ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
+			add_dependency ctx (["c";"hxc"],"Exception");
+			let esubj = mk_ccode ctx "(setjmp(*c_hxc_Exception_push()))" in
+			let epop = mk_ccode ctx "c_hxc_Exception_pop()" in
+			let c1 = [mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
+			let cl = c1 :: (ExtList.List.mapi (fun i (v,e) -> [mk_int ctx (get_type_id ctx v.v_type) e.epos],(Codegen.concat e epop)) cl) in
+			mk (TSwitch(esubj,cl,None)) e.etype e.epos
 		| _ -> Type.map_expr loop e
 	in
 	let e = match cf.cf_expr with
@@ -565,7 +588,7 @@ let generate_class ctx c =
 	(* check if we have the main class *)
 	match ctx.con.com.main_class with
 	| Some path when path = c.cl_path ->
-		print ctx "int main() {\n\tGC_INIT();\n\t%s();\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ()
 
 let generate_enum ctx en =
