@@ -425,6 +425,9 @@ let rec generate_expr ctx e = match e.eexpr with
 	| TThrow e1 ->
 		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 		add_dependency ctx (["c";"hxc"],"Exception");
+		spr ctx "c_hxc_Exception_thrownObject = ";
+		generate_expr ctx e1;
+		newline ctx;
 		print ctx "(longjmp(*c_hxc_Exception_peek(),%i))" (get_type_id ctx e1.etype);
 	| TPatMatch _
 	| TFor _
@@ -479,7 +482,12 @@ let mk_function_context ctx cf =
 			let esubj = mk_ccode ctx "(setjmp(*c_hxc_Exception_push()))" in
 			let epop = mk_ccode ctx "c_hxc_Exception_pop()" in
 			let c1 = [mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
-			let cl = c1 :: (ExtList.List.mapi (fun i (v,e) -> [mk_int ctx (get_type_id ctx v.v_type) e.epos],(Codegen.concat e epop)) cl) in
+			let cl = c1 :: (ExtList.List.mapi (fun i (v,e) ->
+				let eassign = mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
+				let e = Codegen.concat eassign (Codegen.concat e epop) in
+				let e = mk (TBlock [e]) e.etype e.epos in
+				[mk_int ctx (get_type_id ctx v.v_type) e.epos],e
+			) cl) in
 			mk (TSwitch(esubj,cl,None)) e.etype e.epos
 		| _ -> Type.map_expr loop e
 	in

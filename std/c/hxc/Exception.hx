@@ -8,6 +8,7 @@ extern private class JmpBuf {
 @:keep
 class Exception {
 	static var stack:JmpBuf;
+	static var thrownObject:Dynamic;
 	
 	static public function push():JmpBuf untyped {
 		__c("jmp_buf* buf = (jmp_buf*) malloc(sizeof(jmp_buf))");

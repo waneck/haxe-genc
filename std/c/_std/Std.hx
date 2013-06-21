@@ -19,6 +19,9 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+
+import c.hxc.Exception;
+
 @:coreApi class Std {
 	public static function is( v : Dynamic, t : Dynamic ) : Bool {
 		return false;
