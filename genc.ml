@@ -135,7 +135,7 @@ let begin_loop ctx =
 	fun () ->
 		match ctx.fctx.loop_stack with
 		| ls :: l ->
-			(match ls with None -> () | Some s -> print ctx "%s:" s);
+			(match ls with None -> () | Some s -> print ctx "%s: {}" s);
 			ctx.fctx.loop_stack <- l;
 		| _ ->
 			assert false
@@ -436,7 +436,79 @@ let rec generate_expr ctx e = match e.eexpr with
 		generate_expr ctx e1;
 		newline ctx;
 		print ctx "(longjmp(*c_hxc_Exception_peek(),%i))" (get_type_id ctx e1.etype);
-	| TPatMatch _
+	| TPatMatch dt ->
+		let fl = ctx.con.num_labels in
+		ctx.con.num_labels <- ctx.con.num_labels + (Array.length dt.dt_dt_lookup) + 1;
+		let mk_label i = Printf.sprintf "_hx_label%i" (i + fl) in
+		let rec loop d =
+			match d with
+			| DTGoto i ->
+				print ctx "goto %s" (mk_label i);
+				newline ctx;
+			| DTBind(bl,dt) ->
+				List.iter (fun ((v,p),e) ->
+					print ctx "%s = " v.v_name;
+					generate_expr ctx e;
+					newline ctx;
+				) bl;
+				loop dt
+			| DTExpr e -> generate_expr ctx (block e)
+			| DTGuard(e, dt1, dt2) ->
+				spr ctx "if(";
+				generate_expr ctx e;
+				spr ctx ")";
+				loop dt1;
+				(match dt2 with None -> () | Some dt ->
+					spr ctx " else ";
+					loop dt)
+			| DTSwitch(e,cl) ->
+				let def = ref None in
+				let cl = List.filter (fun (e,dt) ->
+					match e.eexpr with
+	 				| TMeta((Meta.MatchAny,_,_),_) ->
+						def := Some dt;
+						false
+					| _ ->
+						true
+				) cl in
+				spr ctx "switch(";
+				generate_expr ctx e;
+				spr ctx ") {";
+				let b = open_block ctx in
+				List.iter (fun (e,dt) ->
+					newline ctx;
+					spr ctx "case ";
+					generate_expr ctx e;
+					spr ctx ":";
+					loop dt;
+					newline ctx;
+					spr ctx "break";
+				) cl;
+				begin match !def with
+					| None -> ()
+					| Some dt ->
+						newline ctx;
+						spr ctx "default:";
+						loop dt;
+						newline ctx;
+						spr ctx "break";
+				end;
+				b();
+				newline ctx;
+				spr ctx "}";
+				newline ctx;
+		in
+		print ctx "goto %s" (mk_label dt.dt_first);
+		Array.iteri (fun i d ->
+			newline ctx;
+			print ctx "%s: {}" (mk_label i);
+			newline ctx;
+			loop d;
+			print ctx "goto %s" (mk_label (Array.length dt.dt_dt_lookup));
+			newline ctx;
+		) dt.dt_dt_lookup;
+		print ctx "%s: {}" (mk_label (Array.length dt.dt_dt_lookup));
+		newline ctx;
 	| TFor _
 	| TFunction _ ->
 		print_endline ("Not implemented yet: " ^ (expr_debug ctx e))
@@ -502,6 +574,29 @@ let mk_function_context ctx cf =
 					Some ([mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
 			) cl) in
 			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
+		| TPatMatch dt ->
+ 			let rec dtl d = match d with
+				| DTGoto _ | DTExpr _ ->
+					()
+				| DTGuard(_,dt1,dt2) ->
+					dtl dt1;
+					(match dt2 with None -> () | Some dt -> dtl dt)
+				| DTSwitch(_,cl) ->
+					List.iter (fun (_,dt) -> dtl dt) cl
+				| DTBind(bl,dt) ->
+					List.iter (fun ((v,_),_) ->
+						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
+						print_endline v.v_name;
+						locals := v :: !locals
+					) bl;
+					dtl dt
+			in
+			Array.iter dtl dt.dt_dt_lookup;
+			List.iter (fun (v,_) ->
+				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
+				locals := v :: !locals
+			) dt.dt_var_init;
+			Type.map_expr loop e
 		| _ -> Type.map_expr loop e
 	in
 	let e = match cf.cf_expr with
