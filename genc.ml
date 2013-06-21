@@ -8,7 +8,9 @@ type context = {
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
 	mutable num_anon_types : int;
+	mutable num_identified_types : int;
 	mutable anon_types : (string,string * tclass_field list) PMap.t;
+	mutable type_ids : (string,int) PMap.t;
 }
 
 type function_context = {
@@ -199,8 +201,13 @@ let s_type ctx t = match follow t with
 	| _ -> "void*"
 
 let get_type_id ctx t =
-	(* TODO *)
-	1
+	let id = Type.s_type (print_context()) t in
+	try
+		PMap.find id ctx.con.type_ids
+	with Not_found ->
+		ctx.con.num_identified_types <- ctx.con.num_identified_types + 1;
+		ctx.con.type_ids <- PMap.add id ctx.con.num_identified_types ctx.con.type_ids;
+		ctx.con.num_identified_types
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
@@ -482,13 +489,18 @@ let mk_function_context ctx cf =
 			let esubj = mk_ccode ctx "(setjmp(*c_hxc_Exception_push()))" in
 			let epop = mk_ccode ctx "c_hxc_Exception_pop()" in
 			let c1 = [mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
-			let cl = c1 :: (ExtList.List.mapi (fun i (v,e) ->
+			let def = ref None in
+			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
 				let eassign = mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
 				let e = Codegen.concat eassign (Codegen.concat e epop) in
 				let e = mk (TBlock [e]) e.etype e.epos in
-				[mk_int ctx (get_type_id ctx v.v_type) e.epos],e
+				if v.v_type == t_dynamic then begin
+					def := Some e;
+					None;
+				end else
+					Some ([mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
 			) cl) in
-			mk (TSwitch(esubj,cl,None)) e.etype e.epos
+			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
 		| _ -> Type.map_expr loop e
 	in
 	let e = match cf.cf_expr with
@@ -783,7 +795,10 @@ let generate com =
 		num_temp_funcs = 0;
 		num_labels = 0;
 		num_anon_types = -1;
+		(* this has to start at 0 so the first type id is 1 *)
+		num_identified_types = 0;
 		anon_types = PMap.empty;
+		type_ids = PMap.empty;
 	} in
 	List.iter (generate_type con) com.types;
 	generate_hxc_files con
