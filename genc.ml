@@ -98,7 +98,7 @@ let close_type_context ctx =
 	output_string ch_h "#define GC_NOT_DLL\n";
 	output_string ch_h "#include \"gc.h\"\n";
 	(* TODO: get rid of these *)
-	output_string ch_h "#include \"glib/garray.h\"\n";
+	output_string ch_h "#include <glib.h>\n";
 	output_string ch_h "#include <setjmp.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path b ->
@@ -168,9 +168,10 @@ let add_type_dependency ctx t = match follow t with
 let anon_signature ctx fields =
 	let fields = PMap.fold (fun cf acc -> cf :: acc) fields [] in
 	let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
-	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) cf.cf_type)) fields) in
+	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
 	try fst (PMap.find id ctx.con.anon_types)
 	with Not_found ->
+		print_endline ("Not found: " ^ id);
 		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
 		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
 		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
@@ -180,6 +181,7 @@ let s_type ctx t = match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
 	| TAbstract({a_path = [],"Void"},[]) -> "void"
+	| TAbstract({a_path = [],"Bool"},[]) -> "int"
 	| TInst({cl_path = [],"String"},[]) -> "char*"
 	| TInst({cl_path = [],"Array"},[_]) -> "GArray*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
@@ -201,7 +203,7 @@ let s_type ctx t = match follow t with
 	| _ -> "void*"
 
 let get_type_id ctx t =
-	let id = Type.s_type (print_context()) t in
+	let id = Type.s_type (print_context()) (follow t) in
 	try
 		PMap.find id ctx.con.type_ids
 	with Not_found ->
@@ -586,7 +588,6 @@ let mk_function_context ctx cf =
 				| DTBind(bl,dt) ->
 					List.iter (fun ((v,_),_) ->
 						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-						print_endline v.v_name;
 						locals := v :: !locals
 					) bl;
 					dtl dt
