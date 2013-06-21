@@ -57,6 +57,18 @@ let open_block ctx =
 	ctx.tabs <- "\t" ^ ctx.tabs;
 	(fun() -> ctx.tabs <- oldt)
 
+(** helpers **)
+let rec is_value_type ctx t = match follow t with
+	| TAbstract({ a_impl = None }, _) -> true
+	(* | TInst(c,_) -> has_meta Meta.Struct c.cl_meta *)
+	| TEnum(_,_) -> false (* TODO: define when a TEnum will be stack-allocated and when it won't *)
+	| TAbstract(a,tl) ->
+		if has_meta Meta.NotNull a.a_meta then
+			true
+		else
+			is_value_type ctx (Codegen.Abstract.get_underlying_type a tl)
+	| _ -> false
+
 let mk_type_context con path =
 	let rec create acc = function
 		| [] -> ()
@@ -98,7 +110,7 @@ let close_type_context ctx =
 	output_string ch_h "#define GC_NOT_DLL\n";
 	output_string ch_h "#include \"gc.h\"\n";
 	(* TODO: get rid of these *)
-	output_string ch_h "#include \"glib/garray.h\"\n";
+	(* output_string ch_h "#include \"glib/garray.h\"\n"; *)
 	output_string ch_h "#include <setjmp.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path b ->
@@ -176,19 +188,22 @@ let anon_signature ctx fields =
 		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
 		s
 
-let s_type ctx t = match follow t with
+let rec s_type ctx t =
+	match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
 	| TAbstract({a_path = [],"Void"},[]) -> "void"
+	| TAbstract({a_path = ["c"],"Pointer"},[t]) -> s_type ctx t ^ "*"
 	| TInst({cl_path = [],"String"},[]) -> "char*"
-	| TInst({cl_path = [],"Array"},[_]) -> "GArray*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
+		let ptr = if is_value_type ctx t then "*" else "" in
 		add_class_dependency ctx c;
-		(path_to_name c.cl_path) ^ "*"
+		(path_to_name c.cl_path) ^ ptr
 	| TEnum(en,_) ->
+		let ptr = if is_value_type ctx t then "*" else "" in
 		if not en.e_extern then add_dependency ctx en.e_path;
-		(path_to_name en.e_path) ^ "*"
+		(path_to_name en.e_path) ^ ptr
 	| TAnon a ->
 		begin match !(a.a_status) with
 		| Statics c -> "Class_" ^ (path_to_name c.cl_path) ^ "*"
@@ -287,7 +302,10 @@ let rec generate_expr ctx e = match e.eexpr with
 		let n = field_name fa in
 		spr ctx "(";
 		generate_expr ctx e1;
-		print ctx ")->%s" n
+		if is_value_type ctx e1.etype then
+			print ctx ").%s" n
+		else
+			print ctx ")->%s" n
 	| TLocal v ->
 		spr ctx v.v_name;
 	| TObjectDecl fl ->

@@ -21,6 +21,12 @@
  */
 package c;
 
-@:coreType @:notNull @:runtimeValue abstract Pointer<T> to Int from Int {
-	/* I wish I could define @:arrayAccess here :) */
+@:notNull @:runtimeValue abstract Pointer<T>(_PointerR)
+{
+	@:extern @:op(A+B) public static function add<T>(addr:Pointer<T>, offset:Int):Pointer<T> { return addr;}
+	@:extern @:op(++A) public static function increment<T>(addr:Pointer<T>):Pointer<T> { return addr; }
+	@:extern @:arrayAccess public function __get(index:Int):T { return null; }
+	@:extern @:arrayAccess public function __set(index:Int, value:T):T { return null; }
 }
+
+extern class _PointerR {}

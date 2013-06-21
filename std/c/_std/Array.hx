@@ -19,15 +19,20 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
-<<<<<<< HEAD
-import c.NativeArray;
+import c.FixedArray;
+import c.Lib;
 
 @:final @:coreApi class Array<T> implements ArrayAccess<T>
 {
 	public var length(default,null) : Int;
-	private var __a:NativeArray<T>;
+	private var __a:FixedArray<T>;
 
-	private static function ofNative<X>(native:NativeArray<X>):Array<X>
+	private static inline function memcpy<T>(src:FixedArray<T>, srcPos:Int, dest:FixedArray<T>, destPos:Int, length:Int):Void
+	{
+		Lib.memcpy(src.array, srcPos, dest.array, destPos, length);
+	}
+
+	private static function ofNative<X>(native:FixedArray<X>):Array<X>
 	{
 		var ret = new Array();
 		ret.__a = native;
@@ -38,32 +43,32 @@ import c.NativeArray;
 	public function new() : Void
 	{
 		this.length = 0;
-		this.__a = new NativeArray(0);
+		this.__a = new FixedArray(0);
 	}
 
 	public function concat( a : Array<T> ) : Array<T>
 	{
 		var length = length;
 		var len = length + a.length;
-		var retarr = new NativeArray(len);
-		// System.arraycopy(__a, 0, retarr, 0, length);
-		// System.arraycopy(a.__a, 0, retarr, length, a.length);
+		var retarr = new FixedArray(len);
+		memcpy(__a, 0, retarr, 0, length);
+		memcpy(a.__a, 0, retarr, length, a.length);
 
 		return ofNative(retarr);
 	}
 
-	private function concatNative( a : NativeArray<T> ) : Void
+	private function concatNative( a : FixedArray<T> ) : Void
 	{
 		var __a = __a;
 		var length = length;
 		var len = length + a.length;
 		if (__a.length >= len)
 		{
-			// System.arraycopy(a, 0, __a, length, length);
+			memcpy(a, 0, __a, length, length);
 		} else {
-			var newarr = new NativeArray(len);
-			// System.arraycopy(__a, 0, newarr, 0, length);
-			// System.arraycopy(a, 0, newarr, length, a.length);
+			var newarr = new FixedArray(len);
+			memcpy(__a, 0, newarr, 0, length);
+			memcpy(a, 0, newarr, length, a.length);
 
 			this.__a = newarr;
 		}
@@ -112,8 +117,8 @@ import c.NativeArray;
 		if (length >= __a.length)
 		{
 			var newLen = (length << 1) + 1;
-			var newarr = new NativeArray(newLen);
-			// System.arraycopy(__a, 0, newarr, 0, __a.length);
+			var newarr = new FixedArray(newLen);
+			memcpy(__a, 0, newarr, 0, __a.length);
 
 			this.__a = newarr;
 		}
@@ -147,7 +152,7 @@ import c.NativeArray;
 		var a = this.__a;
 		var x = a[0];
 		l -= 1;
-		// System.arraycopy(a, 1, a, 0, length-1);
+		memcpy(a, 1, a, 0, length-1);
 		a[l] = null;
 		this.length = l;
 
@@ -170,39 +175,40 @@ import c.NativeArray;
 		var len = end - pos;
 		if ( len < 0 ) return new Array();
 
-		var newarr = new NativeArray(len);
-		// System.arraycopy(__a, pos, newarr, 0, len);
+		var newarr = new FixedArray(len);
+		memcpy(__a, pos, newarr, 0, len);
 
 		return ofNative(newarr);
 	}
 
 	public function sort( f : T -> T -> Int ) : Void
 	{
-		if (length == 0)
-			return;
-		quicksort(0, length - 1, f);
+		//TODO
+	// 	if (length == 0)
+	// 		return;
+	// 	quicksort(0, length - 1, f);
 	}
-
-	private function quicksort( lo : Int, hi : Int, f : T -> T -> Int ) : Void
-	{
-        var buf = __a;
-		var i = lo, j = hi;
-        var p = buf[(i + j) >> 1];
-		while ( i <= j )
-		{
-			while ( f(buf[i], p) < 0 ) i++;
-            while ( f(buf[j], p) > 0 ) j--;
-			if ( i <= j )
-			{
-                var t = buf[i];
-                buf[i++] = buf[j];
-                buf[j--] = t;
-            }
-		}
-
-		if( lo < j ) quicksort( lo, j, f );
-        if( i < hi ) quicksort( i, hi, f );
-	}
+//
+// 	private function quicksort( lo : Int, hi : Int, f : T -> T -> Int ) : Void
+// 	{
+//         var buf = __a;
+// 		var i = lo, j = hi;
+//         var p = buf[(i + j) >> 1];
+// 		while ( i <= j )
+// 		{
+// 			while ( f(buf[i], p) < 0 ) i++;
+//             while ( f(buf[j], p) > 0 ) j--;
+// 			if ( i <= j )
+// 			{
+//                 var t = buf[i];
+//                 buf[i++] = buf[j];
+//                 buf[j--] = t;
+//             }
+// 		}
+//
+// 		if( lo < j ) quicksort( lo, j, f );
+//         if( i < hi ) quicksort( i, hi, f );
+// 	}
 
 	public function splice( pos : Int, len : Int ) : Array<T>
 	{
@@ -220,12 +226,12 @@ import c.NativeArray;
 		}
 		var a = this.__a;
 
-		var ret = new NativeArray(len);
-		// System.arraycopy(a, pos, ret, 0, len);
+		var ret = new FixedArray(len);
+		memcpy(a, pos, ret, 0, len);
 		var ret = ofNative(ret);
 
 		var end = pos + len;
-		// System.arraycopy(a, end, a, pos, this.length - end);
+		memcpy(a, end, a, pos, this.length - end);
 		this.length -= len;
 		while( --len >= 0 )
 			a[this.length + len] = null;
@@ -249,7 +255,7 @@ import c.NativeArray;
 		var a = this.__a;
 
 		var end = pos + len;
-		// System.arraycopy(a, end, a, pos, this.length - end);
+		memcpy(a, end, a, pos, this.length - end);
 		this.length -= len;
 		while( --len >= 0 )
 			a[this.length + len] = null;
@@ -257,21 +263,22 @@ import c.NativeArray;
 
 	public function toString() : String
 	{
-		var ret = new StringBuf();
-		var a = __a;
-		ret.add("[");
-		var first = true;
-		for (i in 0...length)
-		{
-			if (first)
-				first = false;
-			else
-				ret.add(",");
-			ret.add(a[i]);
-		}
+		return "TODO";
+		// var ret = new StringBuf();
+		// var a = __a;
+		// ret.add("[");
+		// var first = true;
+		// for (i in 0...length)
+		// {
+		// 	if (first)
+		// 		first = false;
+		// 	else
+		// 		ret.add(",");
+		// 	ret.add(a[i]);
+		// }
 
-		ret.add("]");
-		return ret.toString();
+		// ret.add("]");
+		// return ret.toString();
 	}
 
 	public function unshift( x : T ) : Void
@@ -281,12 +288,12 @@ import c.NativeArray;
 		if (length >= __a.length)
 		{
 			var newLen = (length << 1) + 1;
-			var newarr = new NativeArray(newLen);
-			// System.arraycopy(__a, 0, newarr, 1, length);
+			var newarr = new FixedArray(newLen);
+			memcpy(__a, 0, newarr, 1, length);
 
 			this.__a = newarr;
 		} else {
-			// System.arraycopy(__a, 0, __a, 1, length);
+			memcpy(__a, 0, __a, 1, length);
 		}
 
 		this.__a[0] = x;
@@ -311,17 +318,17 @@ import c.NativeArray;
 		if (l >= __a.length)
 		{
 			var newLen = (length << 1) + 1;
-			var newarr = new NativeArray(newLen);
-			// System.arraycopy(__a, 0, newarr, 0, pos);
+			var newarr = new FixedArray(newLen);
+			memcpy(__a, 0, newarr, 0, pos);
 			newarr[pos] = x;
-			// System.arraycopy(__a, pos, newarr, pos + 1, l - pos);
+			memcpy(__a, pos, newarr, pos + 1, l - pos);
 
 			this.__a = newarr;
 			++this.length;
 		} else {
 			var __a = __a;
-			// System.arraycopy(__a, pos, __a, pos + 1, l - pos);
-			// System.arraycopy(__a, 0, __a, 0, pos);
+			memcpy(__a, pos, __a, pos + 1, l - pos);
+			memcpy(__a, 0, __a, 0, pos);
 			__a[pos] = x;
 			++this.length;
 		}
@@ -336,7 +343,7 @@ import c.NativeArray;
 		{
 			if (__a[i] == x)
 			{
-				// System.arraycopy(__a, i + 1, __a, i, length - i - 1);
+				memcpy(__a, i + 1, __a, i, length - i - 1);
 				__a[--this.length] = null;
 
 				return true;
@@ -350,35 +357,39 @@ import c.NativeArray;
 	{
 		var len = length;
 		var __a = __a;
-		var newarr = new NativeArray(len);
-		// System.arraycopy(__a, 0, newarr, 0, len);
+		var newarr = new FixedArray(len);
+		memcpy(__a, 0, newarr, 0, len);
 		return ofNative(newarr);
 	}
 
 	public function iterator() : Iterator<T>
 	{
-		var i = 0;
-		var len = length;
-		return
-		{
-			hasNext:function() return i < len,
-			next:function() return __a[i++]
-		};
+		return null;
+		//TODO
+		// var i = 0;
+		// var len = length;
+		// return
+		// {
+		// 	hasNext:function() return i < len,
+		// 	next:function() return __a[i++]
+		// };
 	}
 
 	public function map<S>( f : T -> S ) : Array<S> {
-		var ret = [];
-		for (elt in this)
-			ret.push(f(elt));
-		return ret;
+		return null; //TODO
+		// var ret = [];
+		// for (elt in this)
+		// 	ret.push(f(elt));
+		// return ret;
 	}
 
 	public function filter( f : T -> Bool ) : Array<T> {
-		var ret = [];
-		for (elt in this)
-			if (f(elt))
-				ret.push(elt);
-		return ret;
+		return null; //TODO
+		// var ret = [];
+		// for (elt in this)
+		// 	if (f(elt))
+		// 		ret.push(elt);
+		// return ret;
 	}
 
 	private function __get(idx:Int):T
@@ -398,9 +409,9 @@ import c.NativeArray;
 			var newl = idx + 1;
 			if (idx == __a.length)
 				newl = (idx << 1) + 1;
-			var newArr = new NativeArray<T>(newl);
-			// if (length > 0)
-				// System.arraycopy(__a, 0, newArr, 0, length);
+			var newArr = new FixedArray<T>(newl);
+			if (length > 0)
+				memcpy(__a, 0, newArr, 0, length);
 			this.__a = __a = newArr;
 		}
 

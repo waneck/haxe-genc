@@ -21,19 +21,28 @@
  */
 package c;
 import c.Pointer;
+import c.Lib;
 
-@:struct class NativeArray<T> implements ArrayAccess<T>
+@:struct class FixedArray<T> implements ArrayAccess<T>
 {
-	private var array:Pointer<T>;
+	public var array(default, null):Pointer<T>;
 	public var length(default, null):Int;
 
-	public function new(len:Int)
+	public function new(len:Int, ?array:Null<Pointer<T>>)
 	{
 		this.length = len;
+		if (array == null)
+			array = cast Lib.alloc(len * Lib.sizeof(new TypeReference<T>()));
+		this.array = array;
 	}
 
 	private function __get(idx:Int)
 	{
-		return PointerTools.valueOf(array, idx);
+		return array[idx];
+	}
+
+	private function __set(idx:Int, v:T)
+	{
+		return array[idx] = v;
 	}
 }

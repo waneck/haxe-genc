@@ -1,17 +1,19 @@
+package c;
+
 class Lib
 {
-	@:extern public static inline function pointercopy<T>(src:Pointer<T>, srcPos:Int, dest:Pointer<T>, destPos:Int, length:Int):Void
+	@:extern public static inline function memcpy<A>(src:Pointer<A>, srcPos:Int, dest:Pointer<A>, destPos:Int, length:Int):Void
 	{
-		untyped __memcpy__( (dest + destPos), (src + srcPos), length * sizeof(T) );
+		untyped __call__("memcpy",(dest + destPos), (src + srcPos), length * sizeof(new TypeReference<A>()) );
 	}
 
-	@:extern public static inline function sizeof(d:Dynamic):Int
+	@:extern public static inline function sizeof<T>(c:TypeReference<T>):Int
 	{
-		return untyped __sizeof__(d);
+		return untyped __sizeof__(c);
 	}
 
-	@:extern public static inline function valueOf<T>(p:Pointer<T>, idx:Int):T
+	@:extern public static inline function alloc(byteSize:Int):Pointer<Void>
 	{
-		return untyped p[idx];
+		return untyped GC_MALLOC(byteSize);
 	}
 }
