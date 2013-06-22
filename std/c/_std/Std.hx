@@ -47,4 +47,8 @@ import c.TypeReference;
 	public static function random( x : Int ) : Int {
 		return 0;
 	}
+	
+	public static function instance<T>(v:{}, c:Class<T>):T {
+		return cast v;
+	}
 }

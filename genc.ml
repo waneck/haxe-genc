@@ -112,7 +112,7 @@ let close_type_context ctx =
 	output_string ch_h "#define GC_NOT_DLL\n";
 	output_string ch_h "#include \"gc.h\"\n";
 	(* TODO: get rid of these *)
-	(* output_string ch_h "#include \"glib/garray.h\"\n"; *)
+	output_string ch_h "#include <glib.h>\n";
 	output_string ch_h "#include <setjmp.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path b ->
@@ -149,7 +149,7 @@ let begin_loop ctx =
 	fun () ->
 		match ctx.fctx.loop_stack with
 		| ls :: l ->
-			(match ls with None -> () | Some s -> print ctx "%s:" s);
+			(match ls with None -> () | Some s -> print ctx "%s: {}" s);
 			ctx.fctx.loop_stack <- l;
 		| _ ->
 			assert false
@@ -182,7 +182,7 @@ let add_type_dependency ctx t = match follow t with
 let anon_signature ctx fields =
 	let fields = PMap.fold (fun cf acc -> cf :: acc) fields [] in
 	let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
-	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) cf.cf_type)) fields) in
+	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
 	try fst (PMap.find id ctx.con.anon_types)
 	with Not_found ->
 		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
@@ -205,6 +205,7 @@ let rec s_type ctx t =
 	| TInst(({cl_path = [],"typeref"} as c),_) ->
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
+	| TAbstract({a_path = [],"Bool"},[]) -> "int"
 	| TInst({cl_path = [],"String"},[]) -> "char*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
@@ -227,7 +228,7 @@ let rec s_type ctx t =
 	| _ -> "void*"
 
 let get_type_id ctx t =
-	let id = Type.s_type (print_context()) t in
+	let id = Type.s_type (print_context()) (follow t) in
 	try
 		PMap.find id ctx.con.type_ids
 	with Not_found ->
@@ -281,7 +282,7 @@ let rec handle_special_call ctx e = match e.eexpr with
 	| TCall({eexpr = TLocal({v_name = "__c"})},[{eexpr = TConst(TString code)}]) ->
 		spr ctx code;
 		true
-	| TCall({eexpr = TLocal({v_name = "__call__"})},{eexpr = TConst(TString name)} :: p) ->
+	| TCall({eexpr = TLocal({v_name = "__call"})},{eexpr = TConst(TString name)} :: p) ->
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) p;
 		spr ctx ")";
@@ -564,7 +565,7 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx e1;
 		spr ctx ")";
-	| TArrayDecl _ | TTry _ ->
+	| TArrayDecl _ | TTry _ | TFor _ ->
 		(* handled in function context pass *)
 		assert false
 	| TMeta(_,e) ->
@@ -589,8 +590,79 @@ and generate_expr ctx e = match e.eexpr with
 		generate_expr ctx e1;
 		newline ctx;
 		print ctx "(longjmp(*c_hxc_Exception_peek(),%i))" (get_type_id ctx e1.etype);
-	| TPatMatch _
-	| TFor _
+	| TPatMatch dt ->
+		let fl = ctx.con.num_labels in
+		ctx.con.num_labels <- ctx.con.num_labels + (Array.length dt.dt_dt_lookup) + 1;
+		let mk_label i = Printf.sprintf "_hx_label%i" (i + fl) in
+		let rec loop d =
+			match d with
+			| DTGoto i ->
+				print ctx "goto %s" (mk_label i);
+				newline ctx;
+			| DTBind(bl,dt) ->
+				List.iter (fun ((v,p),e) ->
+					print ctx "%s = " v.v_name;
+					generate_expr ctx e;
+					newline ctx;
+				) bl;
+				loop dt
+			| DTExpr e -> generate_expr ctx (block e)
+			| DTGuard(e, dt1, dt2) ->
+				spr ctx "if(";
+				generate_expr ctx e;
+				spr ctx ")";
+				loop dt1;
+				(match dt2 with None -> () | Some dt ->
+					spr ctx " else ";
+					loop dt)
+			| DTSwitch(e,cl) ->
+				let def = ref None in
+				let cl = List.filter (fun (e,dt) ->
+					match e.eexpr with
+	 				| TMeta((Meta.MatchAny,_,_),_) ->
+						def := Some dt;
+						false
+					| _ ->
+						true
+				) cl in
+				spr ctx "switch(";
+				generate_expr ctx e;
+				spr ctx ") {";
+				let b = open_block ctx in
+				List.iter (fun (e,dt) ->
+					newline ctx;
+					spr ctx "case ";
+					generate_expr ctx e;
+					spr ctx ":";
+					loop dt;
+					newline ctx;
+					spr ctx "break";
+				) cl;
+				begin match !def with
+					| None -> ()
+					| Some dt ->
+						newline ctx;
+						spr ctx "default:";
+						loop dt;
+						newline ctx;
+						spr ctx "break";
+				end;
+				b();
+				newline ctx;
+				spr ctx "}";
+				newline ctx;
+		in
+		print ctx "goto %s" (mk_label dt.dt_first);
+		Array.iteri (fun i d ->
+			newline ctx;
+			print ctx "%s: {}" (mk_label i);
+			newline ctx;
+			loop d;
+			print ctx "goto %s" (mk_label (Array.length dt.dt_dt_lookup));
+			newline ctx;
+		) dt.dt_dt_lookup;
+		print ctx "%s: {}" (mk_label (Array.length dt.dt_dt_lookup));
+		newline ctx;
 	| TFunction _ ->
 		print_endline ("Not implemented yet: " ^ (expr_debug ctx e))
 
@@ -641,11 +713,12 @@ let mk_function_context ctx cf =
 			add_dependency ctx (["c";"hxc"],"Exception");
 			let esubj = mk_ccode ctx "(setjmp(*c_hxc_Exception_push()))" in
 			let epop = mk_ccode ctx "c_hxc_Exception_pop()" in
+			let epopassign = mk_ccode ctx "jmp_buf* _hx_jmp_buf = c_hxc_Exception_pop()" in
 			let c1 = [mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
 				let eassign = mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
-				let e = Codegen.concat eassign (Codegen.concat e epop) in
+				let e = Codegen.concat eassign (Codegen.concat epopassign e) in
 				let e = mk (TBlock [e]) e.etype e.epos in
 				if v.v_type == t_dynamic then begin
 					def := Some e;
@@ -654,6 +727,36 @@ let mk_function_context ctx cf =
 					Some ([mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
 			) cl) in
 			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
+		| TPatMatch dt ->
+ 			let rec dtl d = match d with
+				| DTGoto _ | DTExpr _ ->
+					()
+				| DTGuard(_,dt1,dt2) ->
+					dtl dt1;
+					(match dt2 with None -> () | Some dt -> dtl dt)
+				| DTSwitch(_,cl) ->
+					List.iter (fun (_,dt) -> dtl dt) cl
+				| DTBind(bl,dt) ->
+					List.iter (fun ((v,_),_) ->
+						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
+						locals := v :: !locals
+					) bl;
+					dtl dt
+			in
+			Array.iter dtl dt.dt_dt_lookup;
+			List.iter (fun (v,_) ->
+				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
+				locals := v :: !locals
+			) dt.dt_var_init;
+			Type.map_expr loop e
+		| TFor(v,e1,e2) ->
+			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
+			let enext = mk (TField(e1,quick_field e1.etype "next")) v.v_type e1.epos in
+			let ebody = Codegen.concat enext e2 in
+			mk (TBlock [
+				mk (TVars [v,None]) ctx.con.com.basic.tvoid e1.epos;
+				mk (TWhile(ehasnext,ebody,NormalWhile)) ctx.con.com.basic.tvoid e1.epos;
+			]) ctx.con.com.basic.tvoid e.epos
 		| _ -> Type.map_expr loop e
 	in
 	let e = match cf.cf_expr with
@@ -858,8 +961,10 @@ let generate_class ctx c =
 		print ctx "} %s" (path_to_name c.cl_path);
 		newline ctx;
 		spr ctx "\n";
-	end else
-    print ctx "typedef void* %s // empty member structure\n;" (path_to_name c.cl_path);
+	end else begin
+		print ctx "typedef struct %s { void* dummy; } %s" (path_to_name c.cl_path) (path_to_name c.cl_path);
+		newline ctx;
+	end;
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
@@ -874,6 +979,8 @@ let generate_class ctx c =
       newline ctx
     ) svars
 	end;
+
+	ctx.buf <- ctx.buf_h;
 
 	(* generate forward declarations of functions *)
 	if not (DynArray.empty methods) then begin
