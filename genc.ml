@@ -62,7 +62,7 @@ let open_block ctx =
 (** helpers **)
 let rec is_value_type ctx t = match follow t with
 	| TAbstract({ a_impl = None }, _) -> true
-	| TInst(c,_) -> has_meta Meta.Struct c.cl_meta
+	(* | TInst(c,_) -> has_meta Meta.Struct c.cl_meta *)
 	| TEnum(_,_) -> false (* TODO: define when a TEnum will be stack-allocated and when it won't *)
 	| TAbstract(a,tl) ->
 		if has_meta Meta.NotNull a.a_meta then
@@ -445,7 +445,9 @@ and generate_expr ctx e = match e.eexpr with
 		with | Not_found ->
 			ctx.con.com.error ("Cannot find type parameter called " ^ s_type_path c.cl_path) e.epos)
 		| _ ->
-			spr ctx ("&" ^ (path_to_name (t_path p)) ^ "__typeref"))
+			let path = t_path p in
+			add_dependency ctx path;
+			spr ctx ("&" ^ (path_to_name path ) ^ "__typeref"))
 	| TNew(c,tl,el) ->
 		let el = List.map (mk_type_param ctx e.epos) tl @ el in
 		add_class_dependency ctx c;
@@ -891,6 +893,10 @@ let generate_class ctx c =
 
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
+	add_dependency ctx ([],"typeref");
+	spr ctx (get_typeref_forward ctx en.e_path);
+	newline ctx;
+
 	let ctors = List.map (fun s -> PMap.find s en.e_constrs) en.e_names in
 	let path = path_to_name en.e_path in
 
@@ -955,6 +961,8 @@ let generate_enum ctx en =
 	newline ctx;
 
 	ctx.buf <- ctx.buf_c;
+	spr ctx (get_typeref_declaration ctx (TEnum(en,List.map snd en.e_types)));
+	newline ctx;
 
 	(* generate constructor functions *)
 	spr ctx "// constructor functions";
@@ -989,6 +997,16 @@ let generate_type con mt = match mt with
 	| TEnumDecl en when not en.e_extern ->
 		let ctx = mk_type_context con en.e_path in
 		generate_enum ctx en;
+		close_type_context ctx;
+	| TAbstractDecl a ->
+		let ctx = mk_type_context con a.a_path in
+		ctx.buf <- ctx.buf_c;
+		spr ctx (get_typeref_declaration ctx (TAbstract(a,List.map snd a.a_types)));
+		newline ctx;
+		ctx.buf <- ctx.buf_h;
+		add_dependency ctx ([],"typeref");
+		spr ctx (get_typeref_forward ctx a.a_path);
+		newline ctx;
 		close_type_context ctx;
 	| _ ->
 		()
