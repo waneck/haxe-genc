@@ -715,9 +715,65 @@ and generate_expr ctx e = match e.eexpr with
 		print_endline ("Not implemented yet: " ^ (expr_debug ctx e))
   | TArray _ -> assert false
 
+let is_type_param ctx t = match follow t with
+	| TInst({ cl_kind = KTypeParameter _ },_) -> true
+	| _ -> false
+
+(* since we change the functions' signatures to add 'this' and type parameters,
+we need a fuzzy map2 version which won't fail, and discard the remaining arguments *)
+let rec fuzzy_map2 f l1 l2 acc = match l1, l2 with
+	| v1 :: l1, v2 :: l2 -> fuzzy_map2 f l1 l2 ( (f v1 v2) :: acc )
+	| _ -> acc
+
 let mk_function_context ctx cf =
 	let locals = ref [] in
+
+	(* collected parameter stack variables for type parameter passing *)
+	let all_params = ref (PMap.empty) in
+	let cur_params = ref (PMap.empty) in
+	let add_param t =
+		let path = t_path t in
+		let cur_i, cur_arr = try
+			PMap.find path !cur_params
+		with | Not_found ->
+			(0,[])
+		in
+		let n = path_to_name path ^ "_tmp_" ^ (string_of_int cur_i) in
+		let v = try
+			PMap.find n !all_params
+		with | Not_found ->
+			let v = alloc_var n t in
+			locals := v :: !locals;
+			all_params := PMap.add n v !all_params;
+			v
+		in
+		cur_params := PMap.add path (cur_i + 1, v :: cur_arr) !cur_params;
+		v
+	in
+
 	let rec loop e = match e.eexpr with
+		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el) when List.exists (fun (_,_,t) -> is_type_param ctx t) (fst (get_fun cf.cf_type)) ->
+			let old_params = !cur_params in
+			let ef = loop ef in
+			let args, ret = get_fun cf.cf_type in
+			let el = fuzzy_map2 (fun (_,_,t) e -> match e.eexpr with
+				| _ when not (is_type_param ctx t) -> loop e
+				| TLocal _ -> loop e (* locals don't need to be changed *)
+				| _ ->
+					let v = add_param e.etype in
+					{
+						eexpr = TCall(
+							{ eexpr = TLocal(alloc_var "__refpass" t_dynamic); etype = t_dynamic; epos = e.epos},
+							[{ eexpr = TLocal v; etype = v.v_type; epos = e.epos }; loop e]
+						);
+						etype = t_dynamic;
+						epos = e.epos
+					}
+			) (List.rev args) (List.rev el) []
+			in
+			cur_params := old_params;
+			{ e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el) }
+		(* TODO: check also for when a TField with type parameter is read / set; its contents must be copied *)
 		| TVars vl ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
 				locals := v :: !locals;
@@ -805,6 +861,26 @@ let get_typeref_declaration ctx t =
 	let path = t_path t in
 	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s) }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t)
 
+let mk_stack_tp_init ctx t p =
+	{
+		eexpr = TCall(
+			{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
+			[
+				{ eexpr = TConst (TString "alloca"); etype = t_dynamic; epos = p };
+				{
+					eexpr = TCall(
+						{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
+						[mk_type_param ctx p t]
+					);
+					etype = ctx.con.com.basic.tint;
+					epos = p;
+				}
+			]
+		);
+		etype = t;
+		epos = p;
+	}
+
 let generate_method ctx c cf =
 	ctx.fctx <- mk_function_context ctx cf;
 	generate_function_header ctx c cf;
@@ -814,7 +890,14 @@ let generate_method ctx c cf =
 		let el = match ctx.fctx.local_vars with
 			| [] -> el
 			| _ ->
-				let einit = mk (TVars (List.map (fun v -> v,None) ctx.fctx.local_vars)) ctx.con.com.basic.tvoid cf.cf_pos in
+				let einit = mk (TVars (List.map (fun v ->
+					(* if there's a local var to a still unresolved type parameter, we must pre-allocate it *)
+					match follow v.v_type with
+					| TInst({ cl_kind = KTypeParameter _ },_) ->
+						v, Some (mk_stack_tp_init ctx v.v_type cf.cf_pos)
+					| _ ->
+						v, None
+				) ctx.fctx.local_vars)) ctx.con.com.basic.tvoid cf.cf_pos in
 				einit :: el
 		in
 		let e = mk (TBlock el) t cf.cf_pos in
