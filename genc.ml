@@ -704,7 +704,7 @@ let mk_array_decl ctx el t p =
 	) el;
 	spr ctx "return Array_ofPointerCopy(";
 	generate_expr ctx eparam;
-	print ctx ", %d, arr)" (List.length el);
+	print ctx ", %d, arr)" arity;
 	bl();
 	newline ctx;
 	spr ctx "}";
