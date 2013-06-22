@@ -190,6 +190,12 @@ let anon_signature ctx fields =
 		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
 		s
 
+let t_path t = match follow t with
+	| TInst(c,_) -> c.cl_path
+	| TEnum(e,_) -> e.e_path
+	| TAbstract(a,_) -> a.a_path
+	| _ -> [],"Dynamic"
+
 let rec s_type ctx t =
 	match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
@@ -229,6 +235,38 @@ let get_type_id ctx t =
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
 let declare_var ctx v = if not (List.mem v ctx.local_vars) then ctx.local_vars <- v :: ctx.local_vars
+
+let get_fun t =
+  match follow t with | TFun(r1,r2) -> (r1,r2) | _ -> assert false
+
+let infer_params ctx pos (original_args:((string * bool * t) list * t)) (applied_args:((string * bool * t) list * t)) (params:(string * t) list) calls_parameters_explicitly : tparams =
+	match params with
+	| [] -> []
+	| _ ->
+		let args_list args = (if not calls_parameters_explicitly then t_dynamic else snd args) :: (List.map (fun (n,o,t) -> t) (fst args)) in
+
+		let monos = List.map (fun _ -> mk_mono()) params in
+		let original = args_list (get_fun (apply_params params monos (TFun(fst original_args,snd original_args)))) in
+		let applied = args_list applied_args in
+
+		(try
+			List.iter2 (fun a o ->
+				unify a o
+				(* type_eq EqStrict a o *)
+			) applied original
+			(* unify applied original *)
+		with | Unify_error el ->
+				(* List.iter (fun el -> gen.gcon.warning (Typecore.unify_error_msg (print_context()) el) pos) el; *)
+				ctx.con.com.warning ("This expression may be invalid") pos
+		| Invalid_argument("List.map2") ->
+				ctx.con.com.warning ("This expression may be invalid") pos
+		);
+
+		List.map (fun t ->
+			match follow t with
+				| TMono _ -> t_dynamic
+				| t -> t
+		) monos
 
 (** separate special behaviour from raw code handling *)
 let rec handle_special_call ctx e = match e.eexpr with
@@ -290,7 +328,31 @@ let rec handle_special_call ctx e = match e.eexpr with
 		| _ -> assert false);
 		spr ctx ")";
 		true
+	| TCall(({eexpr = TField(e1,FInstance(c,({cf_params = _::_} as cf)))} as ef),el) ->
+		generate_tparam_call ctx e ef e1 c cf false el;
+		true
+	| TCall(({eexpr = TField(e1,FStatic(c,({cf_params = _::_} as cf)))} as ef),el) ->
+		generate_tparam_call ctx e ef e1 c cf true el;
+		true
 	| _ -> false
+
+and mk_type_param ctx pos t =
+	let t = ctx.con.ttype t in
+	let c,p = match follow t with
+		| TInst(c,p) -> c,p
+		| _ -> assert false
+	in
+	{ eexpr = TNew(c,p,[]); etype = t; epos = pos }
+
+and generate_tparam_call ctx e ef e1 c cf static el =
+	(* FIXME: cf.cf_type may inherit the type parameters of a superclass *)
+	let params = infer_params ctx e.epos (get_fun cf.cf_type) (get_fun ef.etype) cf.cf_params true in
+	let el = (if static then [] else [e1]) @ List.map (mk_type_param ctx e.epos) params @ el in
+	add_class_dependency ctx c;
+	spr ctx (full_field_name c cf);
+	spr ctx "(";
+	concat ctx "," (generate_expr ctx) el;
+	spr ctx ")"
 
 and generate_expr ctx e = match e.eexpr with
 	| TBlock([]) ->
@@ -373,7 +435,16 @@ and generate_expr ctx e = match e.eexpr with
 		print ctx "new_%s(" s;
 		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
 		spr ctx ")";
-	| TNew(c,_,el) ->
+	| TNew({cl_path = [],"typeref"},[p],[]) -> (match follow p with
+		| TInst(({cl_kind = KTypeParameter _} as c),_) -> (try
+			let expr = List.assoc c.cl_path ctx.con.type_parameters in
+			generate_expr ctx expr
+		with | Not_found ->
+			ctx.con.com.error ("Cannot find type parameter called " ^ s_type_path c.cl_path) e.epos)
+		| _ ->
+			spr ctx ((path_to_name (t_path p)) ^ "__typeref"))
+	| TNew(c,tl,el) ->
+		let el = List.map (mk_type_param ctx e.epos) tl @ el in
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c (match c.cl_constructor with None -> assert false | Some cf -> cf));
 		spr ctx "(";
@@ -614,12 +685,6 @@ let generate_method ctx c cf =
 		generate_expr ctx e
 	| _ -> assert false
 
-let t_path t = match follow t with
-	| TInst(c,_) -> c.cl_path
-	| TEnum(e,_) -> e.e_path
-	| TAbstract(a,_) -> a.a_path
-	| _ -> [],"Dynamic"
-
 let change_parameter_function ctx cf vars =
 	let tf_args, types = match vars, cf.cf_params with
 		| _ :: _, _ -> (* vars *)
@@ -726,7 +791,7 @@ let generate_class ctx c =
 			let params = change_parameter_function ctx cf [] in
 			let params = List.map (fun (p,v) -> p,mk (TLocal v) v.v_type cf.cf_pos) params in
 
-			ctx.con.type_parameters <- params;
+			ctx.con.type_parameters <- params @ old_tparams;
 			generate_method ctx c cf;
 			ctx.con.type_parameters <- old_tparams
 		) methods;
