@@ -202,6 +202,9 @@ let rec s_type ctx t =
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
 	| TAbstract({a_path = [],"Void"},[]) -> "void"
 	| TAbstract({a_path = ["c"],"Pointer"},[t]) -> s_type ctx t ^ "*"
+	| TInst(({cl_path = [],"typeref"} as c),_) ->
+		add_class_dependency ctx c;
+		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TInst({cl_path = [],"String"},[]) -> "char*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
@@ -669,6 +672,13 @@ let generate_function_header ctx c cf =
 	in
 	print ctx "%s %s(%s)" (s_type ctx ret) (full_field_name c cf) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args))
 
+let get_typeref_forward ctx path =
+	Printf.sprintf "extern const typeref %s__typeref" (path_to_name path)
+
+let get_typeref_declaration ctx t =
+	let path = t_path t in
+	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s) }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t)
+
 let generate_method ctx c cf =
 	ctx.fctx <- mk_function_context ctx cf;
 	generate_function_header ctx c cf;
@@ -728,7 +738,7 @@ let cls_parameter_vars ctx c = match c.cl_types with
 
 let generate_class ctx c =
 	let old_tparams = ctx.con.type_parameters in
-	let param_vars = cls_parameter_vars ctx c in
+	let param_vars = if c.cl_path <> ([],"typeref") then cls_parameter_vars ctx c else [] in
 	let mk_this_field f =
 		{ eexpr = TField({ eexpr = TConst TThis; etype = monofy_class c; epos = f.cf_pos}, FInstance(c,f)); etype = f.cf_type; epos = f.cf_pos }
 	in
@@ -786,6 +796,9 @@ let generate_class ctx c =
 	end;
 
 	ctx.buf <- ctx.buf_c;
+
+	spr ctx (get_typeref_declaration ctx (TInst(c,List.map snd c.cl_types)));
+	newline ctx;
 
 	(* generate function implementations *)
 	if not (DynArray.empty methods) then begin
@@ -868,6 +881,10 @@ let generate_class ctx c =
 			newline ctx;
 		) methods;
 	end;
+
+	add_dependency ctx ([],"typeref");
+	spr ctx (get_typeref_forward ctx c.cl_path);
+	newline ctx;
 
 	(* restore type parameters stack *)
 	ctx.con.type_parameters <- old_tparams

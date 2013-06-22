@@ -8,8 +8,5 @@ package c;
 	/** the fully qualified name of the type **/
 	public var name:String;
 
-
 	@:extern public function new() {}
 }
-
-// @:delegate abstract
