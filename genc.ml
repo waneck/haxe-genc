@@ -289,6 +289,16 @@ let rec handle_special_call ctx e = match e.eexpr with
 		concat ctx "," (generate_expr ctx) p;
 		spr ctx ")";
 		true
+	(* pass by reference call *)
+	| TCall({eexpr = TLocal({v_name = "__refpass"})},[e1; e2]) ->
+		spr ctx "(";
+		generate_expr ctx e1;
+		spr ctx " = ";
+		generate_expr ctx e2;
+		spr ctx ", &";
+		generate_expr ctx e1;
+		spr ctx ")";
+		true
 	(* sizeof *)
 	| TCall({eexpr = TLocal({v_name = "__sizeof__"})},[e1]) ->
 		(* get TypeReference's type *)
@@ -306,21 +316,6 @@ let rec handle_special_call ctx e = match e.eexpr with
 			print ctx "sizeof(%s)" (s_type ctx t));
 		true
 	(* pointer functions *)
-	| TCall({eexpr = TField(_,FStatic({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("__get"|"__set") } as cf)))}, ethis :: p) ->
-		spr ctx "(";
-		generate_expr ctx ethis;
-		spr ctx "[";
-		(match cf.cf_name, p with
-		| "__get", [i] ->
-			generate_expr ctx i;
-			spr ctx "])"
-		| "__set", [i;v] ->
-			generate_expr ctx i;
-			spr ctx "] = ";
-			generate_expr ctx v;
-			spr ctx ")"
-		| _ -> assert false);
-		true
 	| TCall({eexpr = TField(_,FStatic({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("add"|"increment") } as cf)))}, p) ->
 		spr ctx "(";
 		(match cf.cf_name, p with
