@@ -62,7 +62,7 @@ let open_block ctx =
 (** helpers **)
 let rec is_value_type ctx t = match follow t with
 	| TAbstract({ a_impl = None }, _) -> true
-	(* | TInst(c,_) -> has_meta Meta.Struct c.cl_meta *)
+	| TInst(c,_) -> has_meta Meta.Struct c.cl_meta
 	| TEnum(_,_) -> false (* TODO: define when a TEnum will be stack-allocated and when it won't *)
 	| TAbstract(a,tl) ->
 		if has_meta Meta.NotNull a.a_meta then
@@ -442,7 +442,7 @@ and generate_expr ctx e = match e.eexpr with
 		with | Not_found ->
 			ctx.con.com.error ("Cannot find type parameter called " ^ s_type_path c.cl_path) e.epos)
 		| _ ->
-			spr ctx ((path_to_name (t_path p)) ^ "__typeref"))
+			spr ctx ("&" ^ (path_to_name (t_path p)) ^ "__typeref"))
 	| TNew(c,tl,el) ->
 		let el = List.map (mk_type_param ctx e.epos) tl @ el in
 		add_class_dependency ctx c;
@@ -760,7 +760,10 @@ let generate_class ctx c =
 			| TFun(args,_), Some e ->
 				let path = path_to_name c.cl_path in
 				let einit =
-					mk_ccode ctx (Printf.sprintf "%s* this = (%s*) GC_MALLOC(sizeof(%s))" path path path) ::
+					(if is_value_type ctx (TInst(c,List.map snd c.cl_types)) then
+						mk_ccode ctx (Printf.sprintf "%s this" path)
+					else
+  					mk_ccode ctx (Printf.sprintf "%s* this = (%s*) GC_MALLOC(sizeof(%s))" path path path)) ::
 					List.map2 (fun (f,_) (_,v) -> {
 						eexpr = TBinop(
 							Ast.OpAssign,
@@ -816,6 +819,14 @@ let generate_class ctx c =
 		) svars;
 	end;
 
+	(* check if we have the main class *)
+	(match ctx.con.com.main_class with
+	| Some path when path = c.cl_path ->
+		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
+		add_dependency ctx (["c";"hxc"],"Exception");
+		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+  | _ -> ());
+
 	ctx.buf <- ctx.buf_h;
 
 	(* generate member struct *)
@@ -859,15 +870,7 @@ let generate_class ctx c =
 	end;
 
 	(* restore type parameters stack *)
-	ctx.con.type_parameters <- old_tparams;
-
-	(* check if we have the main class *)
-	match ctx.con.com.main_class with
-	| Some path when path = c.cl_path ->
-		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
-		add_dependency ctx (["c";"hxc"],"Exception");
-		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
-	| _ -> ()
+	ctx.con.type_parameters <- old_tparams
 
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
