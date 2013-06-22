@@ -12,7 +12,7 @@ type context = {
 	mutable anon_types : (string,string * tclass_field list) PMap.t;
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path * texpr) list;
-	mutable ttype : t;
+	mutable ttype : t -> t;
 }
 
 type function_context = {
@@ -199,11 +199,11 @@ let rec s_type ctx t =
 	| TInst({cl_path = [],"String"},[]) -> "char*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
-		let ptr = if is_value_type ctx t then "*" else "" in
+		let ptr = if is_value_type ctx t then "" else "*" in
 		add_class_dependency ctx c;
 		(path_to_name c.cl_path) ^ ptr
 	| TEnum(en,_) ->
-		let ptr = if is_value_type ctx t then "*" else "" in
+		let ptr = if is_value_type ctx t then "" else "*" in
 		if not en.e_extern then add_dependency ctx en.e_path;
 		(path_to_name en.e_path) ^ ptr
 	| TAnon a ->
@@ -249,15 +249,17 @@ let rec handle_special_call ctx e = match e.eexpr with
 	| TCall({eexpr = TLocal({v_name = "__sizeof__"})},[e1]) ->
 		(* get TypeReference's type *)
 		let t = match follow e1.etype with
-			| TInst({cl_path = ["c"],"TypeReference"},[t]) -> t
+			| TInst({cl_path = [],"typeref"},[t]) -> t
 			| _ -> ctx.con.com.error "This expression cannot be generated. Expected a TypeReference type" e1.epos; assert false
 		in
 		(match follow t with
 		| TInst({cl_kind = KTypeParameter _},_) ->
-			(* hard one *)
-			assert false
+			(* indirection *)
+			spr ctx "(";
+			generate_expr ctx e1;
+			spr ctx ")->size"
 		| _ ->
-			print ctx "typeof(%s)" (s_type ctx t));
+			print ctx "sizeof(%s)" (s_type ctx t));
 		true
 	(* pointer functions *)
 	| TCall({eexpr = TField(ethis,FInstance({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("__get"|"__set") } as cf)))}, p) ->
@@ -623,7 +625,7 @@ let change_parameter_function ctx cf vars =
 		| _ :: _, _ -> (* vars *)
 			List.map (fun (f,_) -> alloc_var f.cf_name f.cf_type, None) vars, List.map snd vars
 		| _, _ :: _ ->
-			List.map (fun (_,t) -> alloc_var (path_to_name (t_path t) ^ "_tp") t,None) cf.cf_params, List.map snd cf.cf_params
+			List.map (fun (_,t) -> alloc_var (path_to_name (t_path t) ^ "_tp") (ctx.con.ttype t),None) cf.cf_params, List.map snd cf.cf_params
 		| _ -> [],[]
 	in
 	match tf_args, cf.cf_type, cf.cf_expr with
@@ -653,7 +655,7 @@ let cls_parameter_vars ctx c = match c.cl_types with
 	| [] -> []
 	| types ->
 		let vars = List.map (fun (s,t) ->
-			mk_class_field (path_to_name (t_path t) ^ "_tp") t false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) []
+			mk_class_field (path_to_name (t_path t) ^ "_tp") (ctx.con.ttype t) false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) []
 		) types in
 		c.cl_ordered_fields <- vars @ c.cl_ordered_fields;
 		List.iter (fun f -> c.cl_fields <- PMap.add f.cf_name f c.cl_fields ) vars;
@@ -949,6 +951,7 @@ with | Not_found ->
 	com.error ("The type " ^ Ast.s_type_path path ^ " is required and was not found") Ast.null_pos; assert false
 
 let generate com =
+	let ttype = get_type com ([],"typeref") in
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
@@ -960,7 +963,9 @@ let generate com =
 		anon_types = PMap.empty;
 		type_ids = PMap.empty;
 		type_parameters = [];
-		ttype = get_type com (["c"],"TypeReference");
+		ttype = (fun t -> match follow ttype with
+			| TInst(c,[_]) -> TInst(c,[t])
+			| _ -> assert false);
 	} in
 	List.iter (generate_type con) com.types;
 	generate_hxc_files con
