@@ -21,6 +21,7 @@
  */
 
 import c.hxc.Exception;
+import c.TypeReference;
 
 @:coreApi class Std {
 	public static function is( v : Dynamic, t : Dynamic ) : Bool {
