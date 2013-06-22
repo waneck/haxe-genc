@@ -295,7 +295,7 @@ let rec handle_special_call ctx e = match e.eexpr with
 			(* indirection *)
 			spr ctx "(";
 			generate_expr ctx e1;
-			spr ctx ")->size"
+			spr ctx ")->refSize"
 		| _ ->
 			print ctx "sizeof(%s)" (s_type ctx t));
 		true
@@ -797,6 +797,25 @@ let generate_class ctx c =
 		) methods;
 	end;
 
+	(* generate static vars *)
+	if not (DynArray.empty svars) then begin
+		spr ctx "// static vars\n";
+		DynArray.iter (fun cf ->
+      let is_constant = match cf.cf_kind with
+        | Var { v_read = AccInline }
+        | Var { v_write = AccNever } -> true
+        | _ -> false
+      in
+      print ctx "%s%s %s" (if is_constant then "const " else "") (s_type ctx cf.cf_type) (full_field_name c cf);
+			match cf.cf_expr with
+			| None -> newline ctx
+			| Some e ->
+				spr ctx " = ";
+				generate_expr ctx e;
+				newline ctx
+		) svars;
+	end;
+
 	ctx.buf <- ctx.buf_h;
 
 	(* generate member struct *)
@@ -820,14 +839,14 @@ let generate_class ctx c =
 	if not (DynArray.empty svars) then begin
 		spr ctx "// static vars\n";
 		DynArray.iter (fun cf ->
-			print ctx "%s %s" (s_type ctx cf.cf_type) (full_field_name c cf);
-			match cf.cf_expr with
-			| None -> newline ctx
-			| Some e ->
-				spr ctx " = ";
-				generate_expr ctx e;
-				newline ctx
-		) svars;
+      let is_constant = match cf.cf_kind with
+        | Var { v_read = AccInline }
+        | Var { v_write = AccNever } -> true
+        | _ -> false
+      in
+      print ctx "extern %s%s %s" (if is_constant then "const " else "") (s_type ctx cf.cf_type) (full_field_name c cf);
+      newline ctx
+    ) svars
 	end;
 
 	(* generate forward declarations of functions *)
