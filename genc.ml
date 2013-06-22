@@ -203,7 +203,9 @@ let rec s_type ctx t =
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
 	| TAbstract({a_path = [],"Void"},[]) -> "void"
-	| TAbstract({a_path = ["c"],"Pointer"},[t]) -> s_type ctx t ^ "*"
+	| TAbstract({a_path = ["c"],"Pointer"},[t]) -> (match follow t with
+		| TInst({cl_kind = KTypeParameter _},_) -> "void*"
+		| _ -> s_type ctx t ^ "*")
 	| TInst(({cl_path = [],"typeref"} as c),_) ->
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
