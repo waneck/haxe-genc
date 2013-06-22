@@ -114,6 +114,8 @@ let close_type_context ctx =
 	(* TODO: get rid of these *)
 	output_string ch_h "#include <glib.h>\n";
 	output_string ch_h "#include <setjmp.h>\n";
+	output_string ch_h "#include <stdio.h>\n";
+	output_string ch_h "#include <string.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path b ->
 		let name = path_to_name path in
