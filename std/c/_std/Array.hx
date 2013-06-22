@@ -91,21 +91,22 @@ import c.Lib;
 
 	public function join( sep : String ) : String
 	{
-		var buf = new StringBuf();
-		var i = -1;
+		// var buf = new StringBuf();
+		// var i = -1;
 
-		var first = true;
-		var length = length;
-		while (++i < length)
-		{
-			if (first)
-				first = false;
-			else
-				buf.add(sep);
-			buf.add(__a[i]);
-		}
+		// var first = true;
+		// var length = length;
+		// while (++i < length)
+		// {
+		// 	if (first)
+		// 		first = false;
+		// 	else
+		// 		buf.add(sep);
+		// 	buf.add(__a.array[i]);
+		// }
 
-		return buf.toString();
+		// return buf.toString();
+		return null; //TODO
 	}
 
 	public function pop() : Null<T>
@@ -114,8 +115,8 @@ import c.Lib;
 		var length = length;
 		if (length > 0)
 		{
-			var val = __a[--length];
-			__a[length] = null;
+			var val = __a.array[--length];
+			__a.array[length] = null;
 			this.length = length;
 
 			return val;
@@ -136,7 +137,7 @@ import c.Lib;
 			this.__a = newarr;
 		}
 
-		__a[length] = x;
+		__a.array[length] = x;
 		return ++this.length;
 	}
 
@@ -149,9 +150,9 @@ import c.Lib;
 		l -= 1;
 		while ( i < half )
 		{
-			var tmp = a[i];
-			a[i] = a[l-i];
-			a[l-i] = tmp;
+			var tmp = a.array[i];
+			a.array[i] = a.array[l-i];
+			a.array[l-i] = tmp;
 			i += 1;
 		}
 	}
@@ -163,10 +164,10 @@ import c.Lib;
 			return null;
 
 		var a = this.__a;
-		var x = a[0];
+		var x = a.array[0];
 		l -= 1;
 		memcpy(a, 1, a, 0, length-1);
-		a[l] = null;
+		a.array[l] = null;
 		this.length = l;
 
 		return x;
@@ -247,7 +248,7 @@ import c.Lib;
 		memcpy(a, end, a, pos, this.length - end);
 		this.length -= len;
 		while( --len >= 0 )
-			a[this.length + len] = null;
+			a.array[this.length + len] = null;
 		return ret;
 	}
 
@@ -271,7 +272,7 @@ import c.Lib;
 		memcpy(a, end, a, pos, this.length - end);
 		this.length -= len;
 		while( --len >= 0 )
-			a[this.length + len] = null;
+			a.array[this.length + len] = null;
 	}
 
 	public function toString() : String
@@ -287,7 +288,7 @@ import c.Lib;
 		// 		first = false;
 		// 	else
 		// 		ret.add(",");
-		// 	ret.add(a[i]);
+		// 	ret.add(a.array[i]);
 		// }
 
 		// ret.add("]");
@@ -309,7 +310,7 @@ import c.Lib;
 			memcpy(__a, 0, __a, 1, length);
 		}
 
-		this.__a[0] = x;
+		this.__a.array[0] = x;
 		++this.length;
 	}
 
@@ -333,7 +334,7 @@ import c.Lib;
 			var newLen = (length << 1) + 1;
 			var newarr = new FixedArray(newLen);
 			memcpy(__a, 0, newarr, 0, pos);
-			newarr[pos] = x;
+			newarr.array[pos] = x;
 			memcpy(__a, pos, newarr, pos + 1, l - pos);
 
 			this.__a = newarr;
@@ -342,7 +343,7 @@ import c.Lib;
 			var __a = __a;
 			memcpy(__a, pos, __a, pos + 1, l - pos);
 			memcpy(__a, 0, __a, 0, pos);
-			__a[pos] = x;
+			__a.array[pos] = x;
 			++this.length;
 		}
 	}
@@ -354,10 +355,10 @@ import c.Lib;
 		var length = length;
 		while (++i < length)
 		{
-			if (__a[i] == x)
+			if (__a.array[i] == x)
 			{
 				memcpy(__a, i + 1, __a, i, length - i - 1);
-				__a[--this.length] = null;
+				__a.array[--this.length] = null;
 
 				return true;
 			}
@@ -384,7 +385,7 @@ import c.Lib;
 		// return
 		// {
 		// 	hasNext:function() return i < len,
-		// 	next:function() return __a[i++]
+		// 	next:function() return __a.array[i++]
 		// };
 	}
 
@@ -405,16 +406,16 @@ import c.Lib;
 		// return ret;
 	}
 
-	private function __get(idx:Int):T
+	@:keep private function __get(idx:Int):T
 	{
 		var __a = __a;
 		if (idx >= __a.length || idx < 0)
 			return null;
 
-		return __a[idx];
+		return __a.array[idx];
 	}
 
-	private function __set(idx:Int, v:T):T
+	@:keep private function __set(idx:Int, v:T):T
 	{
 		var __a = __a;
 		if (idx >= __a.length)
@@ -431,16 +432,16 @@ import c.Lib;
 		if (idx >= length)
 			this.length = idx + 1;
 
-		return __a[idx] = v;
+		return __a.array[idx] = v;
 	}
 
 	private inline function __unsafe_get(idx:Int):T
 	{
-		return __a[idx];
+		return __a.array[idx];
 	}
 
 	private inline function __unsafe_set(idx:Int, val:T):T
 	{
-		return __a[idx] = val;
+		return __a.array[idx] = val;
 	}
 }

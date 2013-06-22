@@ -36,12 +36,12 @@ import c.Lib;
 		this.array = array;
 	}
 
-	private function __get(idx:Int)
+	@:keep private function __get(idx:Int)
 	{
 		return array[idx];
 	}
 
-	private function __set(idx:Int, v:T)
+	@:keep private function __set(idx:Int, v:T)
 	{
 		return array[idx] = v;
 	}

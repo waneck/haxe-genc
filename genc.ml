@@ -306,7 +306,7 @@ let rec handle_special_call ctx e = match e.eexpr with
 			print ctx "sizeof(%s)" (s_type ctx t));
 		true
 	(* pointer functions *)
-	| TCall({eexpr = TField(ethis,FInstance({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("__get"|"__set") } as cf)))}, p) ->
+	| TCall({eexpr = TField(_,FStatic({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("__get"|"__set") } as cf)))}, ethis :: p) ->
 		spr ctx "(";
 		generate_expr ctx ethis;
 		spr ctx "[";
@@ -371,6 +371,14 @@ and handle_array ctx e = match e.eexpr with
 		print ctx " %s " (s_binop op);
     generate_expr ctx v);
     true
+  | TArrayDecl [] ->
+    let c,p = match follow e.etype with
+      | TInst(c,[p]) ->
+        c,p
+      | _ -> assert false
+    in
+    generate_expr ctx { e with eexpr = TNew(c,[p],[]) };
+    true
   | TArrayDecl el ->
     (* Array.ofNative(FixedArray.ofPointerCopy(len,{})) *)
     let t, param = match follow e.etype with
@@ -380,7 +388,7 @@ and handle_array ctx e = match e.eexpr with
     in
     spr ctx "Array_ofPointerCopy(";
     generate_expr ctx param;
-    print ctx ", %d, (void *) (%s *) { " (List.length el) (s_type ctx t);
+    print ctx ", %d, (void *) (%s[]) { " (List.length el) (s_type ctx t);
     concat ctx "," (generate_expr ctx) el;
     spr ctx " })";
     true
@@ -525,14 +533,6 @@ and generate_expr ctx e = match e.eexpr with
 			end
 		in
 		concat ctx ";" f vl
-	| TArray(e1,e2) ->
-		spr ctx "g_array_index(";
-		generate_expr ctx e1;
-		spr ctx ",";
-		spr ctx (s_type ctx e.etype);
-		spr ctx ",";
-		generate_expr ctx e2;
-		spr ctx ")";
 	| TWhile(e1,e2,NormalWhile) ->
 		spr ctx "while";
 		generate_expr ctx e1;
@@ -713,32 +713,7 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 	| TFunction _ ->
 		print_endline ("Not implemented yet: " ^ (expr_debug ctx e))
-
-let mk_array_decl ctx el t p =
-	let ts = match follow t with
-		| TInst(_,[t]) -> s_type ctx t
-		| _ -> assert false
-	in
-	let name = "_hx_func_" ^ (string_of_int ctx.con.num_temp_funcs) in
-	let arity = List.length el in
-	print ctx "GArray* %s(%s) {" name (String.concat "," (ExtList.List.mapi (fun i e -> Printf.sprintf "%s v%i" (s_type ctx e.etype) i) el));
-	ctx.con.num_temp_funcs <- ctx.con.num_temp_funcs + 1;
-	let bl = open_block ctx in
-	newline ctx;
-	print ctx "GArray* garray = g_array_sized_new(FALSE, FALSE, sizeof(%s), %i)" ts arity;
-	newline ctx;
-	ExtList.List.iteri (fun i e ->
-		print ctx "g_array_append_val(garray, v%i)" i;
-		newline ctx;
-	) el;
-	spr ctx "return garray";
-	bl();
-	newline ctx;
-	spr ctx "}";
-	newline ctx;
-	let v = alloc_var name t_dynamic in
-	let ev = mk (TLocal v) v.v_type p in
-	mk (TCall(ev,el)) t p
+  | TArray _ -> assert false
 
 let mk_function_context ctx cf =
 	let locals = ref [] in
@@ -754,8 +729,6 @@ let mk_function_context ctx cf =
 			| [e] -> e
 			| _ -> mk (TBlock el) ctx.con.com.basic.tvoid e.epos
 			end
-		| TArrayDecl el ->
-			mk_array_decl ctx el e.etype e.epos
 		| TTry (e1,cl) ->
 			ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 			add_dependency ctx (["c";"hxc"],"Exception");
