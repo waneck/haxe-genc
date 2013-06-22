@@ -290,6 +290,10 @@ let rec handle_special_call ctx e = match e.eexpr with
 		spr ctx ")";
 		true
 	(* pass by reference call *)
+	| TCall({eexpr = TLocal({v_name = "__refpass"})},[e1]) ->
+		spr ctx "&";
+		generate_expr ctx e1;
+		true
 	| TCall({eexpr = TLocal({v_name = "__refpass"})},[e1; e2]) ->
 		spr ctx "(";
 		generate_expr ctx e1;
@@ -751,7 +755,15 @@ let mk_function_context ctx cf =
 			let args, ret = get_fun cf.cf_type in
 			let el = fuzzy_map2 (fun (_,_,t) e -> match e.eexpr with
 				| _ when not (is_type_param ctx t) -> loop e
-				| TLocal _ -> loop e (* locals don't need to be changed *)
+				| TLocal _ when is_type_param ctx e.etype ->
+          loop e
+        | TLocal _ ->
+          { e with
+            eexpr = TCall(
+              { eexpr = TLocal(alloc_var "__refpass" t_dynamic); etype = t_dynamic; epos = e.epos },
+              [loop e] (* locals don't need to be changed *)
+            );
+          }
 				| _ ->
 					let v = add_param e.etype in
 					{
