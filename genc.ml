@@ -413,7 +413,7 @@ let rec generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx e1;
 		spr ctx ")";
-	| TArrayDecl _ | TTry _ ->
+	| TArrayDecl _ | TTry _ | TFor _ ->
 		(* handled in function context pass *)
 		assert false
 	| TMeta(_,e) ->
@@ -598,6 +598,14 @@ let mk_function_context ctx cf =
 				locals := v :: !locals
 			) dt.dt_var_init;
 			Type.map_expr loop e
+		| TFor(v,e1,e2) ->
+			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
+			let enext = mk (TField(e1,quick_field e1.etype "next")) v.v_type e1.epos in
+			let ebody = Codegen.concat enext e2 in
+			mk (TBlock [
+				mk (TVars [v,None]) ctx.con.com.basic.tvoid e1.epos;
+				mk (TWhile(ehasnext,ebody,NormalWhile)) ctx.con.com.basic.tvoid e1.epos;
+			]) ctx.con.com.basic.tvoid e.epos
 		| _ -> Type.map_expr loop e
 	in
 	let e = match cf.cf_expr with
