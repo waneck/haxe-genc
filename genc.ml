@@ -342,6 +342,51 @@ let rec handle_special_call ctx e = match e.eexpr with
 		true
 	| _ -> false
 
+(** this is here to separate array implementation from all code, so it can be easily swapped *)
+and handle_array ctx e = match e.eexpr with
+  | TArray(e1, e2) -> (try
+    match follow e1.etype with
+    | TInst(c,p) ->
+      let f = PMap.find "__get" c.cl_fields in
+      generate_expr ctx { e with eexpr = TCall({ e1 with eexpr = TField(e1,FInstance(c,f)); etype = apply_params c.cl_types p f.cf_type}, [e2]) }
+    | _ -> raise Not_found
+  with | Not_found ->
+    generate_expr ctx e1;
+    spr ctx "[";
+    generate_expr ctx e2;
+    spr ctx "]");
+    true
+  | TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, v) -> (try
+    match follow e1.etype with
+    | TInst(c,p) ->
+      let f = PMap.find "__set" c.cl_fields in
+      if op <> Ast.OpAssign then assert false; (* FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
+      generate_expr ctx { e with eexpr = TCall({ e1 with eexpr = TField(e1,FInstance(c,f)); etype = apply_params c.cl_types p f.cf_type}, [e2;v]) }
+    | _ -> raise Not_found
+  with | Not_found ->
+    generate_expr ctx e1;
+    spr ctx "[";
+    generate_expr ctx e2;
+    spr ctx "]";
+		print ctx " %s " (s_binop op);
+    generate_expr ctx v);
+    true
+  | TArrayDecl el ->
+    (* Array.ofNative(FixedArray.ofPointerCopy(len,{})) *)
+    let t, param = match follow e.etype with
+      | TInst({ cl_path = [],"Array"},[p]) ->
+        p, mk_type_param ctx e.epos p
+      | _ -> assert false
+    in
+    spr ctx "Array_ofPointerCopy(";
+    generate_expr ctx param;
+    print ctx ", %d, (void *) (%s *) { " (List.length el) (s_type ctx t);
+    concat ctx "," (generate_expr ctx) el;
+    spr ctx " })";
+    true
+  | _ -> false
+
+
 and mk_type_param ctx pos t =
 	let t = ctx.con.ttype t in
 	let c,p = match follow t with
@@ -361,6 +406,7 @@ and generate_tparam_call ctx e ef e1 c cf static el =
 	spr ctx ")"
 
 and generate_expr ctx e = match e.eexpr with
+  | TArray _ | TBinop _ | TArrayDecl _ when handle_array ctx e -> ()
 	| TBlock([]) ->
 		spr ctx "{ }"
 	| TBlock(el) ->

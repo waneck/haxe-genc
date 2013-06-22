@@ -19,6 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+import c.Pointer;
+import c.TypeReference;
 import c.FixedArray;
 import c.Lib;
 
@@ -27,16 +29,27 @@ import c.Lib;
 	public var length(default,null) : Int;
 	private var __a:FixedArray<T>;
 
-	private static inline function memcpy<T>(src:FixedArray<T>, srcPos:Int, dest:FixedArray<T>, destPos:Int, length:Int):Void
+	@:extern private static inline function memcpy<T>(src:FixedArray<T>, srcPos:Int, dest:FixedArray<T>, destPos:Int, length:Int):Void
 	{
 		Lib.memcpy(src.array, srcPos, dest.array, destPos, length);
 	}
 
-	private static function ofNative<X>(native:FixedArray<X>):Array<X>
+	@:keep private static function ofNative<X>(native:FixedArray<X>):Array<X>
 	{
 		var ret = new Array();
 		ret.__a = native;
 		ret.length = native.length;
+		return ret;
+	}
+
+	@:keep private static function ofPointerCopy<T>(len:Int, array:Pointer<T>):Array<T>
+	{
+		var ret:Pointer<T> = cast Lib.alloc(len * Lib.sizeof(new TypeReference<T>()));
+		Lib.memcpy(array, 0, ret, 0, len);
+		var f = new FixedArray(len, ret);
+		var ret = new Array();
+		ret.__a = f;
+		ret.length = len;
 		return ret;
 	}
 
