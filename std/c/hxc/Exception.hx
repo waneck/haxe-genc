@@ -2,6 +2,7 @@ package c.hxc;
 
 import c.Pointer;
 
+@:include("<setjmp.h>")
 @:native("jmp_buf")
 extern private class JmpBuf {
 	public function new():Void;
