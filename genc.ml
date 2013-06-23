@@ -377,31 +377,18 @@ and generate_tparam_call ctx e ef e1 c cf static el =
 	spr ctx ")"
 
 and generate_expr ctx e = match e.eexpr with
-	| TArray(e1, e2) -> (try
-			match follow e1.etype with
-			| TInst(c,p) ->
-				let f = PMap.find "__get" c.cl_fields in
-				generate_expr ctx { e with eexpr = TCall({ e1 with eexpr = TField(e1,FInstance(c,f)); etype = apply_params c.cl_types p f.cf_type}, [e2]) }
-			| _ -> raise Not_found
-		with | Not_found ->
+	| TArray(e1, e2) ->
 			generate_expr ctx e1;
 			spr ctx "[";
 			generate_expr ctx e2;
-			spr ctx "]");
-	| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, v) -> (try
-			match follow e1.etype with
-			| TInst(c,p) ->
-			let f = PMap.find "__set" c.cl_fields in
-			if op <> Ast.OpAssign then assert false; (* FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
-			generate_expr ctx { e with eexpr = TCall({ e1 with eexpr = TField(e1,FInstance(c,f)); etype = apply_params c.cl_types p f.cf_type}, [e2;v]) }
-			| _ -> raise Not_found
-		with | Not_found ->
+			spr ctx "]"
+	| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, v) ->
 			generate_expr ctx e1;
 			spr ctx "[";
 			generate_expr ctx e2;
 			spr ctx "]";
 			print ctx " %s " (s_binop op);
-			generate_expr ctx v);
+			generate_expr ctx v
 	| TMeta( (Meta.Comma,_,_), { eexpr = TBlock(el) } ) when el <> [] ->
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
@@ -425,6 +412,9 @@ and generate_expr ctx e = match e.eexpr with
 		print ctx "%ld" i
 	| TConst(TFloat s) ->
 		print ctx "%s" s
+	| TConst TNull when is_type_param ctx e.etype ->
+		generate_expr ctx (mk_type_param ctx e.epos e.etype);
+		spr ctx "->nullval"
 	| TConst(TNull) ->
 		spr ctx "NULL"
 	| TConst(TSuper) ->
@@ -797,6 +787,30 @@ let mk_deref ctx p e =
 		epos = p;
 	}
 
+let mk_call ctx p name args =
+	{
+		eexpr = TCall(
+			{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
+			{ eexpr = TConst(TString name); etype = t_dynamic; epos = p } :: args
+		);
+		etype = t_dynamic;
+		epos = p;
+	}
+
+let mk_sizeof ctx p e =
+	{
+		eexpr = TCall(
+			{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
+			[e]
+		);
+		etype = ctx.con.com.basic.tint;
+		epos = p;
+	}
+
+let is_field_type_param ctx e = is_type_param ctx e.etype || match e.eexpr with
+	| TField(_, (FInstance(_,cf) | FStatic(_,cf))) when is_type_param ctx cf.cf_type -> true
+	| _ -> false
+
 let mk_function_context ctx cf =
 	let locals = ref [] in
 
@@ -892,8 +906,50 @@ let mk_function_context ctx cf =
 		(* - param -> param assign: always copy *)
 		(* - param -> concrete cast/field use: dereference *)
 		(* - concrete -> param cast/field get/set: copy *)
+		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), e1, e2 ) when is_field_type_param ctx e1 || is_field_type_param ctx e2 ->
+			if is_field_type_param ctx e1 && is_field_type_param ctx e2 then begin
+				let old_params = !cur_params in
+				if op <> Ast.OpAssign then assert false; (* FIXME: AssignOp should become two operations; should be very rare though *)
+				let local, wrap = match e1.eexpr with
+					| TLocal _ -> e1, (fun e -> e)
+					| _ ->
+						let v = add_param e1.etype in
+						mk_local v e1.epos, (fun e -> { e with eexpr = TBinop(Ast.OpAssign, mk_local v e.epos, e) })
+				in
+				let ret = mk_comma_block ctx e.epos [
+					wrap (mk_call ctx e.epos "memcpy" [ loop e1; loop e2; mk_sizeof ctx e.epos (mk_type_param ctx e.epos e1.etype) ]);
+					local
+				] in
+				cur_params := old_params;
+				ret
+			end else if is_field_type_param ctx e1 then
+				{ e with eexpr = TBinop(op, mk_deref ctx e.epos (mk_cast (ctx.con.tpointer e2.etype) (loop e1)), loop e2) }
+			else
+				{ e with eexpr = TBinop(op, loop e1, mk_deref ctx e.epos (mk_cast (ctx.con.tpointer e1.etype) (loop e2))) }
 		(* - pointer array access -> pointer + typeref's size * index *)
-		(* - null param -> typeref's null *)
+		| TArray(e1, idx) -> (match follow e1.etype with
+			| TAbstract({a_path=["c"], "Pointer"},[t])
+			| TInst({cl_path=["c"], "_PointerR"},[t]) when is_type_param ctx t ->
+				{ e with
+					eexpr = TBinop(
+						Ast.OpAdd, loop e1,
+						{ idx with eexpr = TBinop(Ast.OpMult, loop idx, mk_sizeof ctx e.epos (mk_type_param ctx e.epos t)) }
+					);
+				}
+			| TInst(c,p) -> (try
+				let f = PMap.find "__get" c.cl_fields in
+				loop { e with eexpr = TCall({ e1 with eexpr = TField(e1,FInstance(c,f)); etype = apply_params c.cl_types p f.cf_type}, [idx]) }
+			with | Not_found -> Type.map_expr loop e)
+			| _ -> Type.map_expr loop e)
+		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, v) -> (try
+				match follow e1.etype with
+				| TInst(c,p) ->
+				let f = PMap.find "__set" c.cl_fields in
+				if op <> Ast.OpAssign then assert false; (* FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
+				loop { e with eexpr = TCall({ e1 with eexpr = TField(e1,FInstance(c,f)); etype = apply_params c.cl_types p f.cf_type}, [e2;v]) }
+				| _ -> raise Not_found
+			with | Not_found ->
+				Type.map_expr loop e)
 
 		(** end of type parameter handling on 2nd pass **)
 		| TVars vl ->
