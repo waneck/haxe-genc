@@ -40,6 +40,7 @@ module Meta = struct
 		| BuildXml
 		| Class
 		| ClassCode
+		| Comma
 		| Commutative
 		| CompilerGenerated
 		| CoreApi

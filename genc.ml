@@ -294,18 +294,9 @@ let rec handle_special_call ctx e = match e.eexpr with
 		spr ctx ")";
 		true
 	(* pass by reference call *)
-	| TCall({eexpr = TLocal({v_name = "__refpass"})},[e1]) ->
+	| TCall({eexpr = TLocal({v_name = "__adressof"})},[e1]) ->
 		spr ctx "&";
 		generate_expr ctx e1;
-		true
-	| TCall({eexpr = TLocal({v_name = "__refpass"})},[e1; e2]) ->
-		spr ctx "(";
-		generate_expr ctx e1;
-		spr ctx " = ";
-		generate_expr ctx e2;
-		spr ctx ", &";
-		generate_expr ctx e1;
-		spr ctx ")";
 		true
 	(* sizeof *)
 	| TCall({eexpr = TLocal({v_name = "__sizeof__"})},[e1]) ->
@@ -410,6 +401,10 @@ and generate_expr ctx e = match e.eexpr with
 			spr ctx "]";
 			print ctx " %s " (s_binop op);
 			generate_expr ctx v);
+	| TMeta( (Meta.Comma,_,_), { eexpr = TBlock(el) } ) when el <> [] ->
+		spr ctx "(";
+		concat ctx "," (generate_expr ctx) el;
+		spr ctx ")"
 	| TBlock([]) ->
 		spr ctx "{ }"
 	| TBlock(el) ->
@@ -750,15 +745,41 @@ let function_has_type_parameter ctx t = match follow t with
 let mk_local v p =
 	{ eexpr = TLocal v; etype = v.v_type; epos = p }
 
-let mk_ref ctx p el =
+let mk_ref ctx p e =
 	{
 		eexpr = TCall(
-			{ eexpr = TLocal(alloc_var "__refpass" t_dynamic); etype = t_dynamic; epos = p },
-			el
+			{ eexpr = TLocal(alloc_var "__adressof" t_dynamic); etype = t_dynamic; epos = p },
+			[e]
 		);
 		etype = t_dynamic;
 		epos = p;
 	}
+
+let mk_comma_block ctx p el =
+	let t = match List.rev el with
+		| [] -> ctx.con.com.basic.tvoid
+		| hd :: _ -> hd.etype
+	in
+	{
+		eexpr = TMeta( (Meta.Comma,[],p),
+		{
+			eexpr = TBlock el;
+			etype = t;
+			epos = p;
+		});
+		etype = t;
+		epos = p;
+	}
+
+let mk_assign_ref ctx p local value =
+	mk_comma_block ctx p [
+		{
+			eexpr = TBinop(Ast.OpAssign, local, value);
+			etype = value.etype;
+			epos = p;
+		};
+		mk_ref ctx p local
+	]
 
 let mk_function_context ctx cf =
 	let locals = ref [] in
@@ -788,35 +809,41 @@ let mk_function_context ctx cf =
 
 	let rec loop e = match e.eexpr with
     (** collect the temporary stack variables that need to be created so their address can be passed around *)
-		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el) when function_has_type_parameter ctx ef.etype ->
+		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
+		when function_has_type_parameter ctx cf.cf_type ->
+			print_endline cf.cf_name;
 			let old_params = !cur_params in
 			let ef = loop ef in
 			let args, ret = get_fun cf.cf_type in
+			let args = List.rev args in
 			(* if return type is a type param, add new element to call params *)
-			let el = if is_type_param ctx ret then begin
-				let _, applied_ret = get_fun ef.etype in
+			let args, el_last = if is_type_param ctx ret then begin
+				let _, applied_ret = get_fun e1.etype in
 				let v = add_param applied_ret in
 				if is_type_param ctx applied_ret then
-					el @ [mk_local v e.epos] (* already a reference var *)
+					List.tl args, [mk_local v e.epos] (* already a reference var *)
 				else
-					el @ [mk_ref ctx e.epos [mk_local v e.epos]]
+					List.tl args, [mk_ref ctx e.epos (mk_local v e.epos)]
 			end else
-				el
+				args, []
 			in
 
 			let el = fuzzy_map2 (fun (_,_,t) e -> match e.eexpr with
 				| _ when not (is_type_param ctx t) -> loop e
 				| TLocal _ when is_type_param ctx e.etype -> (* type params are already encoded as pointer-to-val *)
+					print_endline "is type";
           loop e
         | TLocal _ ->
-					mk_ref ctx e.epos [loop e]
+					print_endline "making ref";
+					mk_ref ctx e.epos (loop e)
 				| _ ->
 					let v = add_param e.etype in
-					mk_ref ctx e.epos [mk_local v e.epos; loop e]
-			) (List.rev args) (List.rev el) []
+					print_endline ("comma block " ^ v.v_name);
+					mk_assign_ref ctx e.epos (mk_local v e.epos) (loop e)
+			) args (List.rev el) []
 			in
 			cur_params := old_params;
-			{ e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el) }
+			{ e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) }
 		(* TODO: check also for when a TField with type parameter is read / set; its contents must be copied *)
 		| TVars vl ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
