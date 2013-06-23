@@ -606,9 +606,10 @@ and generate_expr ctx e = match e.eexpr with
 		assert false
 	| TMeta(_,e) ->
 		generate_expr ctx e
-	| TCast(e,_) ->
-		(* TODO: make this do something *)
-		generate_expr ctx e
+	| TCast(e1,_) ->
+		print ctx "((%s) " (s_type ctx e.etype);
+		generate_expr ctx e1;
+		spr ctx ")"
 	| TEnumParameter (e1,ef,i) ->
 		generate_expr ctx e1;
 		begin match follow e1.etype with
