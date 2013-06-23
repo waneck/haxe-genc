@@ -220,42 +220,53 @@ let mk_type_context con path =
 	}
 
 let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
-let path_to_header_path (pack,name) = match pack with [] -> name ^ ".h" | _ -> String.concat "/" pack ^ "/" ^ name ^ ".h"
-let path_to_class_file_path (pack,name) = match pack with [] -> name ^ ".c" | _ -> String.concat "/" pack ^ "/" ^ name ^ ".c"
+let path_to_file_path (pack,name) = match pack with [] -> name | _ -> String.concat "/" pack ^ "/" ^ name
 
 let close_type_context ctx =
 	ctx.con.generated_types <- ctx :: ctx.con.generated_types;
+	let buf = Buffer.create (Buffer.length ctx.buf_h) in
+	let spr = Buffer.add_string buf in
 	let n = "_h" ^ path_to_name ctx.type_path in
-	let ch_h = open_out_bin (ctx.file_path_no_ext ^ ".h") in
-	print_endline ("Writing to " ^ (ctx.file_path_no_ext ^ ".h"));
-	output_string ch_h ("#ifndef " ^ n ^ "\n");
-	output_string ch_h ("#define " ^ n ^ "\n");
-	(* TODO: get rid of these *)
-	output_string ch_h "#include <setjmp.h>\n";
-	output_string ch_h "#include <stdio.h>\n";
-	output_string ch_h "#include <stdlib.h>\n";
-	output_string ch_h "#include <string.h>\n";
+	spr (Printf.sprintf "#ifndef %s\n" n);
+	spr (Printf.sprintf "#define %s\n" n);
+	spr "#include <setjmp.h>\n";
+	spr "#include <stdio.h>\n";
+	spr "#include <stdlib.h>\n";
+	spr "#include <string.h>\n";
+
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path b ->
 		let name = path_to_name path in
 		if b then begin
-			if path = (["hxc"],"AnonTypes") || path = (["c";"hxc"],"Exception") then output_string ch_h ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
-			else output_string ch_h (Printf.sprintf "typedef struct %s %s;\n"  name name)
-		end else output_string ch_h (Printf.sprintf "#include <%s>\n" (path_to_header_path path))
+			if path = (["hxc"],"AnonTypes") || path = (["c";"hxc"],"Exception") then spr (Printf.sprintf "#include \"%s/%s.h\"\n" pabs (path_to_file_path path))
+			else spr (Printf.sprintf "typedef struct %s %s;\n" name name);
+		end else spr (Printf.sprintf "#include <%s.h>\n" (path_to_file_path path))
 	) ctx.dependencies;
-	output_string ch_h (Buffer.contents ctx.buf_h);
-	output_string ch_h "\n#endif";
-	close_out ch_h;
+	Buffer.add_buffer buf ctx.buf_h;
+	spr "\n#endif";
+
+	let write_if_changed filepath content =
+		try
+			let cur = Std.input_file ~bin:true filepath in
+			if cur <> content then raise Not_found
+		with Not_found ->
+			let ch_h = open_out_bin filepath in
+			print_endline ("Writing to " ^ filepath);
+			output_string ch_h content;
+			close_out ch_h;
+	in
+
+	write_if_changed (ctx.file_path_no_ext ^ ".h") (Buffer.contents buf);
 
 	let sc = Buffer.contents ctx.buf_c in
 	if String.length sc > 0 then begin
-		let ch_c = open_out_bin (ctx.file_path_no_ext ^ ".c") in
-		output_string ch_c ("#include \"" ^ (snd ctx.type_path) ^ ".h\"\n");
+		let buf = Buffer.create (Buffer.length ctx.buf_c) in
+		Buffer.add_string buf ("#include \"" ^ (snd ctx.type_path) ^ ".h\"\n");
 		PMap.iter (fun path b ->
-			if b then output_string ch_c ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
+			if b then Buffer.add_string buf (Printf.sprintf "#include \"%s/%s.h\"\n" pabs (path_to_file_path path))
 		) ctx.dependencies;
-		output_string ch_c sc;
-		close_out ch_c
+		Buffer.add_string buf sc;
+		write_if_changed (ctx.file_path_no_ext ^ ".c") (Buffer.contents buf);
 	end
 
 let add_dependency ctx path =
@@ -1559,12 +1570,13 @@ let generate_init_file con =
 	close_type_context ctx
 
 let generate_make_file con =
+	let main_name = match con.com.main_class with Some path -> snd path | None -> "main" in
 	let ch = open_out_bin (con.com.file ^ "/MAKEFILE") in
-	let f tctx = path_to_class_file_path tctx.type_path in
-	output_string ch (Printf.sprintf "FILES = %s\n" (String.concat " " (List.map f con.generated_types)));
-	output_string ch "OUT = c\n";
-	output_string ch "build: $(FILES)\n";
-	output_string ch "\t$(CC) -o $(OUT) $(FILES)";
+	let f tctx = path_to_file_path tctx.type_path in
+	output_string ch (Printf.sprintf "CLASSES = %s\n" (String.concat " " (List.map f con.generated_types)));
+	output_string ch ("OUT = " ^ main_name ^ "\n");
+	output_string ch "build: $(CLASSES:=.c)\n";
+	output_string ch "\t$(CC) -o $(OUT) $(CLASSES:=.c)\n";
 	close_out ch
 
 let generate_hxc_files con =
