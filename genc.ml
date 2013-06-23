@@ -913,11 +913,11 @@ let mk_function_context ctx cf =
 				let local, wrap = match e1.eexpr with
 					| TLocal _ -> e1, (fun e -> e)
 					| _ ->
-						let v = add_param e1.etype in
+						let v = add_param t_dynamic in
 						mk_local v e1.epos, (fun e -> { e with eexpr = TBinop(Ast.OpAssign, mk_local v e.epos, e) })
 				in
 				let ret = mk_comma_block ctx e.epos [
-					wrap (mk_call ctx e.epos "memcpy" [ loop e1; loop e2; mk_sizeof ctx e.epos (mk_type_param ctx e.epos e1.etype) ]);
+					(mk_call ctx e.epos "memcpy" [ wrap(loop e1); loop e2; mk_sizeof ctx e.epos (mk_type_param ctx e.epos e1.etype) ]);
 					local
 				] in
 				cur_params := old_params;
@@ -957,7 +957,7 @@ let mk_function_context ctx cf =
 				locals := v :: !locals;
 				match eo with
 				| None -> None
-				| Some e -> Some (mk (TBinop(OpAssign, mk (TLocal v) v.v_type e.epos,loop e)) e.etype e.epos)
+				| Some e -> Some (loop (mk (TBinop(OpAssign, mk (TLocal v) v.v_type e.epos,e)) e.etype e.epos))
 			) vl in
 			begin match el with
 			| [e] -> e
@@ -1044,13 +1044,13 @@ let get_typeref_forward ctx path =
 
 let get_typeref_declaration ctx t =
 	let path = t_path t in
-	let nullval = if is_value_type ctx t then begin
-		print ctx "const %s %s__default = { 0 }; //default" (s_type ctx t) (path_to_name path);
-		newline ctx;
-		Printf.sprintf "&%s__default" (path_to_name path)
-	end else
-		"NULL"
-	in
+	if is_value_type ctx t then
+		print ctx "const %s %s__default = { 0 }; //default" (s_type ctx t) (path_to_name path)
+	else
+		print ctx "const void* %s__default = NULL; //default" (path_to_name path);
+
+	newline ctx;
+	let nullval = Printf.sprintf "&%s__default" (path_to_name path) in
 	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s), %s }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t) nullval
 
 let mk_stack_tp_init ctx t p =
