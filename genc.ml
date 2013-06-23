@@ -904,6 +904,7 @@ let generate_class ctx c =
 		| Method _ -> DynArray.add methods cf
 	) c.cl_ordered_statics;
 
+	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
 		| Some cf ->
@@ -942,6 +943,52 @@ let generate_class ctx c =
 	spr ctx (get_typeref_declaration ctx (TInst(c,List.map snd c.cl_types)));
 	newline ctx;
 
+	let add_init e = match c.cl_init with
+		| None -> c.cl_init <- Some e
+		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
+	in
+
+	(* generate static vars *)
+	if not (DynArray.empty svars) then begin
+		spr ctx "// static vars\n";
+		DynArray.iter (fun cf ->
+			let is_constant = match cf.cf_kind with
+				| Var { v_read = AccInline }
+				| Var { v_write = AccNever } -> true
+				| _ -> false
+			in
+			print ctx "%s%s %s" (if is_constant then "const " else "") (s_type ctx cf.cf_type) (full_field_name c cf);
+			newline ctx;
+			match cf.cf_expr with
+				| None -> ()
+				| Some e ->
+					let e,locals = transform_expr ctx e in
+					let einit = mk (TVars (List.map (fun v -> v,None) locals)) ctx.con.com.basic.tvoid cf.cf_pos in
+					let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
+					let ethis = mk (TTypeExpr (TClassDecl c)) ta cf.cf_pos in
+					let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
+					let eassign = mk (TBinop(OpAssign,efield,e)) efield.etype cf.cf_pos in
+					let e = Codegen.concat einit eassign in
+					cf.cf_expr <- Some e;
+					add_init e;
+		) svars;
+	end;
+
+	(* add init field as function *)
+	begin match c.cl_init with
+		| None -> ()
+		| Some e ->
+			let t = tfun [] ctx.con.com.basic.tvoid in
+			let f = mk_field "_hx_init" t c.cl_pos in
+			let tf = {
+				tf_args = [];
+				tf_type = ctx.con.com.basic.tvoid;
+				tf_expr = block e;
+			} in
+			f.cf_expr <- Some (mk (TFunction tf) t c.cl_pos);
+			DynArray.add methods f
+	end;
+
 	(* generate function implementations *)
 	if not (DynArray.empty methods) then begin
 		DynArray.iter (fun cf ->
@@ -955,33 +1002,13 @@ let generate_class ctx c =
 		) methods;
 	end;
 
-	(* generate static vars *)
-	if not (DynArray.empty svars) then begin
-		spr ctx "// static vars\n";
-		DynArray.iter (fun cf ->
-      let is_constant = match cf.cf_kind with
-        | Var { v_read = AccInline }
-        | Var { v_write = AccNever } -> true
-        | _ -> false
-      in
-      print ctx "%s%s %s" (if is_constant then "const " else "") (s_type ctx cf.cf_type) (full_field_name c cf);
-			match cf.cf_expr with
-			| None -> newline ctx
-			| Some e ->
-				spr ctx " = ";
-				(* TODO: handle locals *)
-				generate_expr ctx (fst (transform_expr ctx e));
-				newline ctx
-		) svars;
-	end;
-
 	(* check if we have the main class *)
 	(match ctx.con.com.main_class with
 	| Some path when path = c.cl_path ->
 		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 		add_dependency ctx (["c";"hxc"],"Exception");
 		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
-  | _ -> ());
+	| _ -> ());
 
 	ctx.buf <- ctx.buf_h;
 
@@ -1017,8 +1044,6 @@ let generate_class ctx c =
       newline ctx
     ) svars
 	end;
-
-	ctx.buf <- ctx.buf_h;
 
 	(* generate forward declarations of functions *)
 	if not (DynArray.empty methods) then begin

@@ -588,7 +588,7 @@ let get_config com =
 			pf_pad_nulls = true;
 			pf_add_final_return = true;
 			pf_overload = false;
-			pf_pattern_matching = true;
+			pf_pattern_matching = false;
 		}
 
 let create v args =
