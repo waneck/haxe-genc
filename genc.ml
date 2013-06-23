@@ -17,6 +17,13 @@ open Type
 
 *)
 
+type function_context = {
+	field : tclass_field;
+	expr : texpr option;
+	mutable local_vars : tvar list;
+	mutable loop_stack : string option list;
+}
+
 type context = {
 	com : Common.context;
 	cvar : tvar;
@@ -28,25 +35,19 @@ type context = {
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path * texpr) list;
 	mutable init_modules : path list;
+	mutable generated_types : type_context list;
 	mutable t_typeref : t -> t;
 	mutable t_pointer : t -> t;
 }
 
-type function_context = {
-	field : tclass_field;
-	expr : texpr option;
-	mutable local_vars : tvar list;
-	mutable loop_stack : string option list;
-}
-
-type type_context = {
+and type_context = {
 	con : context;
 	file_path_no_ext : string;
 	buf_c : Buffer.t;
 	buf_h : Buffer.t;
+	type_path : path;
 	mutable buf : Buffer.t;
 	mutable tabs : string;
-	mutable curpath : path;
 	mutable fctx : function_context;
 	mutable dependencies : (path,bool) PMap.t;
 }
@@ -137,7 +138,7 @@ module Expr = struct
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
 				[
-					{ eexpr = TConst (TString "alloca"); etype = t_dynamic; epos = p };
+					{ eexpr = TConst (TString "malloc"); etype = t_dynamic; epos = p };
 					{
 						eexpr = TCall(
 							{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
@@ -208,7 +209,7 @@ let mk_type_context con path =
 		buf_c = buf_c;
 		buf_h = buf_h;
 		tabs = "";
-		curpath = path;
+		type_path = path;
 		fctx = {
 			local_vars = [];
 			field = null_field;
@@ -220,17 +221,16 @@ let mk_type_context con path =
 
 let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
 let path_to_header_path (pack,name) = match pack with [] -> name ^ ".h" | _ -> String.concat "/" pack ^ "/" ^ name ^ ".h"
+let path_to_class_file_path (pack,name) = match pack with [] -> name ^ ".c" | _ -> String.concat "/" pack ^ "/" ^ name ^ ".c"
 
 let close_type_context ctx =
-	let n = "_h" ^ path_to_name ctx.curpath in
+	ctx.con.generated_types <- ctx :: ctx.con.generated_types;
+	let n = "_h" ^ path_to_name ctx.type_path in
 	let ch_h = open_out_bin (ctx.file_path_no_ext ^ ".h") in
 	print_endline ("Writing to " ^ (ctx.file_path_no_ext ^ ".h"));
 	output_string ch_h ("#ifndef " ^ n ^ "\n");
 	output_string ch_h ("#define " ^ n ^ "\n");
-	output_string ch_h "#define GC_NOT_DLL\n";
-	output_string ch_h "#include \"gc.h\"\n";
 	(* TODO: get rid of these *)
-	output_string ch_h "#include <glib.h>\n";
 	output_string ch_h "#include <setjmp.h>\n";
 	output_string ch_h "#include <stdio.h>\n";
 	output_string ch_h "#include <stdlib.h>\n";
@@ -250,7 +250,7 @@ let close_type_context ctx =
 	let sc = Buffer.contents ctx.buf_c in
 	if String.length sc > 0 then begin
 		let ch_c = open_out_bin (ctx.file_path_no_ext ^ ".c") in
-		output_string ch_c ("#include \"" ^ (snd ctx.curpath) ^ ".h\"\n");
+		output_string ch_c ("#include \"" ^ (snd ctx.type_path) ^ ".h\"\n");
 		PMap.iter (fun path b ->
 			if b then output_string ch_c ("#include \"" ^ pabs ^ "/" ^ (path_to_header_path path) ^ "\"\n")
 		) ctx.dependencies;
@@ -259,7 +259,7 @@ let close_type_context ctx =
 	end
 
 let add_dependency ctx path =
-	if path <> ctx.curpath then ctx.dependencies <- PMap.add path true ctx.dependencies
+	if path <> ctx.type_path then ctx.dependencies <- PMap.add path true ctx.dependencies
 
 let add_class_dependency ctx c =
 	if not c.cl_extern then add_dependency ctx c.cl_path
@@ -556,9 +556,9 @@ and generate_expr ctx e = match e.eexpr with
 		(* TODO: uhm... *)
 		()
 	| TConst(TBool true) ->
-		spr ctx "TRUE"
+		spr ctx "1"
 	| TConst(TBool false) ->
-		spr ctx "FALSE"
+		spr ctx "0"
 	| TConst(TThis) ->
 		spr ctx "this"
 	| TCall(e1,el) ->
@@ -1198,7 +1198,6 @@ let generate_class ctx c =
 	let check_dynamic cf = match cf.cf_kind with
 		| Method MethDynamic ->
 			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
-			print_endline ("Adding " ^ cf2.cf_name);
 			DynArray.add methods cf2;
 			cf.cf_expr <- None;
 			cf.cf_type <- ctx.con.t_pointer cf.cf_type;
@@ -1237,7 +1236,7 @@ let generate_class ctx c =
 					(if is_value_type ctx (TInst(c,List.map snd c.cl_types)) then
 						Expr.mk_ccode ctx (Printf.sprintf "%s this" path)
 					else
-  					Expr.mk_ccode ctx (Printf.sprintf "%s* this = (%s*) GC_MALLOC(sizeof(%s))" path path path)) ::
+  					Expr.mk_ccode ctx (Printf.sprintf "%s* this = (%s*) malloc(sizeof(%s))" path path path)) ::
 					List.map2 (fun (f,_) (_,v) -> {
 						eexpr = TBinop(
 							Ast.OpAssign,
@@ -1322,7 +1321,7 @@ let generate_class ctx c =
 		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 		add_dependency ctx (["c";"hxc"],"Exception");
 		add_dependency ctx (["hxc"],"Init");
-		print ctx "int main() {\n\tGC_INIT();\n\t_hx_init();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+		print ctx "int main() {\n\t_hx_init();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ());
 
 	ctx.buf <- ctx.buf_h;
@@ -1453,7 +1452,7 @@ let generate_enum ctx en =
 			print ctx "%s new_%s(%s) {" (s_type ctx ret) (full_enum_field_name en ef) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args));
 			let b = open_block ctx in
 			newline ctx;
-			print ctx "%s* this = (%s*) GC_MALLOC(sizeof(%s))" path path path;
+			print ctx "%s* this = (%s*) malloc(sizeof(%s))" path path path;
 			newline ctx ;
 			print ctx "this->index = %i" ef.ef_index;
 			List.iter (fun (n,_,_) ->
@@ -1531,7 +1530,7 @@ let generate_anon_file con =
 		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> Printf.sprintf "%s %s" (s_type ctx cf.cf_type) cf.cf_name) cfl));
 		let b = open_block ctx in
 		newline ctx;
-		print ctx "%s* this = (%s*) GC_MALLOC(sizeof(%s))" s s s;
+		print ctx "%s* this = (%s*) malloc(sizeof(%s))" s s s;
 		List.iter (fun cf ->
 			newline ctx;
 			print ctx "this->%s = %s" cf.cf_name cf.cf_name;
@@ -1559,9 +1558,19 @@ let generate_init_file con =
 	spr ctx "}";
 	close_type_context ctx
 
+let generate_make_file con =
+	let ch = open_out_bin (con.com.file ^ "/MAKEFILE") in
+	let f tctx = path_to_class_file_path tctx.type_path in
+	output_string ch (Printf.sprintf "FILES = %s\n" (String.concat " " (List.map f con.generated_types)));
+	output_string ch "OUT = c\n";
+	output_string ch "build: $(FILES)\n";
+	output_string ch "\t$(CC) -o $(OUT) $(FILES)";
+	close_out ch
+
 let generate_hxc_files con =
 	generate_anon_file con;
-	generate_init_file con
+	generate_init_file con;
+	generate_make_file con
 
 let get_type com path = try
 	match List.find (fun md -> Type.t_path md = path) com.types with
@@ -1587,6 +1596,7 @@ let generate com =
 		type_ids = PMap.empty;
 		type_parameters = [];
 		init_modules = [];
+		generated_types = [];
 		t_typeref = (match follow t_typeref with
 			| TInst(c,_) -> fun t -> TInst(c,[t])
 			| _ -> assert false);

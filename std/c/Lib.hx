@@ -14,6 +14,6 @@ class Lib
 
 	@:extern public static inline function alloc(byteSize:Int):Pointer<Void>
 	{
-		return untyped GC_MALLOC(byteSize);
+		return untyped malloc(byteSize);
 	}
 }
