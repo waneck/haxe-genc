@@ -749,19 +749,20 @@ let mk_function_context ctx cf =
 	in
 
 	let rec loop e = match e.eexpr with
+    (** collect the temporary stack variables that need to be created so their address can be passed around *)
 		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el) when List.exists (fun (_,_,t) -> is_type_param ctx t) (fst (get_fun cf.cf_type)) ->
 			let old_params = !cur_params in
 			let ef = loop ef in
 			let args, ret = get_fun cf.cf_type in
 			let el = fuzzy_map2 (fun (_,_,t) e -> match e.eexpr with
 				| _ when not (is_type_param ctx t) -> loop e
-				| TLocal _ when is_type_param ctx e.etype ->
+				| TLocal _ when is_type_param ctx e.etype -> (* type params are already encoded as pointer-to-val *)
           loop e
         | TLocal _ ->
           { e with
             eexpr = TCall(
               { eexpr = TLocal(alloc_var "__refpass" t_dynamic); etype = t_dynamic; epos = e.epos },
-              [loop e] (* locals don't need to be changed *)
+              [loop e] (* locals are valid lvalues *)
             );
           }
 				| _ ->
@@ -911,6 +912,7 @@ let generate_method ctx c cf =
 		generate_expr ctx e
 	| _ -> assert false
 
+(** change a function to receive its type parameters as arguments. *)
 let change_parameter_function ctx cf vars =
 	let tf_args, types = match vars, cf.cf_params with
 		| _ :: _, _ -> (* vars *)
@@ -920,12 +922,20 @@ let change_parameter_function ctx cf vars =
 		| _ -> [],[]
 	in
 	match tf_args, cf.cf_type, cf.cf_expr with
-	| _ :: _, TFun(args,ret), Some({ eexpr = TFunction(tf) } as e) ->
-		let t = TFun(List.map (fun (v,_) -> v.v_name,false,v.v_type) tf_args @ args,ret) in
-		let e = { e with eexpr = TFunction({ tf with tf_args = tf_args @ tf.tf_args }); etype = t } in
+	| [], TFun(_,ret), _ when not (is_type_param ctx ret) ->
+		[]
+	| _, TFun(args,ret), Some({ eexpr = TFunction(tf) } as e) ->
+    (* if return type is a type parameter, add a reference to stack space as an argument as well *)
+		let end_arg =
+			if is_type_param ctx ret then [alloc_var "__out__" ret,None] else []
+		in
+		let mk_fun_type = List.map (fun (v,_) -> v.v_name,false,v.v_type) in
+		let t = TFun(mk_fun_type tf_args @ args @ mk_fun_type end_arg,ret) in
+		let e = { e with eexpr = TFunction({ tf with tf_args = tf_args @ tf.tf_args @ end_arg }); etype = t } in
 		cf.cf_expr <- Some e;
 		cf.cf_type <- t;
 		List.map2 (fun t (v,_) -> (t_path t), v) types tf_args
+	(* FIXME: handle conflicts when no cf_expr implementation is there *)
 	| _ -> []
 
 let mk_class_field name t public pos kind params =
