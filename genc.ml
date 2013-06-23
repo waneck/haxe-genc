@@ -249,7 +249,7 @@ let close_type_context ctx =
 		try
 			let cur = Std.input_file ~bin:true filepath in
 			if cur <> content then raise Not_found
-		with Not_found ->
+		with Not_found | Sys_error _ ->
 			let ch_h = open_out_bin filepath in
 			print_endline ("Writing to " ^ filepath);
 			output_string ch_h content;
