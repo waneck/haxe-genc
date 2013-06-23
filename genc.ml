@@ -1624,24 +1624,24 @@ let generate_make_file con =
 	let relpath ctx path = path_to_file_path path in
 	let main_name = match con.com.main_class with Some path -> snd path | None -> "main" in
 	let ch = open_out_bin (con.com.file ^ "/Makefile") in
-  output_string ch ("OUT = " ^ main_name ^ "\n");
+	output_string ch ("OUT = " ^ main_name ^ "\n");
 	output_string ch "ifndef MSVC\n";
-  output_string ch ("\tOUTFLAG := -o \n");
-  output_string ch ("else\n");
-  output_string ch ("\tOUTFLAG := /Fo\n");
-  output_string ch ("\tCC := cl.exe\n");
-  output_string ch ("endif\n");
-  output_string ch ("all: $(OUT)\n");
-  List.iter (fun ctx ->
-    output_string ch (Printf.sprintf "%s.o: " (relpath ctx ctx.type_path));
-    PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.h " (relpath ctx path)) ) ctx.dependencies;
-    output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OUTFLAG)%s.o -c %s.c\n\n" (relpath ctx ctx.type_path) (relpath ctx ctx.type_path))
-  ) con.generated_types;
-  output_string ch "OBJECTS = ";
-  List.iter (fun ctx -> output_string ch (Printf.sprintf "%s.o " (relpath ctx ctx.type_path))) con.generated_types;
-  output_string ch "\n\n$(OUT): $(OBJECTS)";
-  output_string ch "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OBJECTS) -o $(OUT) $(LDFLAGS)\n";
-  output_string ch "\n\nclean:\n\t$(RM) $(OUT) $(OBJECTS)";
+	output_string ch ("\tOUTFLAG := -o \n");
+	output_string ch ("else\n");
+	output_string ch ("\tOUTFLAG := /Fo\n");
+	output_string ch ("\tCC := cl.exe\n");
+	output_string ch ("endif\n");
+	output_string ch ("all: $(OUT)\n");
+	List.iter (fun ctx ->
+	output_string ch (Printf.sprintf "%s.o: " (relpath ctx ctx.type_path));
+	PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.h " (relpath ctx path)) ) ctx.dependencies;
+	output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OUTFLAG)%s.o -c %s.c\n\n" (relpath ctx ctx.type_path) (relpath ctx ctx.type_path))
+	) con.generated_types;
+	output_string ch "OBJECTS = ";
+	List.iter (fun ctx -> output_string ch (Printf.sprintf "%s.o " (relpath ctx ctx.type_path))) con.generated_types;
+	output_string ch "\n\n$(OUT): $(OBJECTS)";
+	output_string ch "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OBJECTS) -o $(OUT) $(LDFLAGS)\n";
+	output_string ch "\n\nclean:\n\t$(RM) $(OUT) $(OBJECTS)";
 	close_out ch
 
 let generate_hxc_files con =
