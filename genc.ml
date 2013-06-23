@@ -13,6 +13,7 @@ type context = {
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path * texpr) list;
 	mutable ttype : t -> t;
+	mutable init_modules : path list;
 }
 
 type function_context = {
@@ -978,6 +979,7 @@ let generate_class ctx c =
 	begin match c.cl_init with
 		| None -> ()
 		| Some e ->
+			ctx.con.init_modules <- c.cl_path :: ctx.con.init_modules;
 			let t = tfun [] ctx.con.com.basic.tvoid in
 			let f = mk_field "_hx_init" t c.cl_pos in
 			let tf = {
@@ -1007,7 +1009,8 @@ let generate_class ctx c =
 	| Some path when path = c.cl_path ->
 		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 		add_dependency ctx (["c";"hxc"],"Exception");
-		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+		add_dependency ctx (["hxc"],"Init");
+		print ctx "int main() {\n\tGC_INIT();\n\t_hx_init();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ());
 
 	ctx.buf <- ctx.buf_h;
@@ -1181,7 +1184,7 @@ let generate_type con mt = match mt with
 	| _ ->
 		()
 
-let generate_hxc_files con =
+let generate_anon_file con =
 	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
 
 	spr ctx "// forward declarations";
@@ -1233,6 +1236,25 @@ let generate_hxc_files con =
 	) con.anon_types;
 	close_type_context ctx
 
+let generate_init_file con =
+	let ctx = mk_type_context con (["hxc"],"Init") in
+	ctx.buf <- ctx.buf_c;
+	print ctx "void _hx_init() {";
+	let b = open_block ctx in
+	List.iter (fun path ->
+		add_dependency ctx path;
+		newline ctx;
+		print ctx "%s__hx_init()" (path_to_name path);
+	) con.init_modules;
+	b();
+	newline ctx;
+	spr ctx "}";
+	close_type_context ctx
+
+let generate_hxc_files con =
+	generate_anon_file con;
+	generate_init_file con
+
 let get_type com path = try
 	match List.find (fun md -> Type.t_path md = path) com.types with
 	| TClassDecl c -> TInst(c, List.map snd c.cl_types)
@@ -1255,6 +1277,7 @@ let generate com =
 		anon_types = PMap.empty;
 		type_ids = PMap.empty;
 		type_parameters = [];
+		init_modules = [];
 		ttype = (fun t -> match follow ttype with
 			| TInst(c,[_]) -> TInst(c,[t])
 			| _ -> assert false);
