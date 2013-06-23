@@ -12,8 +12,9 @@ type context = {
 	mutable anon_types : (string,string * tclass_field list) PMap.t;
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path * texpr) list;
-	mutable ttype : t -> t;
 	mutable init_modules : path list;
+	mutable t_typeref : t -> t;
+	mutable t_pointer : t -> t;
 }
 
 type function_context = {
@@ -344,7 +345,7 @@ let rec handle_special_call ctx e = match e.eexpr with
 	| _ -> false
 
 and mk_type_param ctx pos t =
-	let t = ctx.con.ttype t in
+	let t = ctx.con.t_typeref t in
 	let c,p = match follow t with
 		| TInst(c,p) -> c,p
 		| _ -> assert false
@@ -809,11 +810,16 @@ let mk_function_context ctx cf =
 	}
 
 let generate_function_header ctx c cf =
-	let args,ret = match follow cf.cf_type with
-		| TFun(args,ret) -> args,ret
+	let args,ret,s = match follow cf.cf_type with
+		| TFun(args,ret) -> args,ret,full_field_name c cf
+		| TAbstract({a_path = ["c"],"Pointer"},[t]) ->
+			begin match follow t with
+				| TFun(args,ret) -> args,ret,"(*" ^ (full_field_name c cf) ^ ")"
+				| _ -> assert false
+			end
 		| _ -> assert false
 	in
-	print ctx "%s %s(%s)" (s_type ctx ret) (full_field_name c cf) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args))
+	print ctx "%s %s(%s)" (s_type ctx ret) s (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args))
 
 let get_typeref_forward ctx path =
 	Printf.sprintf "extern const typeref %s__typeref" (path_to_name path)
@@ -843,7 +849,7 @@ let change_parameter_function ctx cf vars =
 		| _ :: _, _ -> (* vars *)
 			List.map (fun (f,_) -> alloc_var f.cf_name f.cf_type, None) vars, List.map snd vars
 		| _, _ :: _ ->
-			List.map (fun (_,t) -> alloc_var (path_to_name (t_path t) ^ "_tp") (ctx.con.ttype t),None) cf.cf_params, List.map snd cf.cf_params
+			List.map (fun (_,t) -> alloc_var (path_to_name (t_path t) ^ "_tp") (ctx.con.t_typeref t),None) cf.cf_params, List.map snd cf.cf_params
 		| _ -> [],[]
 	in
 	match tf_args, cf.cf_type, cf.cf_expr with
@@ -873,7 +879,7 @@ let cls_parameter_vars ctx c = match c.cl_types with
 	| [] -> []
 	| types ->
 		let vars = List.map (fun (s,t) ->
-			mk_class_field (path_to_name (t_path t) ^ "_tp") (ctx.con.ttype t) false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) []
+			mk_class_field (path_to_name (t_path t) ^ "_tp") (ctx.con.t_typeref t) false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) []
 		) types in
 		c.cl_ordered_fields <- vars @ c.cl_ordered_fields;
 		List.iter (fun f -> c.cl_fields <- PMap.add f.cf_name f c.cl_fields ) vars;
@@ -887,22 +893,38 @@ let generate_class ctx c =
 	in
 	ctx.con.type_parameters <- List.map (fun (f,t) ->
 		t_path t, mk_this_field f) param_vars;
+
 	(* split fields into member vars, static vars and functions *)
 	let vars = DynArray.create () in
 	let svars = DynArray.create () in
 	let methods = DynArray.create () in
+
+	let check_dynamic cf = match cf.cf_kind with
+		| Method MethDynamic ->
+			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
+			print_endline ("Adding " ^ cf2.cf_name);
+			DynArray.add methods cf2;
+			cf.cf_expr <- None;
+			cf.cf_type <- ctx.con.t_pointer cf.cf_type;
+		| _ ->
+			()
+	in
+
 	List.iter (fun cf -> match cf.cf_kind with
 		| Var _ -> DynArray.add vars cf
-		| Method _ -> match cf.cf_type with
+		| Method m -> match cf.cf_type with
 			| TFun(args,ret) ->
 				cf.cf_type <- TFun(("this",false,monofy_class c) :: args, ret);
+				(* check_dynamic cf; *)
 				DynArray.add methods cf
 			| _ ->
 				assert false;
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with
 		| Var _ -> DynArray.add svars cf
-		| Method _ -> DynArray.add methods cf
+		| Method _ ->
+			(* check_dynamic cf; *)
+			DynArray.add methods cf
 	) c.cl_ordered_statics;
 
 	(* add constructor as function *)
@@ -1262,10 +1284,11 @@ let get_type com path = try
 	| TTypeDecl t -> TType(t, List.map snd t.t_types)
 	| TAbstractDecl a -> TAbstract(a, List.map snd a.a_types)
 with | Not_found ->
-	com.error ("The type " ^ Ast.s_type_path path ^ " is required and was not found") Ast.null_pos; assert false
+	failwith("The type " ^ Ast.s_type_path path ^ " is required and was not found")
 
 let generate com =
-	let ttype = get_type com ([],"typeref") in
+	let t_typeref = get_type com ([],"typeref") in
+	let t_pointer = get_type com (["c"],"Pointer") in
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
@@ -1278,8 +1301,11 @@ let generate com =
 		type_ids = PMap.empty;
 		type_parameters = [];
 		init_modules = [];
-		ttype = (fun t -> match follow ttype with
-			| TInst(c,[_]) -> TInst(c,[t])
+		t_typeref = (match follow t_typeref with
+			| TInst(c,_) -> fun t -> TInst(c,[t])
+			| _ -> assert false);
+		t_pointer = (match follow t_pointer with
+			| TAbstract(a,_) -> fun t -> TAbstract(a,[t])
 			| _ -> assert false);
 	} in
 	List.iter (generate_type con) com.types;
