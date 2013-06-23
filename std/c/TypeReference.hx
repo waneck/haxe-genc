@@ -4,9 +4,9 @@ package c;
 @:keep class TypeReference<T>
 {
 	/** represents the size, in bytes, of a reference to that type; on reference types, it should be equal to word size **/
-	public var refSize:Int;
+	public var refSize(default, never):Int;
 	/** the fully qualified name of the type **/
-	public var name:String;
+	public var name(default, never):String;
 
 	@:extern public function new() {}
 }

@@ -21,7 +21,7 @@
  */
 package c;
 
-@:notNull @:runtimeValue abstract Pointer<T>(_PointerR)
+@:notNull @:runtimeValue abstract Pointer<T>(_PointerR<T>)
 {
 	@:extern @:op(A+B) public static function add<T>(addr:Pointer<T>, offset:Int):Pointer<T> { return addr;}
 	@:extern @:op(++A) public static function increment<T>(addr:Pointer<T>):Pointer<T> { return addr; }
@@ -29,4 +29,4 @@ package c;
 	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T { return untyped this[index] = value; }
 }
 
-extern class _PointerR {}
+extern class _PointerR<T> {}
