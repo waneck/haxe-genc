@@ -13,6 +13,7 @@ type context = {
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path * texpr) list;
 	mutable ttype : t -> t;
+	mutable tpointer : t -> t;
 }
 
 type function_context = {
@@ -298,6 +299,11 @@ let rec handle_special_call ctx e = match e.eexpr with
 		spr ctx "&";
 		generate_expr ctx e1;
 		true
+	(* dereference operator *)
+	| TCall({eexpr = TLocal({v_name = "__deref"})},[e1]) ->
+		spr ctx "*";
+		generate_expr ctx e1;
+		true
 	(* sizeof *)
 	| TCall({eexpr = TLocal({v_name = "__sizeof__"})},[e1]) ->
 		(* get TypeReference's type *)
@@ -350,20 +356,12 @@ and generate_tparam_call ctx e ef e1 c cf static el =
 	let original, oret = get_fun cf.cf_type in
 	let applied, aret = get_fun ef.etype in
 	(* since we've messed with cf_type, we need to restore it now *)
-	let ro = List.rev original in
-	let ra = List.rev applied in
-	(* take off __out__ var if there is one *)
-	let ro = match ro with
-		| _ :: ro when is_type_param ctx oret ->
-			ro
-		| _ -> ro
-	in
 	(* take off extra 'original' parameters *)
 	let rec loop ro ra acc = match ro, ra with
 		| o :: ro, _ :: ra -> loop ro ra (o :: acc)
 		| _ -> acc
 	in
-	let original = loop ro ra [] in
+	let original = loop (List.rev original) applied [] in
 	(* normalization complete now *)
 	let params = infer_params ctx e.epos (original,oret) (applied,aret) cf.cf_params true in
 
@@ -781,6 +779,19 @@ let mk_assign_ref ctx p local value =
 		mk_ref ctx p local
 	]
 
+let mk_cast t e =
+	{ e with eexpr = TCast(e, None); etype = t }
+
+let mk_deref ctx p e =
+	{
+		eexpr = TCall(
+			{ eexpr = TLocal(alloc_var "__deref" t_dynamic); etype = t_dynamic; epos = p },
+			[e]
+		);
+		etype = t_dynamic;
+		epos = p;
+	}
+
 let mk_function_context ctx cf =
 	let locals = ref [] in
 
@@ -806,22 +817,27 @@ let mk_function_context ctx cf =
 		cur_params := PMap.add path (cur_i + 1, v :: cur_arr) !cur_params;
 		v
 	in
+	let force_add v =
+		let path = t_path v.v_type in
+		let n = path_to_name path ^ "_tmp_0" in
+		all_params := PMap.add n v !all_params
+	in
 
 	let returns_type_param = is_type_param ctx (snd (get_fun cf.cf_type)) in
 	let out_var = ref None in
 
 	let rec loop e = match e.eexpr with
+		(** 2nd pass type parameter handling **)
     (** collect the temporary stack variables that need to be created so their address can be passed around *)
 		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
 		when function_has_type_parameter ctx cf.cf_type ->
-			print_endline cf.cf_name;
 			let old_params = !cur_params in
 			let ef = loop ef in
 			let args, ret = get_fun cf.cf_type in
 			let args = List.rev args in
 			(* if return type is a type param, add new element to call params *)
+			let _, applied_ret = get_fun e1.etype in
 			let args, el_last = if is_type_param ctx ret then begin
-				let _, applied_ret = get_fun e1.etype in
 				let v = add_param applied_ret in
 				if is_type_param ctx applied_ret then
 					List.tl args, [mk_local v e.epos] (* already a reference var *)
@@ -834,19 +850,21 @@ let mk_function_context ctx cf =
 			let el = fuzzy_map2 (fun (_,_,t) e -> match e.eexpr with
 				| _ when not (is_type_param ctx t) -> loop e
 				| TLocal _ when is_type_param ctx e.etype -> (* type params are already encoded as pointer-to-val *)
-					print_endline "is type";
           loop e
         | TLocal _ ->
-					print_endline "making ref";
 					mk_ref ctx e.epos (loop e)
 				| _ ->
 					let v = add_param e.etype in
-					print_endline ("comma block " ^ v.v_name);
-					mk_assign_ref ctx e.epos (mk_local v e.epos) (loop e)
+					loop (mk_assign_ref ctx e.epos (mk_local v e.epos) e)
 			) args (List.rev el) []
 			in
 			cur_params := old_params;
-			{ e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) }
+			let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
+			(* if type parameter is being cast into a concrete one, we need to dereference it *)
+			if is_type_param ctx ret && not (is_type_param ctx applied_ret) then
+				mk_deref ctx e.epos (mk_cast (ctx.con.tpointer applied_ret) eret)
+			else
+				eret
 		(* TODO: check also for when a TField with type parameter is read / set; its contents must be copied *)
 		| TReturn (Some er) when Option.is_some !out_var ->
 			let out_var = Option.get !out_var in
@@ -860,6 +878,8 @@ let mk_function_context ctx cf =
 				mk_local out_var e.epos
 			] in
 			{ e with eexpr = TReturn(Some( loop ret_val )) }
+
+		(** end of type parameter handling on 2nd pass **)
 		| TVars vl ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
 				locals := v :: !locals;
@@ -927,7 +947,9 @@ let mk_function_context ctx cf =
 	let e = match cf.cf_expr with
 		| None -> None
 		| Some ({ eexpr = TFunction(tf) } as e) when returns_type_param ->
-			out_var := Some (fst (List.hd (List.rev tf.tf_args)));
+			let var = fst (List.hd (List.rev tf.tf_args)) in
+			force_add var;
+			out_var := Some (var);
 			Some (loop e)
 		| Some e -> Some (loop e)
 	in
@@ -1385,6 +1407,7 @@ with | Not_found ->
 
 let generate com =
 	let ttype = get_type com ([],"typeref") in
+	let tpointer = get_type com (["c"],"Pointer") in
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
@@ -1398,6 +1421,9 @@ let generate com =
 		type_parameters = [];
 		ttype = (fun t -> match follow ttype with
 			| TInst(c,[_]) -> TInst(c,[t])
+			| _ -> assert false);
+		tpointer = (fun t -> match follow tpointer with
+			| TAbstract(a,[_]) -> TAbstract(a,[t])
 			| _ -> assert false);
 	} in
 	List.iter (generate_type con) com.types;
