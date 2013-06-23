@@ -12,8 +12,9 @@ type context = {
 	mutable anon_types : (string,string * tclass_field list) PMap.t;
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path * texpr) list;
-	mutable ttype : t -> t;
-	mutable tpointer : t -> t;
+	mutable init_modules : path list;
+	mutable t_typeref : t -> t;
+	mutable t_pointer : t -> t;
 }
 
 type function_context = {
@@ -347,7 +348,7 @@ let rec handle_special_call ctx e = match e.eexpr with
 	| _ -> false
 
 and mk_type_param ctx pos t =
-	let t = ctx.con.ttype t in
+	let t = ctx.con.t_typeref t in
 	let c,p = match follow t with
 		| TInst(c,p) -> c,p
 		| _ -> assert false
@@ -715,7 +716,7 @@ let mk_array_decl ctx el t p =
 	) el;
 	spr ctx "return Array_ofPointerCopy(";
 	generate_expr ctx eparam;
-	print ctx ", %d, arr)" (List.length el);
+	print ctx ", %d, arr)" arity;
 	bl();
 	newline ctx;
 	spr ctx "}";
@@ -811,6 +812,16 @@ let is_field_type_param ctx e = is_type_param ctx e.etype || match e.eexpr with
 	| TField(_, (FInstance(_,cf) | FStatic(_,cf))) when is_type_param ctx cf.cf_type -> true
 	| _ -> false
 
+(*
+	This function applies some general transformations.
+
+	- locals are collected
+	- TVars are replaced by assignments
+	- TArrayDecl introduces an init function which is TCalled
+	- TTry is replaced with a TSwitch and uses setjmp
+	- TPatMatch has some var names sanitized
+	- TFor is replaced with TWhile
+*)
 let mk_function_context ctx cf =
 	let locals = ref [] in
 
@@ -842,7 +853,10 @@ let mk_function_context ctx cf =
 		all_params := PMap.add n v !all_params
 	in
 
-	let returns_type_param = is_type_param ctx (snd (get_fun cf.cf_type)) in
+	let returns_type_param = match follow cf.cf_type with
+		| TFun(_,ret) -> is_type_param ctx ret
+		| _ -> false
+	in
 	let out_var = ref None in
 
 	let rec loop e = match e.eexpr with
@@ -885,7 +899,7 @@ let mk_function_context ctx cf =
 			let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 			(* if type parameter is being cast into a concrete one, we need to dereference it *)
 			if is_type_param ctx ret && not (is_type_param ctx applied_ret) then
-				mk_deref ctx e.epos (mk_cast (ctx.con.tpointer applied_ret) eret)
+				mk_deref ctx e.epos (mk_cast (ctx.con.t_pointer applied_ret) eret)
 			else
 				eret
 		(* TODO: check also for when a TField with type parameter is read / set; its contents must be copied *)
@@ -923,9 +937,9 @@ let mk_function_context ctx cf =
 				cur_params := old_params;
 				ret
 			end else if is_field_type_param ctx e1 then
-				{ e with eexpr = TBinop(op, mk_deref ctx e.epos (mk_cast (ctx.con.tpointer e2.etype) (loop e1)), loop e2) }
+				{ e with eexpr = TBinop(op, mk_deref ctx e.epos (mk_cast (ctx.con.t_pointer e2.etype) (loop e1)), loop e2) }
 			else
-				{ e with eexpr = TBinop(op, loop e1, mk_deref ctx e.epos (mk_cast (ctx.con.tpointer e1.etype) (loop e2))) }
+				{ e with eexpr = TBinop(op, loop e1, mk_deref ctx e.epos (mk_cast (ctx.con.t_pointer e1.etype) (loop e2))) }
 		(* - pointer array access -> pointer + typeref's size * index *)
 		| TArray(e1, idx) -> (match follow e1.etype with
 			| TAbstract({a_path=["c"], "Pointer"},[t])
@@ -964,7 +978,7 @@ let mk_function_context ctx cf =
 			| _ -> mk (TBlock el) ctx.con.com.basic.tvoid e.epos
 			end
 		| TArrayDecl el ->
-			mk_array_decl ctx el e.etype e.epos
+			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
 			ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 			add_dependency ctx (["c";"hxc"],"Exception");
@@ -975,7 +989,7 @@ let mk_function_context ctx cf =
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
 				let eassign = mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
-				let e = Codegen.concat eassign (Codegen.concat epopassign e) in
+				let e = Codegen.concat eassign (Codegen.concat epopassign (loop e)) in
 				let e = mk (TBlock [e]) e.etype e.epos in
 				if v.v_type == t_dynamic then begin
 					def := Some e;
@@ -1007,6 +1021,7 @@ let mk_function_context ctx cf =
 			) dt.dt_var_init;
 			Type.map_expr loop e
 		| TFor(v,e1,e2) ->
+			let e1 = loop e1 in
 			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
 			let enext = mk (TField(e1,quick_field e1.etype "next")) v.v_type e1.epos in
 			let ebody = Codegen.concat enext e2 in
@@ -1033,11 +1048,16 @@ let mk_function_context ctx cf =
 	}
 
 let generate_function_header ctx c cf =
-	let args,ret = match follow cf.cf_type with
-		| TFun(args,ret) -> args,ret
+	let args,ret,s = match follow cf.cf_type with
+		| TFun(args,ret) -> args,ret,full_field_name c cf
+		| TAbstract({a_path = ["c"],"Pointer"},[t]) ->
+			begin match follow t with
+				| TFun(args,ret) -> args,ret,"(*" ^ (full_field_name c cf) ^ ")"
+				| _ -> assert false
+			end
 		| _ -> assert false
 	in
-	print ctx "%s %s(%s)" (s_type ctx ret) (full_field_name c cf) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args))
+	print ctx "%s %s(%s)" (s_type ctx ret) s (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args))
 
 let get_typeref_forward ctx path =
 	Printf.sprintf "extern const typeref %s__typeref" (path_to_name path)
@@ -1102,7 +1122,7 @@ let change_parameter_function ctx cf vars =
 		| _ :: _, _ -> (* vars *)
 			List.map (fun (f,_) -> alloc_var f.cf_name f.cf_type, None) vars, List.map snd vars
 		| _, _ :: _ ->
-			List.map (fun (_,t) -> alloc_var (path_to_name (t_path t) ^ "_tp") (ctx.con.ttype t),None) cf.cf_params, List.map snd cf.cf_params
+			List.map (fun (_,t) -> alloc_var (path_to_name (t_path t) ^ "_tp") (ctx.con.t_typeref t),None) cf.cf_params, List.map snd cf.cf_params
 		| _ -> [],[]
 	in
 	match tf_args, cf.cf_type, cf.cf_expr with
@@ -1140,7 +1160,7 @@ let cls_parameter_vars ctx c = match c.cl_types with
 	| [] -> []
 	| types ->
 		let vars = List.map (fun (s,t) ->
-			mk_class_field (path_to_name (t_path t) ^ "_tp") (ctx.con.ttype t) false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) []
+			mk_class_field (path_to_name (t_path t) ^ "_tp") (ctx.con.t_typeref t) false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) []
 		) types in
 		c.cl_ordered_fields <- vars @ c.cl_ordered_fields;
 		List.iter (fun f -> c.cl_fields <- PMap.add f.cf_name f c.cl_fields ) vars;
@@ -1154,24 +1174,41 @@ let generate_class ctx c =
 	in
 	ctx.con.type_parameters <- List.map (fun (f,t) ->
 		t_path t, mk_this_field f) param_vars;
+
 	(* split fields into member vars, static vars and functions *)
 	let vars = DynArray.create () in
 	let svars = DynArray.create () in
 	let methods = DynArray.create () in
+
+	let check_dynamic cf = match cf.cf_kind with
+		| Method MethDynamic ->
+			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
+			print_endline ("Adding " ^ cf2.cf_name);
+			DynArray.add methods cf2;
+			cf.cf_expr <- None;
+			cf.cf_type <- ctx.con.t_pointer cf.cf_type;
+		| _ ->
+			()
+	in
+
 	List.iter (fun cf -> match cf.cf_kind with
 		| Var _ -> DynArray.add vars cf
-		| Method _ -> match cf.cf_type with
+		| Method m -> match cf.cf_type with
 			| TFun(args,ret) ->
 				cf.cf_type <- TFun(("this",false,monofy_class c) :: args, ret);
+				(* check_dynamic cf; *)
 				DynArray.add methods cf
 			| _ ->
 				assert false;
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with
 		| Var _ -> DynArray.add svars cf
-		| Method _ -> DynArray.add methods cf
+		| Method _ ->
+			(* check_dynamic cf; *)
+			DynArray.add methods cf
 	) c.cl_ordered_statics;
 
+	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
 		| Some cf ->
@@ -1210,6 +1247,50 @@ let generate_class ctx c =
 	spr ctx (get_typeref_declaration ctx (TInst(c,List.map snd c.cl_types)));
 	newline ctx;
 
+	let add_init e = match c.cl_init with
+		| None -> c.cl_init <- Some e
+		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
+	in
+
+	(* generate static vars *)
+	if not (DynArray.empty svars) then begin
+		spr ctx "// static vars\n";
+		DynArray.iter (fun cf ->
+			print ctx "%s %s" (s_type ctx cf.cf_type) (full_field_name c cf);
+			newline ctx;
+			match cf.cf_expr with
+				| None -> ()
+				| Some e ->
+					let fctx = mk_function_context ctx cf in
+					let e = Option.get fctx.expr in
+					let locals = fctx.local_vars in
+					let einit = mk (TVars (List.map (fun v -> v,None) locals)) ctx.con.com.basic.tvoid cf.cf_pos in
+					let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
+					let ethis = mk (TTypeExpr (TClassDecl c)) ta cf.cf_pos in
+					let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
+					let eassign = mk (TBinop(OpAssign,efield,e)) efield.etype cf.cf_pos in
+					let e = Codegen.concat einit eassign in
+					cf.cf_expr <- Some e;
+					add_init e;
+		) svars;
+	end;
+
+	(* add init field as function *)
+	begin match c.cl_init with
+		| None -> ()
+		| Some e ->
+			ctx.con.init_modules <- c.cl_path :: ctx.con.init_modules;
+			let t = tfun [] ctx.con.com.basic.tvoid in
+			let f = mk_field "_hx_init" t c.cl_pos in
+			let tf = {
+				tf_args = [];
+				tf_type = ctx.con.com.basic.tvoid;
+				tf_expr = block e;
+			} in
+			f.cf_expr <- Some (mk (TFunction tf) t c.cl_pos);
+			DynArray.add methods f
+	end;
+
 	(* generate function implementations *)
 	if not (DynArray.empty methods) then begin
 		DynArray.iter (fun cf ->
@@ -1223,32 +1304,14 @@ let generate_class ctx c =
 		) methods;
 	end;
 
-	(* generate static vars *)
-	if not (DynArray.empty svars) then begin
-		spr ctx "// static vars\n";
-		DynArray.iter (fun cf ->
-      let is_constant = match cf.cf_kind with
-        | Var { v_read = AccInline }
-        | Var { v_write = AccNever } -> true
-        | _ -> false
-      in
-      print ctx "%s%s %s" (if is_constant then "const " else "") (s_type ctx cf.cf_type) (full_field_name c cf);
-			match cf.cf_expr with
-			| None -> newline ctx
-			| Some e ->
-				spr ctx " = ";
-				generate_expr ctx e;
-				newline ctx
-		) svars;
-	end;
-
 	(* check if we have the main class *)
 	(match ctx.con.com.main_class with
 	| Some path when path = c.cl_path ->
 		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 		add_dependency ctx (["c";"hxc"],"Exception");
-		print ctx "int main() {\n\tGC_INIT();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
-  | _ -> ());
+		add_dependency ctx (["hxc"],"Init");
+		print ctx "int main() {\n\tGC_INIT();\n\t_hx_init();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+	| _ -> ());
 
 	ctx.buf <- ctx.buf_h;
 
@@ -1275,17 +1338,10 @@ let generate_class ctx c =
 	if not (DynArray.empty svars) then begin
 		spr ctx "// static vars\n";
 		DynArray.iter (fun cf ->
-      let is_constant = match cf.cf_kind with
-        | Var { v_read = AccInline }
-        | Var { v_write = AccNever } -> true
-        | _ -> false
-      in
-      print ctx "extern %s%s %s" (if is_constant then "const " else "") (s_type ctx cf.cf_type) (full_field_name c cf);
+      print ctx "extern %s %s" (s_type ctx cf.cf_type) (full_field_name c cf);
       newline ctx
     ) svars
 	end;
-
-	ctx.buf <- ctx.buf_h;
 
 	(* generate forward declarations of functions *)
 	if not (DynArray.empty methods) then begin
@@ -1424,7 +1480,7 @@ let generate_type con mt = match mt with
 	| _ ->
 		()
 
-let generate_hxc_files con =
+let generate_anon_file con =
 	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
 
 	spr ctx "// forward declarations";
@@ -1476,6 +1532,25 @@ let generate_hxc_files con =
 	) con.anon_types;
 	close_type_context ctx
 
+let generate_init_file con =
+	let ctx = mk_type_context con (["hxc"],"Init") in
+	ctx.buf <- ctx.buf_c;
+	print ctx "void _hx_init() {";
+	let b = open_block ctx in
+	List.iter (fun path ->
+		add_dependency ctx path;
+		newline ctx;
+		print ctx "%s__hx_init()" (path_to_name path);
+	) con.init_modules;
+	b();
+	newline ctx;
+	spr ctx "}";
+	close_type_context ctx
+
+let generate_hxc_files con =
+	generate_anon_file con;
+	generate_init_file con
+
 let get_type com path = try
 	match List.find (fun md -> Type.t_path md = path) com.types with
 	| TClassDecl c -> TInst(c, List.map snd c.cl_types)
@@ -1483,11 +1558,11 @@ let get_type com path = try
 	| TTypeDecl t -> TType(t, List.map snd t.t_types)
 	| TAbstractDecl a -> TAbstract(a, List.map snd a.a_types)
 with | Not_found ->
-	com.error ("The type " ^ Ast.s_type_path path ^ " is required and was not found") Ast.null_pos; assert false
+	failwith("The type " ^ Ast.s_type_path path ^ " is required and was not found")
 
 let generate com =
-	let ttype = get_type com ([],"typeref") in
-	let tpointer = get_type com (["c"],"Pointer") in
+	let t_typeref = get_type com ([],"typeref") in
+	let t_pointer = get_type com (["c"],"Pointer") in
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
@@ -1499,11 +1574,12 @@ let generate com =
 		anon_types = PMap.empty;
 		type_ids = PMap.empty;
 		type_parameters = [];
-		ttype = (fun t -> match follow ttype with
-			| TInst(c,[_]) -> TInst(c,[t])
+		init_modules = [];
+		t_typeref = (match follow t_typeref with
+			| TInst(c,_) -> fun t -> TInst(c,[t])
 			| _ -> assert false);
-		tpointer = (fun t -> match follow tpointer with
-			| TAbstract(a,[_]) -> TAbstract(a,[t])
+		t_pointer = (match follow t_pointer with
+			| TAbstract(a,_) -> fun t -> TAbstract(a,[t])
 			| _ -> assert false);
 	} in
 	List.iter (generate_type con) com.types;
