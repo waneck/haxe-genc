@@ -243,7 +243,6 @@ let close_type_context ctx =
 	let n = "_h" ^ path_to_name ctx.type_path in
 	spr (Printf.sprintf "#ifndef %s\n" n);
 	spr (Printf.sprintf "#define %s\n" n);
-	spr "#include <setjmp.h>\n";
 	spr "#include <stdio.h>\n";
 	spr "#include <stdlib.h>\n";
 	spr "#include <string.h>\n";
@@ -286,18 +285,56 @@ let close_type_context ctx =
 let add_dependency ctx path =
 	if path <> ctx.type_path then ctx.dependencies <- PMap.add path true ctx.dependencies
 
+let parse_include com s p =
+	if s.[0] = '<' then begin
+		if s.[String.length s - 1] <> '>' then com.error "Invalid include directive" p;
+		(* take off trailing .h because it will be added back later *)
+		let i = if String.length s > 4 && s.[String.length s - 2] = 'h' && s.[String.length s - 3] = '.' then
+			String.length s - 4
+		else
+			String.length s - 2
+		in
+		([],String.sub s 1 i),false
+	end else
+		([],s),true
+
+let check_include_meta ctx meta =
+	try
+		let _,el,p = get_meta Meta.Include meta in
+		List.iter (fun e -> match fst e with
+			| EConst(String s) when String.length s > 0 ->
+				let path,b = parse_include ctx.con.com s p in
+				ctx.dependencies <- PMap.add path b ctx.dependencies
+			| _ ->
+				()
+		) el;
+		true
+	with Not_found ->
+		false
+
 let add_class_dependency ctx c =
-	if not c.cl_extern then add_dependency ctx c.cl_path
+	if not (check_include_meta ctx c.cl_meta) && not c.cl_extern then add_dependency ctx c.cl_path
+
+let add_enum_dependency ctx en =
+	if not (check_include_meta ctx en.e_meta) && not en.e_extern then add_dependency ctx en.e_path
+
+let add_abstract_dependency ctx a =
+	if not (check_include_meta ctx a.a_meta) then add_dependency ctx a.a_path
 
 let add_type_dependency ctx t = match follow t with
 	| TInst(c,_) ->
 		add_class_dependency ctx c
 	| TEnum(en,_) ->
-		add_dependency ctx en.e_path
+		add_enum_dependency ctx en
 	| TAnon _ ->
 		add_dependency ctx (["hxc"],"AnonTypes");
+	| TAbstract(a,_) ->
+		add_abstract_dependency ctx a
+	| TDynamic _ ->
+		add_dependency ctx ([],"Dynamic")
 	| _ ->
-		()
+		(* TODO: that doesn't seem quite right *)
+		add_dependency ctx ([],"Dynamic")
 
 (* Helper *)
 
@@ -626,7 +663,7 @@ and generate_expr ctx e = match e.eexpr with
 			ctx.con.com.error ("Cannot find type parameter called " ^ s_type_path c.cl_path) e.epos)
 		| _ ->
 			let path = t_path p in
-			add_dependency ctx path;
+			add_type_dependency ctx p;
 			spr ctx ("&" ^ (path_to_name path ) ^ "__typeref"))
 	| TNew(c,tl,el) ->
 		let el = List.map (Expr.mk_type_param ctx e.epos) tl @ el in
