@@ -24,13 +24,13 @@
 **/
 class Math
 {
-	static var PI(default,null) : Float;
+	static public var PI(default,null) : Float;
 
-	static var NEGATIVE_INFINITY(default, null) : Float;
+	static public var NEGATIVE_INFINITY(default, null) : Float;
 
-	static var POSITIVE_INFINITY(default,null) : Float;
+	static public var POSITIVE_INFINITY(default,null) : Float;
 
-	static var NaN(default, null) : Float;
+	static public var NaN(default, null) : Float;
 
 	static public function abs(v:Float):Float {
 		return untyped __call("fabs",v);

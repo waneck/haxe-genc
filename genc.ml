@@ -713,7 +713,17 @@ let mk_array_decl ctx el t p =
 	let ev = mk (TLocal v) v.v_type p in
 	mk (TCall(ev,el)) t p
 
-let mk_function_context ctx cf =
+(*
+	This function applies some general transformations.
+
+	- locals are collected
+	- TVars are replaced by assignments
+	- TArrayDecl introduces an init function which is TCalled
+	- TTry is replaced with a TSwitch and uses setjmp
+	- TPatMatch has some var names sanitized
+	- TFor is replaced with TWhile
+*)
+let transform_expr ctx e =
 	let locals = ref [] in
 	let rec loop e = match e.eexpr with
 		| TVars vl ->
@@ -728,7 +738,7 @@ let mk_function_context ctx cf =
 			| _ -> mk (TBlock el) ctx.con.com.basic.tvoid e.epos
 			end
 		| TArrayDecl el ->
-			mk_array_decl ctx el e.etype e.epos
+			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
 			ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
 			add_dependency ctx (["c";"hxc"],"Exception");
@@ -739,7 +749,7 @@ let mk_function_context ctx cf =
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
 				let eassign = mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
-				let e = Codegen.concat eassign (Codegen.concat epopassign e) in
+				let e = Codegen.concat eassign (Codegen.concat epopassign (loop e)) in
 				let e = mk (TBlock [e]) e.etype e.epos in
 				if v.v_type == t_dynamic then begin
 					def := Some e;
@@ -771,22 +781,28 @@ let mk_function_context ctx cf =
 			) dt.dt_var_init;
 			Type.map_expr loop e
 		| TFor(v,e1,e2) ->
+			let e1 = loop e1 in
 			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
 			let enext = mk (TField(e1,quick_field e1.etype "next")) v.v_type e1.epos in
-			let ebody = Codegen.concat enext e2 in
+			let ebody = Codegen.concat enext (loop e2) in
 			mk (TBlock [
 				mk (TVars [v,None]) ctx.con.com.basic.tvoid e1.epos;
 				mk (TWhile(ehasnext,ebody,NormalWhile)) ctx.con.com.basic.tvoid e1.epos;
 			]) ctx.con.com.basic.tvoid e.epos
 		| _ -> Type.map_expr loop e
 	in
-	let e = match cf.cf_expr with
-		| None -> None
-		| Some e -> Some (loop e)
+	loop e,!locals
+
+let mk_function_context ctx cf =
+	let e,locals = match cf.cf_expr with
+		| None -> None,[]
+		| Some e ->
+			let e,locals = transform_expr ctx e in
+			Some e,locals
 	in
 	{
 		field = cf;
-		local_vars = !locals;
+		local_vars = locals;
 		expr = e;
 		loop_stack = [];
 	}
@@ -953,7 +969,8 @@ let generate_class ctx c =
 			| None -> newline ctx
 			| Some e ->
 				spr ctx " = ";
-				generate_expr ctx e;
+				(* TODO: handle locals *)
+				generate_expr ctx (fst (transform_expr ctx e));
 				newline ctx
 		) svars;
 	end;
