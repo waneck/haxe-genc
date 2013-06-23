@@ -737,6 +737,7 @@ let mk_array_decl ctx el t p =
 we need a fuzzy map2 version which won't fail, and discard the remaining arguments *)
 let rec fuzzy_map2 f l1 l2 acc = match l1, l2 with
 	| v1 :: l1, v2 :: l2 -> fuzzy_map2 f l1 l2 ( (f v1 v2) :: acc )
+	| _ :: _, [] -> (*(List.rev l1) @ acc*) assert false (* shouldn't happen *)
 	| _ -> acc
 
 let function_has_type_parameter ctx t = match follow t with
@@ -842,15 +843,19 @@ let mk_function_context ctx cf =
 			let _, applied_ret = get_fun e1.etype in
 			let args, el_last = if is_type_param ctx ret then begin
 				let v = add_param applied_ret in
+				let args = match args with
+					| ("__out__",_,_) :: args -> args
+					| _ -> args
+				in (* FIXME: since this isn't entirely multi-pass, we can't guarantee that pass 1 already ran; do this right *)
 				if is_type_param ctx applied_ret then
-					List.tl args, [mk_local v e.epos] (* already a reference var *)
+					args, [mk_local v e.epos] (* already a reference var *)
 				else
-					List.tl args, [mk_ref ctx e.epos (mk_local v e.epos)]
+					args, [mk_ref ctx e.epos (mk_local v e.epos)]
 			end else
 				args, []
 			in
 
-			let el = fuzzy_map2 (fun (_,_,t) e -> match e.eexpr with
+			let el = fuzzy_map2 (fun e (_,_,t) -> match e.eexpr with
 				| _ when not (is_type_param ctx t) -> loop e
 				| TLocal _ when is_type_param ctx e.etype -> (* type params are already encoded as pointer-to-val *)
           loop e
@@ -859,7 +864,7 @@ let mk_function_context ctx cf =
 				| _ ->
 					let v = add_param e.etype in
 					loop (mk_assign_ref ctx e.epos (mk_local v e.epos) e)
-			) args (List.rev el) []
+			) (List.rev el) args []
 			in
 			cur_params := old_params;
 			let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
