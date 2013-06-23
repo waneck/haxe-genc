@@ -1,5 +1,7 @@
 package c.hxc;
 
+import c.Pointer;
+
 @:native("jmp_buf")
 extern private class JmpBuf {
 	public function new():Void;
@@ -7,7 +9,7 @@ extern private class JmpBuf {
 
 @:keep
 class Exception {
-	static var stack:Array<Dynamic> = new Array();
+	static var stack:Array<Pointer<JmpBuf>> = new Array();
 	static var thrownObject:Dynamic;
 
 	static public function push():JmpBuf untyped {

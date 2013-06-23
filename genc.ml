@@ -293,11 +293,16 @@ let add_type_dependency ctx t = match follow t with
 	| TInst(c,_) ->
 		add_class_dependency ctx c
 	| TEnum(en,_) ->
-		add_dependency ctx en.e_path
+		if not en.e_extern then add_dependency ctx en.e_path
 	| TAnon _ ->
 		add_dependency ctx (["hxc"],"AnonTypes");
+	| TAbstract(a,_) ->
+		add_dependency ctx a.a_path
+	| TDynamic _ ->
+		add_dependency ctx ([],"Dynamic")
 	| _ ->
-		()
+		(* TODO: that doesn't seem quite right *)
+		add_dependency ctx ([],"Dynamic")
 
 (* Helper *)
 
@@ -626,7 +631,7 @@ and generate_expr ctx e = match e.eexpr with
 			ctx.con.com.error ("Cannot find type parameter called " ^ s_type_path c.cl_path) e.epos)
 		| _ ->
 			let path = t_path p in
-			add_dependency ctx path;
+			add_type_dependency ctx p;
 			spr ctx ("&" ^ (path_to_name path ) ^ "__typeref"))
 	| TNew(c,tl,el) ->
 		let el = List.map (Expr.mk_type_param ctx e.epos) tl @ el in
