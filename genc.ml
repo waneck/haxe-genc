@@ -807,6 +807,9 @@ let mk_function_context ctx cf =
 		v
 	in
 
+	let returns_type_param = is_type_param ctx (snd (get_fun cf.cf_type)) in
+	let out_var = ref None in
+
 	let rec loop e = match e.eexpr with
     (** collect the temporary stack variables that need to be created so their address can be passed around *)
 		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
@@ -845,6 +848,18 @@ let mk_function_context ctx cf =
 			cur_params := old_params;
 			{ e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) }
 		(* TODO: check also for when a TField with type parameter is read / set; its contents must be copied *)
+		| TReturn (Some er) when Option.is_some !out_var ->
+			let out_var = Option.get !out_var in
+			(* when returning type parameter values, instead of just returning a value, we must first set the out var *)
+			let ret_val = mk_comma_block ctx e.epos [
+				{
+					eexpr = TBinop(Ast.OpAssign, mk_local out_var e.epos, er);
+					etype = er.etype;
+					epos = e.epos;
+				};
+				mk_local out_var e.epos
+			] in
+			{ e with eexpr = TReturn(Some( loop ret_val )) }
 		| TVars vl ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
 				locals := v :: !locals;
@@ -911,6 +926,9 @@ let mk_function_context ctx cf =
 	in
 	let e = match cf.cf_expr with
 		| None -> None
+		| Some ({ eexpr = TFunction(tf) } as e) when returns_type_param ->
+			out_var := Some (fst (List.hd (List.rev tf.tf_args)));
+			Some (loop e)
 		| Some e -> Some (loop e)
 	in
 	{
