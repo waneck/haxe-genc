@@ -1190,6 +1190,11 @@ let generate_class ctx c =
 	let svars = DynArray.create () in
 	let methods = DynArray.create () in
 
+	let add_init e = match c.cl_init with
+		| None -> c.cl_init <- Some e
+		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
+	in
+
 	let check_dynamic cf = match cf.cf_kind with
 		| Method MethDynamic ->
 			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
@@ -1197,6 +1202,7 @@ let generate_class ctx c =
 			DynArray.add methods cf2;
 			cf.cf_expr <- None;
 			cf.cf_type <- ctx.con.t_pointer cf.cf_type;
+			add_init (Expr.mk_ccode ctx (Printf.sprintf "%s = %s" (full_field_name c cf) (full_field_name c cf2)));
 		| _ ->
 			()
 	in
@@ -1207,7 +1213,7 @@ let generate_class ctx c =
 		| Method m -> match cf.cf_type with
 			| TFun(args,ret) ->
 				cf.cf_type <- TFun(("this",false,monofy_class c) :: args, ret);
-				(* check_dynamic cf; *)
+				check_dynamic cf;
 				DynArray.add methods cf
 			| _ ->
 				assert false;
@@ -1215,7 +1221,7 @@ let generate_class ctx c =
 	List.iter (fun cf -> match cf.cf_kind with
 		| Var _ -> DynArray.add svars cf
 		| Method _ ->
-			(* check_dynamic cf; *)
+			check_dynamic cf;
 			DynArray.add methods cf
 	) c.cl_ordered_statics;
 
@@ -1257,11 +1263,6 @@ let generate_class ctx c =
 
 	spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types)));
 	newline ctx;
-
-	let add_init e = match c.cl_init with
-		| None -> c.cl_init <- Some e
-		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
-	in
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
