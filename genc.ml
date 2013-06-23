@@ -274,6 +274,10 @@ let infer_params ctx pos (original_args:((string * bool * t) list * t)) (applied
 				| t -> t
 		) monos
 
+let is_type_param ctx t = match follow t with
+	| TInst({ cl_kind = KTypeParameter _ },_) -> true
+	| _ -> false
+
 (** separate special behaviour from raw code handling *)
 let rec handle_special_call ctx e = match e.eexpr with
 	| TCall({eexpr = TLocal({v_name = "__trace"})},[e1]) ->
@@ -351,7 +355,28 @@ and mk_type_param ctx pos t =
 
 and generate_tparam_call ctx e ef e1 c cf static el =
 	(* FIXME: cf.cf_type may inherit the type parameters of a superclass *)
-	let params = infer_params ctx e.epos (get_fun cf.cf_type) (get_fun ef.etype) cf.cf_params true in
+	(* get type parameter-related function parameters *)
+	let original, oret = get_fun cf.cf_type in
+	let applied, aret = get_fun ef.etype in
+	(* since we've messed with cf_type, we need to restore it now *)
+	let ro = List.rev original in
+	let ra = List.rev applied in
+	(* take off __out__ var if there is one *)
+	let ro = match ro with
+		| _ :: ro when is_type_param ctx oret ->
+			ro
+		| _ -> ro
+	in
+	(* take off extra 'original' parameters *)
+	let rec loop ro ra acc = match ro, ra with
+		| o :: ro, _ :: ra -> loop ro ra (o :: acc)
+		| _ -> acc
+	in
+	let original = loop ro ra [] in
+	(* normalization complete now *)
+	let params = infer_params ctx e.epos (original,oret) (applied,aret) cf.cf_params true in
+
+	(* get complete parameter list *)
 	let el = (if static then [] else [e1]) @ List.map (mk_type_param ctx e.epos) params @ el in
 	add_class_dependency ctx c;
 	spr ctx (full_field_name c cf);
@@ -712,15 +737,28 @@ let mk_array_decl ctx el t p =
 	let ev = mk (TLocal v) v.v_type p in
 	mk (TCall(ev,el)) t p
 
-let is_type_param ctx t = match follow t with
-	| TInst({ cl_kind = KTypeParameter _ },_) -> true
-	| _ -> false
-
 (* since we change the functions' signatures to add 'this' and type parameters,
 we need a fuzzy map2 version which won't fail, and discard the remaining arguments *)
 let rec fuzzy_map2 f l1 l2 acc = match l1, l2 with
 	| v1 :: l1, v2 :: l2 -> fuzzy_map2 f l1 l2 ( (f v1 v2) :: acc )
 	| _ -> acc
+
+let function_has_type_parameter ctx t = match follow t with
+	| TFun(args,ret) -> is_type_param ctx ret || List.exists (fun (_,_,t) -> is_type_param ctx t) args
+	| _ -> false
+
+let mk_local v p =
+	{ eexpr = TLocal v; etype = v.v_type; epos = p }
+
+let mk_ref ctx p el =
+	{
+		eexpr = TCall(
+			{ eexpr = TLocal(alloc_var "__refpass" t_dynamic); etype = t_dynamic; epos = p },
+			el
+		);
+		etype = t_dynamic;
+		epos = p;
+	}
 
 let mk_function_context ctx cf =
 	let locals = ref [] in
@@ -750,31 +788,31 @@ let mk_function_context ctx cf =
 
 	let rec loop e = match e.eexpr with
     (** collect the temporary stack variables that need to be created so their address can be passed around *)
-		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el) when List.exists (fun (_,_,t) -> is_type_param ctx t) (fst (get_fun cf.cf_type)) ->
+		| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el) when function_has_type_parameter ctx ef.etype ->
 			let old_params = !cur_params in
 			let ef = loop ef in
 			let args, ret = get_fun cf.cf_type in
+			(* if return type is a type param, add new element to call params *)
+			let el = if is_type_param ctx ret then begin
+				let _, applied_ret = get_fun ef.etype in
+				let v = add_param applied_ret in
+				if is_type_param ctx applied_ret then
+					el @ [mk_local v e.epos] (* already a reference var *)
+				else
+					el @ [mk_ref ctx e.epos [mk_local v e.epos]]
+			end else
+				el
+			in
+
 			let el = fuzzy_map2 (fun (_,_,t) e -> match e.eexpr with
 				| _ when not (is_type_param ctx t) -> loop e
 				| TLocal _ when is_type_param ctx e.etype -> (* type params are already encoded as pointer-to-val *)
           loop e
         | TLocal _ ->
-          { e with
-            eexpr = TCall(
-              { eexpr = TLocal(alloc_var "__refpass" t_dynamic); etype = t_dynamic; epos = e.epos },
-              [loop e] (* locals are valid lvalues *)
-            );
-          }
+					mk_ref ctx e.epos [loop e]
 				| _ ->
 					let v = add_param e.etype in
-					{
-						eexpr = TCall(
-							{ eexpr = TLocal(alloc_var "__refpass" t_dynamic); etype = t_dynamic; epos = e.epos},
-							[{ eexpr = TLocal v; etype = v.v_type; epos = e.epos }; loop e]
-						);
-						etype = t_dynamic;
-						epos = e.epos
-					}
+					mk_ref ctx e.epos [mk_local v e.epos; loop e]
 			) (List.rev args) (List.rev el) []
 			in
 			cur_params := old_params;
