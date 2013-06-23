@@ -1624,22 +1624,18 @@ let generate_make_file con =
 	let relpath ctx path = path_to_file_path path in
 	let main_name = match con.com.main_class with Some path -> snd path | None -> "main" in
 	let ch = open_out_bin (con.com.file ^ "/Makefile") in
-	(* let f tctx = path_to_file_path tctx.type_path in *)
+  output_string ch ("OUT = " ^ main_name ^ "\n");
+  output_string ch ("all: $(OUT)\n");
   List.iter (fun ctx ->
     output_string ch (Printf.sprintf "%s.o: " (relpath ctx ctx.type_path));
-    PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.o " (relpath ctx path)) ) ctx.dependencies;
-    output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) -c %s.c\n\n" (relpath ctx ctx.type_path))
+    PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.h " (relpath ctx path)) ) ctx.dependencies;
+    output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) -c %s.c -o %s.o\n\n" (relpath ctx ctx.type_path) (relpath ctx ctx.type_path))
   ) con.generated_types;
-	output_string ch ("OUT = " ^ main_name ^ "\n");
-	output_string ch ("all: $(OUT)\n");
   output_string ch "OBJECTS = ";
-  List.iter (fun ctx -> output_string ch (Printf.sprintf "\"%s.o\" " (relpath ctx ctx.type_path))) con.generated_types;
+  List.iter (fun ctx -> output_string ch (Printf.sprintf "%s.o " (relpath ctx ctx.type_path))) con.generated_types;
   output_string ch "\n\n$(OUT): $(OBJECTS)";
-  output_string ch "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OBJECTS) -o $(OUT)\n";
-  output_string ch "\n\nclean:\n\t$(RM) $(TARGET)";
-	(* output_string ch (Printf.sprintf "CLASSES = %s\n" (String.concat " " (List.map f con.generated_types))); *)
-	(* output_string ch "build: $(CLASSES:=.c)\n"; *)
-	(* output_string ch "\t$(CC) -o $(OUT) $(CLASSES:=.c)\n"; *)
+  output_string ch "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OBJECTS) -o $(OUT) $(LDFLAGS)\n";
+  output_string ch "\n\nclean:\n\t$(RM) $(OUT) $(OBJECTS)";
 	close_out ch
 
 let generate_hxc_files con =
