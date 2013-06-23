@@ -116,6 +116,7 @@ let close_type_context ctx =
 	output_string ch_h "#include <glib.h>\n";
 	output_string ch_h "#include <setjmp.h>\n";
 	output_string ch_h "#include <stdio.h>\n";
+	output_string ch_h "#include <stdlib.h>\n";
 	output_string ch_h "#include <string.h>\n";
 	let pabs = get_full_path ctx.con.com.file in
 	PMap.iter (fun path b ->
@@ -888,7 +889,7 @@ let mk_function_context ctx cf =
 			{ e with eexpr = TReturn(Some( loop ret_val )) }
 		(* type parameter extra indirection handling *)
 		(* we need to handle the following cases: *)
-		(* - param -> param assign from non-local: copy *)
+		(* - param -> param assign: always copy *)
 		(* - param -> concrete cast/field use: dereference *)
 		(* - concrete -> param cast/field get/set: copy *)
 		(* - pointer array access -> pointer + typeref's size * index *)
@@ -987,7 +988,14 @@ let get_typeref_forward ctx path =
 
 let get_typeref_declaration ctx t =
 	let path = t_path t in
-	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s) }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t)
+	let nullval = if is_value_type ctx t then begin
+		print ctx "const %s %s__default = { 0 }; //default" (s_type ctx t) (path_to_name path);
+		newline ctx;
+		Printf.sprintf "&%s__default" (path_to_name path)
+	end else
+		"NULL"
+	in
+	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s), %s }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t) nullval
 
 let mk_stack_tp_init ctx t p =
 	{
@@ -1346,6 +1354,7 @@ let generate_type con mt = match mt with
 		let ctx = mk_type_context con en.e_path in
 		generate_enum ctx en;
 		close_type_context ctx;
+	| TAbstractDecl { a_path = [],"Void" } -> ()
 	| TAbstractDecl a ->
 		let ctx = mk_type_context con a.a_path in
 		ctx.buf <- ctx.buf_c;
