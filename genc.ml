@@ -222,6 +222,20 @@ let mk_type_context con path =
 let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
 let path_to_file_path (pack,name) = match pack with [] -> name | _ -> String.concat "/" pack ^ "/" ^ name
 
+let get_relative_path source target =
+	let rec loop pl1 pl2 acc = match pl1,pl2 with
+		| s1 :: pl1,[] ->
+			loop pl1 [] (".." :: acc)
+		| [],s2 :: pl2 ->
+			loop [] pl2 (s2 :: acc)
+		| s1 :: pl1,s2 :: pl2 ->
+			if s1 = s2 then loop pl1 pl2 acc
+			else (List.map (fun _ -> "..") (s1 :: pl1)) @ [s2] @ pl2
+		| [],[] ->
+			List.rev acc
+	in
+	loop (fst source) (fst target) []
+
 let close_type_context ctx =
 	ctx.con.generated_types <- ctx :: ctx.con.generated_types;
 	let buf = Buffer.create (Buffer.length ctx.buf_h) in
@@ -234,11 +248,11 @@ let close_type_context ctx =
 	spr "#include <stdlib.h>\n";
 	spr "#include <string.h>\n";
 
-	let pabs = get_full_path ctx.con.com.file in
+	let relpath path = path_to_file_path ((get_relative_path ctx.type_path path),snd path) in
 	PMap.iter (fun path b ->
 		let name = path_to_name path in
 		if b then begin
-			if path = (["hxc"],"AnonTypes") || path = (["c";"hxc"],"Exception") then spr (Printf.sprintf "#include \"%s/%s.h\"\n" pabs (path_to_file_path path))
+			if path = (["hxc"],"AnonTypes") || path = (["c";"hxc"],"Exception") then spr (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
 			else spr (Printf.sprintf "typedef struct %s %s;\n" name name);
 		end else spr (Printf.sprintf "#include <%s.h>\n" (path_to_file_path path))
 	) ctx.dependencies;
@@ -263,7 +277,7 @@ let close_type_context ctx =
 		let buf = Buffer.create (Buffer.length ctx.buf_c) in
 		Buffer.add_string buf ("#include \"" ^ (snd ctx.type_path) ^ ".h\"\n");
 		PMap.iter (fun path b ->
-			if b then Buffer.add_string buf (Printf.sprintf "#include \"%s/%s.h\"\n" pabs (path_to_file_path path))
+			if b then Buffer.add_string buf (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
 		) ctx.dependencies;
 		Buffer.add_string buf sc;
 		write_if_changed (ctx.file_path_no_ext ^ ".c") (Buffer.contents buf);
