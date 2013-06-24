@@ -748,6 +748,12 @@ and generate_expr ctx e = match e.eexpr with
 		b();
 		newline ctx;
 		spr ctx "}";
+	| TBinop((OpEq | OpNotEq) as op,e1,e2) when (match follow e1.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
+		spr ctx "strcmp(";
+		generate_expr ctx e1;
+		spr ctx ",";
+		generate_expr ctx e2;
+		print ctx ") %s 0" (if op = OpEq then "==" else "!=")
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
 		print ctx " %s " (s_binop op);
