@@ -579,13 +579,6 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx "[";
 		generate_expr ctx e2;
 		spr ctx "]"
-	| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, v) ->
-		generate_expr ctx e1;
-		spr ctx "[";
-		generate_expr ctx e2;
-		spr ctx "]";
-		print ctx " %s " (s_binop op);
-		generate_expr ctx v
 	| TMeta( (Meta.Comma,_,_), { eexpr = TBlock(el) } ) when el <> [] ->
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
@@ -678,10 +671,6 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx "return (";
 		generate_expr ctx e1;
 		spr ctx ")"
-	| TBinop(OpAssign, e1, e2) ->
-		generate_expr ctx e1;
-		spr ctx " = ";
-		generate_expr ctx e2;
 	| TVars(vl) ->
 		let f (v,eo) =
 			print ctx "%s %s" (s_type ctx v.v_type) v.v_name;
@@ -1633,9 +1622,9 @@ let generate_make_file con =
 	output_string ch ("endif\n");
 	output_string ch ("all: $(OUT)\n");
 	List.iter (fun ctx ->
-	output_string ch (Printf.sprintf "%s.o: " (relpath ctx ctx.type_path));
-	PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.h " (relpath ctx path)) ) ctx.dependencies;
-	output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OUTFLAG)%s.o -c %s.c\n\n" (relpath ctx ctx.type_path) (relpath ctx ctx.type_path))
+		output_string ch (Printf.sprintf "%s.o: " (relpath ctx ctx.type_path));
+		PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.h " (relpath ctx path)) ) ctx.dependencies;
+		output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OUTFLAG)%s.o -c %s.c\n\n" (relpath ctx ctx.type_path) (relpath ctx ctx.type_path))
 	) con.generated_types;
 	output_string ch "OBJECTS = ";
 	List.iter (fun ctx -> output_string ch (Printf.sprintf "%s.o " (relpath ctx ctx.type_path))) con.generated_types;
