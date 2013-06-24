@@ -1136,7 +1136,7 @@ let mk_function_context ctx cf =
 		loop_stack = [];
 	}
 
-let generate_function_header ctx c cf =
+let generate_function_header ctx c cf stat =
 	let args,ret,s = match follow cf.cf_type with
 		| TFun(args,ret) -> args,ret,full_field_name c cf
 		| TAbstract({a_path = ["c"],"Pointer"},[t]) ->
@@ -1146,7 +1146,9 @@ let generate_function_header ctx c cf =
 			end
 		| _ -> assert false
 	in
-	print ctx "%s %s(%s)" (s_type ctx ret) s (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args))
+	let sargs = List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args in
+	let sargs = if stat then sargs else ((s_type ctx (monofy_class c)) ^ " this") :: sargs in
+	print ctx "%s %s(%s)" (s_type ctx ret) s (String.concat "," sargs)
 
 let get_typeref_forward ctx path =
 	Printf.sprintf "extern const typeref %s__typeref" (path_to_name path)
@@ -1161,9 +1163,9 @@ let generate_typedef_declaration ctx t =
 	let nullval = Printf.sprintf "&%s__default" (path_to_name path) in
 	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s), %s }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t) nullval
 
-let generate_method ctx c cf =
+let generate_method ctx c cf stat =
 	ctx.fctx <- mk_function_context ctx cf;
-	generate_function_header ctx c cf;
+	generate_function_header ctx c cf stat;
 	match ctx.fctx.expr with
 	| None -> newline ctx
 	| Some {eexpr = TFunction ({tf_expr = {eexpr = TBlock el}; tf_type = t})} ->
@@ -1252,10 +1254,10 @@ let generate_class ctx c =
 		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
 	in
 
-	let check_dynamic cf = match cf.cf_kind with
+	let check_dynamic cf stat = match cf.cf_kind with
 		| Method MethDynamic ->
 			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
-			DynArray.add methods cf2;
+			DynArray.add methods (cf2,stat);
 			cf.cf_expr <- None;
 			cf.cf_type <- ctx.con.t_pointer cf.cf_type;
 			add_init (Expr.mk_ccode ctx (Printf.sprintf "%s = %s" (full_field_name c cf) (full_field_name c cf2)));
@@ -1268,17 +1270,16 @@ let generate_class ctx c =
 		| Var _ -> DynArray.add vars cf
 		| Method m -> match cf.cf_type with
 			| TFun(args,ret) ->
-				cf.cf_type <- TFun(("this",false,monofy_class c) :: args, ret);
-				check_dynamic cf;
-				DynArray.add methods cf
+				check_dynamic cf false;
+				DynArray.add methods (cf,false)
 			| _ ->
 				assert false;
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with
 		| Var _ -> DynArray.add svars cf
 		| Method _ ->
-			check_dynamic cf;
-			DynArray.add methods cf
+			check_dynamic cf true;
+			DynArray.add methods (cf,true)
 	) c.cl_ordered_statics;
 
 	(* add constructor as function *)
@@ -1311,7 +1312,7 @@ let generate_class ctx c =
 				in
 				cf.cf_expr <- Some e;
 				cf.cf_type <- TFun(args, monofy_class c);
-				DynArray.add methods cf
+				DynArray.add methods (cf,true)
 			| _ -> ()
 	end;
 
@@ -1356,18 +1357,18 @@ let generate_class ctx c =
 				tf_expr = mk_block e;
 			} in
 			f.cf_expr <- Some (mk (TFunction tf) t c.cl_pos);
-			DynArray.add methods f
+			DynArray.add methods (f,true)
 	end;
 
 	(* generate function implementations *)
 	if not (DynArray.empty methods) then begin
-		DynArray.iter (fun cf ->
+		DynArray.iter (fun (cf,stat) ->
 			let old_tparams = ctx.con.type_parameters in
 			let params = change_parameter_function ctx cf [] in
 			let params = List.map (fun (p,v) -> p,mk (TLocal v) v.v_type cf.cf_pos) params in
 
 			ctx.con.type_parameters <- params @ old_tparams;
-			generate_method ctx c cf;
+			generate_method ctx c cf stat;
 			ctx.con.type_parameters <- old_tparams
 		) methods;
 	end;
@@ -1414,8 +1415,8 @@ let generate_class ctx c =
 	(* generate forward declarations of functions *)
 	if not (DynArray.empty methods) then begin
 		spr ctx "// forward declarations\n";
-		DynArray.iter (fun cf ->
-			generate_function_header ctx c cf;
+		DynArray.iter (fun (cf,stat) ->
+			generate_function_header ctx c cf stat;
 			newline ctx;
 		) methods;
 	end;
