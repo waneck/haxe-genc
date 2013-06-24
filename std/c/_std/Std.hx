@@ -19,9 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
-
-import c.hxc.Exception;
-import c.TypeReference;
+import c.Boot;
 
 @:coreApi class Std {
 	public static function is( v : Dynamic, t : Dynamic ) : Bool {
@@ -47,7 +45,7 @@ import c.TypeReference;
 	public static function random( x : Int ) : Int {
 		return 0;
 	}
-	
+
 	public static function instance<T>(v:{}, c:Class<T>):T {
 		return cast v;
 	}

@@ -138,7 +138,7 @@ module Expr = struct
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
 				[
-					{ eexpr = TConst (TString "_alloca"); etype = t_dynamic; epos = p };
+					{ eexpr = TConst (TString "ALLOCA"); etype = t_dynamic; epos = p };
 					{
 						eexpr = TCall(
 							{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
@@ -1384,6 +1384,13 @@ let generate_class ctx c =
 
 	ctx.buf <- ctx.buf_h;
 
+	(* generate header code *)
+	List.iter (function
+		| Meta.HeaderCode,[(EConst(String s),_)],_ ->
+			spr ctx s
+		| _ -> ()
+	) c.cl_meta;
+
 	(* generate member struct *)
 	if not (DynArray.empty vars) then begin
 		spr ctx "// member var structure\n";
@@ -1529,10 +1536,12 @@ let generate_enum ctx en =
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
 		let ctx = mk_type_context con c.cl_path in
+		if c.cl_path <> ([],"hxc") then add_dependency ctx ([],"hxc");
 		generate_class ctx c;
 		close_type_context ctx;
 	| TEnumDecl en when not en.e_extern ->
 		let ctx = mk_type_context con en.e_path in
+		add_dependency ctx ([],"hxc");
 		generate_enum ctx en;
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()
@@ -1629,7 +1638,7 @@ let generate_make_file con =
 	output_string ch ("endif\n");
 	output_string ch ("all: $(OUT)\n");
 	List.iter (fun ctx ->
-		output_string ch (Printf.sprintf "%s.o: " (relpath ctx ctx.type_path));
+		output_string ch (Printf.sprintf "%s.o: %s.c " (relpath ctx ctx.type_path) (relpath ctx ctx.type_path));
 		PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.h " (relpath ctx path)) ) ctx.dependencies;
 		output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OUTFLAG)%s.o -c %s.c\n\n" (relpath ctx ctx.type_path) (relpath ctx ctx.type_path))
 	) con.generated_types;
