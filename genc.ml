@@ -20,7 +20,6 @@ open Type
 type function_context = {
 	field : tclass_field;
 	expr : texpr option;
-	mutable local_vars : tvar list;
 	mutable loop_stack : string option list;
 }
 
@@ -48,7 +47,6 @@ and type_context = {
 	buf_c : Buffer.t;
 	buf_h : Buffer.t;
 	type_path : path;
-	mtype : module_type option;
 	mutable buf : Buffer.t;
 	mutable tabs : string;
 	mutable fctx : function_context;
@@ -58,8 +56,8 @@ and type_context = {
 and gen_context = {
 	gcom : Common.context;
 	gcon : context;
-	mutable gctx : type_context;
-	mutable gfctx : function_context;
+	mutable gfield : tclass_field;
+	mutable mtype : module_type option;
 	(* call this function instead of Type.map_expr () *)
 	mutable map : texpr -> texpr;
 	(* tvar_decl -> is_temp -> unit; declares a variable on the current block *)
@@ -86,7 +84,7 @@ module Expr = struct
 		let mk_local v p =
 			{ eexpr = TLocal v; etype = v.v_type; epos = p }
 
-	let mk_ref ctx p e =
+	let mk_ref con p e =
 		{
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__adressof" t_dynamic); etype = t_dynamic; epos = p },
@@ -96,9 +94,9 @@ module Expr = struct
 			epos = p;
 		}
 
-	let mk_comma_block ctx p el =
+	let mk_comma_block con p el =
 		let t = match List.rev el with
-			| [] -> ctx.con.com.basic.tvoid
+			| [] -> con.com.basic.tvoid
 			| hd :: _ -> hd.etype
 		in
 		{
@@ -112,20 +110,20 @@ module Expr = struct
 			epos = p;
 		}
 
-	let mk_assign_ref ctx p local value =
-		mk_comma_block ctx p [
+	let mk_assign_ref con p local value =
+		mk_comma_block con p [
 			{
 				eexpr = TBinop(Ast.OpAssign, local, value);
 				etype = value.etype;
 				epos = p;
 			};
-			mk_ref ctx p local
+			mk_ref con p local
 		]
 
 	let mk_cast t e =
 		{ e with eexpr = TCast(e, None); etype = t }
 
-	let mk_deref ctx p e =
+	let mk_deref con p e =
 		{
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__deref" t_dynamic); etype = t_dynamic; epos = p },
@@ -135,7 +133,7 @@ module Expr = struct
 			epos = p;
 		}
 
-	let mk_call ctx p name args =
+	let mk_call con p name args =
 		{
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
@@ -145,25 +143,25 @@ module Expr = struct
 			epos = p;
 		}
 
-	let mk_sizeof ctx p e =
+	let mk_sizeof con p e =
 		{
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
 				[e]
 			);
-			etype = ctx.con.com.basic.tint;
+			etype = con.com.basic.tint;
 			epos = p;
 		}
 
-	let mk_type_param ctx pos t =
-		let t = ctx.con.t_typeref t in
+	let mk_type_param con pos t =
+		let t = con.t_typeref t in
 		let c,p = match follow t with
 			| TInst(c,p) -> c,p
 			| _ -> assert false
 		in
 		{ eexpr = TNew(c,p,[]); etype = t; epos = pos }
 
-	let mk_stack_tp_init ctx t p =
+	let mk_stack_tp_init con t p =
 		{
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
@@ -172,9 +170,9 @@ module Expr = struct
 					{
 						eexpr = TCall(
 							{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
-							[mk_type_param ctx p t]
+							[mk_type_param con p t]
 						);
-						etype = ctx.con.com.basic.tint;
+						etype = con.com.basic.tint;
 						epos = p;
 					}
 				]
@@ -207,12 +205,12 @@ module Expr = struct
 		}
 end
 
+type t_dependency =
+	| DAfter of float
+	| DBefore of float
+
 module Filters = struct
 	exception ImpossibleDependency of string
-
-	type t_dependency =
-		| DAfter of float
-		| DBefore of float
 
 	let max_dep = 10000.0
 	let min_dep = - (10000.0)
@@ -298,7 +296,6 @@ module Filters = struct
 		);
 
 
-		(* let filters = List.map (fun f -> f gen) gen.gctx.con.filters in *)
 		let ret = List.fold_left (fun e (_,_,f) ->
 			let run = f gen in
 			let process_next_block = ref true in
@@ -327,9 +324,15 @@ module Filters = struct
 						| _ -> assert false
 					in
 					let ret = match !declared_vars with
-						| [] ->
-							e
+						| [] -> e
 						| vars ->
+							let vars = List.map (function
+								| (v,None) -> (match follow v.v_type with
+									| TInst({ cl_kind = KTypeParameter _ },_) ->
+										v, Some(Expr.mk_stack_tp_init gen.gcon v.v_type e.epos)
+									| _ -> v,None)
+								| var -> var
+							) vars in
 							{ e with eexpr = TBlock({ eexpr = TVars(vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el) }
 					in
 					temps_in_scope := old_scope;
@@ -346,12 +349,47 @@ module Filters = struct
 			let ret = map e in
 			gen.map <- last_map;
 			ret
-		) e gen.gctx.con.filters in
+		) e gen.gcon.filters in
 		gen.declare_var <- old_declare;
 		gen.get_temp <- old_get;
 		gen.free_temp <- old_free;
 		gen.force_temp <- old_force;
 		ret
+
+	let mk_gen_context con =
+		{
+			gcom = con.com;
+			gcon = con;
+			gfield = null_field;
+			mtype = None;
+			map = (function _ -> assert false);
+			declare_var = (fun _ _ -> assert false);
+			get_temp = (fun _ -> assert false);
+			free_temp = (fun _ -> assert false);
+			force_temp = (fun _ -> assert false);
+			delays = [];
+		}
+
+	let run_filters_field gen cf =
+		gen.gfield <- cf;
+		match cf.cf_expr with
+		| None -> ()
+		| Some e ->
+			cf.cf_expr <- Some (run_filters gen e)
+
+	let run_filters_types con =
+		let gen = mk_gen_context con in
+		List.iter (fun md -> match md with
+			| TClassDecl c ->
+				gen.mtype <- Some md;
+				Option.may (run_filters_field gen) c.cl_constructor;
+				List.iter (run_filters_field gen) c.cl_ordered_fields;
+				List.iter (run_filters_field gen) c.cl_ordered_statics;
+				gen.gfield <- null_field;
+				c.cl_init <- Option.map (run_filters gen) c.cl_init
+			| _ -> () (* TODO? *)
+		) con.com.types;
+		gen
 
 end
 
@@ -389,31 +427,31 @@ module TypeParams = struct
 		);
 		monos
 
-	let is_type_param ctx t = match follow t with
+	let is_type_param con t = match follow t with
 		| TInst({ cl_kind = KTypeParameter _ },_) -> true
 		| _ -> false
 
-	let function_has_type_parameter ctx t = match follow t with
-		| TFun(args,ret) -> is_type_param ctx ret || List.exists (fun (_,_,t) -> is_type_param ctx t) args
+	let function_has_type_parameter con t = match follow t with
+		| TFun(args,ret) -> is_type_param con ret || List.exists (fun (_,_,t) -> is_type_param con t) args
 		| _ -> false
 
-	let is_field_type_param ctx e = is_type_param ctx e.etype || match e.eexpr with
-		| TField(_, (FInstance(_,cf) | FStatic(_,cf))) when is_type_param ctx cf.cf_type -> true
+	let is_field_type_param con e = is_type_param con e.etype || match e.eexpr with
+		| TField(_, (FInstance(_,cf) | FStatic(_,cf))) when is_type_param con cf.cf_type -> true
 		| _ -> false
 
 	let get_param_args gen e cf ef = match cf.cf_params with
 		| [] -> []
 		| _ ->
 			let params = infer_params gen e.epos cf.cf_type ef.etype cf.cf_params in
-			List.map (Expr.mk_type_param gen.gctx e.epos) params
+			List.map (Expr.mk_type_param gen.gcon e.epos) params
 
 	let get_fun t = match follow t with | TFun(r1,r2) -> (r1,r2) | _ -> assert false
 
-	let type_parameter_expr ctx p path = try
-		PMap.find path ctx.con.type_parameters
+	let type_parameter_expr con p path = try
+		PMap.find path con.type_parameters
 	with | Not_found ->
-		ctx.con.com.error ("Cannot find type parameter called " ^ s_type_path path) p;
-		assert false
+		con.com.error ("Cannot find type parameter called " ^ s_type_path path) p;
+		null t_dynamic p
 
 	let type_param_name t =
 		let path = Expr.t_path t in
@@ -443,24 +481,23 @@ module TypeParams = struct
 
 	(** change a function to receive its type parameters as arguments. *)
 	let change_parameter_function gen cf =
-		let ctx = gen.gctx in
 		let tf_args, types, is_ctor = match cf.cf_name, cf.cf_params with
 			| _, _ :: _ ->
-				List.map (fun (_,t) -> alloc_var (type_param_name t) (ctx.con.t_typeref t),None) cf.cf_params, List.map snd cf.cf_params, false
+				List.map (fun (_,t) -> alloc_var (type_param_name t) (gen.gcon.t_typeref t),None) cf.cf_params, List.map snd cf.cf_params, false
 			(* constructors have special treatment *)
-			| "new", _ -> (match gen.gctx.mtype with
+			| "new", _ -> (match gen.mtype with
 				| Some (TClassDecl c) ->
 					List.map (fun (_,t) -> alloc_var (type_param_name t) t, None) c.cl_types, List.map snd c.cl_types, true
 				| _ -> [],[],false)
 			| _ -> [],[],false
 		in
 		match tf_args, cf.cf_type with
-		| [], TFun(_,ret) when not (is_type_param ctx ret) ->
+		| [], TFun(_,ret) when not (is_type_param gen.gcon ret) ->
 			None
 		| _, TFun(args,ret) ->
 			(* if return type is a type parameter, add a reference to stack space as an argument as well *)
 			let end_arg =
-				if is_type_param ctx ret then [alloc_var "__out__" ret,None] else []
+				if is_type_param gen.gcon ret then [alloc_var "__out__" ret,None] else []
 			in
 			if not is_ctor then
 				List.iter2 (fun t (v,_) ->
@@ -475,7 +512,7 @@ module TypeParams = struct
 						List.map (fun (v,_) -> {
 							eexpr = TBinop(
 								Ast.OpAssign,
-								type_parameter_expr gen.gctx cf.cf_pos (Expr.t_path t),
+								type_parameter_expr gen.gcon cf.cf_pos (Expr.t_path v.v_type),
 								{ eexpr = TLocal v; etype = v.v_type; epos = cf.cf_pos });
 							etype = v.v_type;
 							epos = cf.cf_pos
@@ -502,11 +539,12 @@ module TypeParams = struct
 		(* FIXME: handle conflicts when no cf_expr implementation is there *)
 		| _ -> None
 
-	let mk_filter gen =
-		let ctx = gen.gctx in
-		let cf = gen.gfctx.field in
+	let filter gen = match gen.mtype with
+	| Some (TClassDecl { cl_path = [],"typeref" }) -> (fun e -> e)
+	| _ ->
+		let cf = gen.gfield in
 		(* check current class type parameter *)
-		(match gen.gctx.mtype with
+		(match gen.mtype with
 		| Some (TClassDecl ({ cl_types = (_,t) :: _ } as c)) when not (PMap.mem (Expr.t_path t) gen.gcon.type_parameters) ->
 			cls_parameter_vars gen c
 		| _ -> ());
@@ -515,50 +553,50 @@ module TypeParams = struct
 		(* needed vars for this filter *)
 		function e -> match e.eexpr with
 			| TNew(c,(_::_ as tl),el) ->
-				let el = List.map (Expr.mk_type_param ctx e.epos) tl @ (List.map gen.map el) in
+				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
-			when function_has_type_parameter ctx cf.cf_type ->
+			when function_has_type_parameter gen.gcon cf.cf_type ->
 				let temps = ref [] in
 				let ef = gen.map ef in
 				let args, ret = get_fun cf.cf_type in
 				(* if return type is a type param, add new element to call params *)
 				let _, applied_ret = get_fun e1.etype in
-				let args, el_last = if is_type_param ctx ret then begin
+				let args, el_last = if is_type_param gen.gcon ret then begin
 					let v = gen.get_temp applied_ret in
 					temps := v :: !temps;
-					if is_type_param ctx applied_ret then
+					if is_type_param gen.gcon applied_ret then
 						args, [Expr.mk_local v e.epos] (* already a reference var *)
 					else
-						args, [Expr.mk_ref ctx e.epos (Expr.mk_local v e.epos)]
+						args, [Expr.mk_ref gen.gcon e.epos (Expr.mk_local v e.epos)]
 				end else
 					args, []
 				in
 
 				let el = List.map2 (fun e (_,_,t) -> match e.eexpr with
-					| _ when not (is_type_param ctx t) -> gen.map e
-					| TLocal _ when is_type_param ctx e.etype -> (* type params are already encoded as pointer-to-val *)
+					| _ when not (is_type_param gen.gcon t) -> gen.map e
+					| TLocal _ when is_type_param gen.gcon e.etype -> (* type params are already encoded as pointer-to-val *)
 						gen.map e
 					| TLocal _ ->
-						Expr.mk_ref ctx e.epos (gen.map e)
+						Expr.mk_ref gen.gcon e.epos (gen.map e)
 					| _ ->
 						let v = gen.get_temp e.etype in
 						temps := v :: !temps;
-						gen.map (Expr.mk_assign_ref ctx e.epos (Expr.mk_local v e.epos) e)
+						gen.map (Expr.mk_assign_ref gen.gcon e.epos (Expr.mk_local v e.epos) e)
 				) el args
 				in
 				List.iter (gen.free_temp) !temps;
 				let el = el @ get_param_args gen e cf ef in
 				let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 				(* if type parameter is being cast into a concrete one, we need to dereference it *)
-				if is_type_param ctx ret && not (is_type_param ctx applied_ret) then
-					Expr.mk_deref ctx e.epos (Expr.mk_cast (ctx.con.t_pointer applied_ret) eret)
+				if is_type_param gen.gcon ret && not (is_type_param gen.gcon applied_ret) then
+					Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.t_pointer applied_ret) eret)
 				else
 					eret
 			| TReturn (Some er) when Option.is_some out_var ->
 				(* when returning type parameter values, instead of just returning a value, we must first set the out var *)
 				let out_var = Option.get out_var in
-				let ret_val = Expr.mk_comma_block ctx e.epos [
+				let ret_val = Expr.mk_comma_block gen.gcon e.epos [
 					{
 						eexpr = TBinop(Ast.OpAssign, Expr.mk_local out_var e.epos, gen.map er);
 						etype = er.etype;
@@ -572,8 +610,8 @@ module TypeParams = struct
 			(* - param -> param assign: always copy *)
 			(* - param -> concrete cast/field use: dereference *)
 			(* - concrete -> param cast/field get/set: copy *)
-			| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), e1, e2 ) when is_field_type_param ctx e1 || is_field_type_param ctx e2 ->
-				if is_field_type_param ctx e1 && is_field_type_param ctx e2 then begin
+			| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), e1, e2 ) when is_field_type_param gen.gcon e1 || is_field_type_param gen.gcon e2 ->
+				if is_field_type_param gen.gcon e1 && is_field_type_param gen.gcon e2 then begin
 					if op <> Ast.OpAssign then assert false; (* FIXME: AssignOp should become two operations; should be very rare though *)
 					let temps = ref [] in
 					let local, wrap = match e1.eexpr with
@@ -583,25 +621,25 @@ module TypeParams = struct
 							temps := v :: !temps;
 							Expr.mk_local v e1.epos, (fun e -> { e with eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, e) })
 					in
-					let ret = Expr.mk_comma_block ctx e.epos [
-						(Expr.mk_call ctx e.epos "memcpy" [ wrap(gen.map e1); gen.map e2; Expr.mk_sizeof ctx e.epos (Expr.mk_type_param ctx e.epos e1.etype) ]);
+					let ret = Expr.mk_comma_block gen.gcon e.epos [
+						(Expr.mk_call gen.gcon e.epos "memcpy" [ wrap(gen.map e1); gen.map e2; Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos e1.etype) ]);
 						local
 					] in
 
 					List.iter (gen.free_temp) !temps;
 					ret
-				end else if is_field_type_param ctx e1 then
-					{ e with eexpr = TBinop(op, Expr.mk_deref ctx e.epos (Expr.mk_cast (ctx.con.t_pointer e2.etype) (gen.map e1)), gen.map e2) }
+				end else if is_field_type_param gen.gcon e1 then
+					{ e with eexpr = TBinop(op, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.t_pointer e2.etype) (gen.map e1)), gen.map e2) }
 				else
-					{ e with eexpr = TBinop(op, gen.map e1, Expr.mk_deref ctx e.epos (Expr.mk_cast (ctx.con.t_pointer e1.etype) (gen.map e2))) }
+					{ e with eexpr = TBinop(op, gen.map e1, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.t_pointer e1.etype) (gen.map e2))) }
 			(* - pointer array access -> pointer + typeref's size * index *)
 			| TArray(e1, idx) -> (match follow e1.etype with
 				| TAbstract({a_path=["c"], "Pointer"},[t])
-				| TInst({cl_path=["c"], "_PointerR"},[t]) when is_type_param ctx t ->
+				| TInst({cl_path=["c"], "_PointerR"},[t]) when is_type_param gen.gcon t ->
 					{ e with
 						eexpr = TBinop(
 							Ast.OpAdd, gen.map e1,
-							{ idx with eexpr = TBinop(Ast.OpMult, gen.map idx, Expr.mk_sizeof ctx e.epos (Expr.mk_type_param ctx e.epos t)) }
+							{ idx with eexpr = TBinop(Ast.OpMult, gen.map idx, Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos t)) }
 						);
 					}
 				| TInst(c,p) -> (try
@@ -619,7 +657,75 @@ module TypeParams = struct
 				with | Not_found ->
 					Type.map_expr gen.map e)
 			| _ -> Type.map_expr gen.map e
+
+	let configure con =
+		Filters.add_filter con name priority filter
+
 end
+
+(** VarDeclarations **)
+(**
+	this filter will take all out-of-place TVars declarations and add to the beginning of each block
+	TPatMatch has some var names sanitized
+**)
+module VarDeclarations = struct
+
+	let name = "var_declarations"
+
+	let priority = Filters.solve_deps name [DBefore TypeParams.priority]
+
+	let filter gen = function e ->
+		match e.eexpr with
+		| TMeta( (Meta.Comma,a,p), ({ eexpr = TBlock(el) } as block) ) when el <> [] ->
+			{ e with eexpr = TMeta( (Meta.Comma,a,p), { block with eexpr = TBlock(List.map gen.map el) }) }
+		| TBlock(el) ->
+			let first = ref true in
+			let el = List.map (fun e -> match e.eexpr with
+				| TVars(v) when !first ->
+					e
+				| _ ->
+					first := false;
+					gen.map e
+			) el in
+			{ e with eexpr = TBlock(el) }
+		| TVars tvars ->
+			let el = ExtList.List.filter_map (fun (v,eo) ->
+				gen.declare_var (v,None) false;
+				match eo with
+				| None -> None
+				| Some e -> Some { eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, gen.map e); etype = e.etype; epos = e.epos }
+			) tvars in
+			(match el with
+			| [e] -> e
+			| _ -> Expr.mk_comma_block gen.gcon e.epos el)
+		| TPatMatch dt ->
+ 			let rec dtl d = match d with
+				| DTGoto _ | DTExpr _ ->
+					()
+				| DTGuard(_,dt1,dt2) ->
+					dtl dt1;
+					(match dt2 with None -> () | Some dt -> dtl dt)
+				| DTSwitch(_,cl) ->
+					List.iter (fun (_,dt) -> dtl dt) cl
+				| DTBind(bl,dt) ->
+					List.iter (fun ((v,_),_) ->
+						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
+						gen.declare_var (v,None) false;
+					) bl;
+					dtl dt
+			in
+			Array.iter dtl dt.dt_dt_lookup;
+			List.iter (fun (v,_) ->
+				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
+				gen.declare_var (v,None) false
+			) dt.dt_var_init;
+			Type.map_expr gen.map e
+		| _ -> Type.map_expr gen.map e
+
+	let configure con =
+		Filters.add_filter con name priority filter
+end
+
 
 (* Output and context *)
 
@@ -648,7 +754,7 @@ let open_block ctx =
 	ctx.tabs <- "\t" ^ ctx.tabs;
 	(fun() -> ctx.tabs <- oldt)
 
-let mk_type_context con path mt =
+let mk_type_context con path =
 	let rec create acc = function
 		| [] -> ()
 		| d :: l ->
@@ -667,10 +773,8 @@ let mk_type_context con path mt =
 		buf_c = buf_c;
 		buf_h = buf_h;
 		tabs = "";
-		mtype = mt;
 		type_path = path;
 		fctx = {
-			local_vars = [];
 			field = null_field;
 			expr = None;
 			loop_stack = [];
@@ -928,11 +1032,6 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 			spr ctx "++"
 		| _ -> assert false);
 		spr ctx ")";
-	(* TODELETE *)
-	(* | TField(ef,FInstance(c,({cf_params = _::_} as cf))),el -> *)
-	(* 	generate_tparam_call ctx e e1 ef c cf false el; *)
-	(* | TField(ef,FStatic(c,({cf_params = _::_} as cf))),el -> *)
-	(* 	generate_tparam_call ctx e e1 ef c cf true el; *)
 	| TField(e1,FInstance(c,cf)),el ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
@@ -952,28 +1051,6 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")"
-(* TODELETE *)
-(* and generate_tparam_call ctx e ef e1 c cf static el = *)
-(* 	(* FIXME: cf.cf_type may inherit the type parameters of a superclass *) *)
-(* 	(* get type parameter-related function parameters *) *)
-(* 	let original, oret = get_fun cf.cf_type in *)
-(* 	let applied, aret = get_fun ef.etype in *)
-(* 	(* since we've messed with cf_type, we need to restore it now *) *)
-(* 	(* take off extra 'original' parameters *) *)
-(* 	let rec loop ro ra acc = match ro, ra with *)
-(* 		| o :: ro, _ :: ra -> loop ro ra (o :: acc) *)
-(* 		| _ -> acc *)
-(* 	in *)
-(* 	let original = loop (List.rev original) applied [] in *)
-(* 	(* normalization complete now *) *)
-(* 	let params = infer_params ctx e.epos (original,oret) (applied,aret) cf.cf_params true in *)
-(* 	(* get complete parameter list *) *)
-(* 	let el = (if static then [] else [e1]) @ List.map (Expr.mk_type_param ctx e.epos) params @ el in *)
-(* 	add_class_dependency ctx c; *)
-(* 	spr ctx (full_field_name c cf); *)
-(* 	spr ctx "("; *)
-(* 	concat ctx "," (generate_expr ctx) el; *)
-(* 	spr ctx ")" *)
 
 and generate_expr ctx e = match e.eexpr with
 	| TArray(e1, e2) ->
@@ -1004,8 +1081,8 @@ and generate_expr ctx e = match e.eexpr with
 		print ctx "%ld" i
 	| TConst(TFloat s) ->
 		print ctx "%s" s
-	| TConst TNull when TypeParams.is_type_param ctx e.etype ->
-		generate_expr ctx (Expr.mk_type_param ctx e.epos e.etype);
+	| TConst TNull when TypeParams.is_type_param ctx.con e.etype ->
+		generate_expr ctx (Expr.mk_type_param ctx.con e.epos e.etype);
 		spr ctx "->nullval"
 	| TConst(TNull) ->
 		spr ctx "NULL"
@@ -1052,7 +1129,7 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx ")";
 	| TNew({cl_path = [],"typeref"},[p],[]) -> (match follow p with
 		| TInst(({cl_kind = KTypeParameter _} as c),_) ->
-			generate_expr ctx (TypeParams.type_parameter_expr ctx e.epos c.cl_path)
+			generate_expr ctx (TypeParams.type_parameter_expr ctx.con e.epos c.cl_path)
 		| _ ->
 			let path = Expr.t_path p in
 			add_type_dependency ctx p;
@@ -1119,6 +1196,7 @@ and generate_expr ctx e = match e.eexpr with
 		generate_expr ctx e1;
 		spr ctx "{";
 		let generate_case_expr e =
+			spr ctx "{";
 			let b = open_block ctx in
 			List.iter (fun e ->
 				newline ctx;
@@ -1127,6 +1205,9 @@ and generate_expr ctx e = match e.eexpr with
 			newline ctx;
 			spr ctx "break";
 			b();
+			newline ctx;
+			spr ctx "}";
+			newline ctx;
 		in
 		let b = open_block ctx in
 		newline ctx;
@@ -1270,7 +1351,7 @@ and generate_expr ctx e = match e.eexpr with
 
 let mk_array_decl ctx el t p =
 	let ts, eparam = match follow t with
-		| TInst(_,[t]) -> s_type ctx t, Expr.mk_type_param ctx p t
+		| TInst(_,[t]) -> s_type ctx t, Expr.mk_type_param ctx.con p t
 		| _ -> assert false
 	in
 	let name = "_hx_func_" ^ (string_of_int ctx.con.num_temp_funcs) in
@@ -1302,28 +1383,13 @@ let mk_array_decl ctx el t p =
 (*
 	This function applies some general transformations.
 
-	- locals are collected
-	- TVars are replaced by assignments
 	- TArrayDecl introduces an init function which is TCalled
 	- TTry is replaced with a TSwitch and uses setjmp
-	- TPatMatch has some var names sanitized
 	- TFor is replaced with TWhile
 *)
 let mk_function_context ctx cf =
-	let locals = ref [] in
 
 	let rec loop e = match e.eexpr with
-		| TVars vl ->
-			let el = ExtList.List.filter_map (fun (v,eo) ->
-				locals := v :: !locals;
-				match eo with
-				| None -> None
-				| Some e -> Some (loop (mk (TBinop(OpAssign, mk (TLocal v) v.v_type e.epos,e)) e.etype e.epos))
-			) vl in
-			begin match el with
-			| [e] -> e
-			| _ -> mk (TBlock el) ctx.con.com.basic.tvoid e.epos
-			end
 		| TArrayDecl el ->
 			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
@@ -1345,28 +1411,6 @@ let mk_function_context ctx cf =
 					Some ([Expr.mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
 			) cl) in
 			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
-		| TPatMatch dt ->
- 			let rec dtl d = match d with
-				| DTGoto _ | DTExpr _ ->
-					()
-				| DTGuard(_,dt1,dt2) ->
-					dtl dt1;
-					(match dt2 with None -> () | Some dt -> dtl dt)
-				| DTSwitch(_,cl) ->
-					List.iter (fun (_,dt) -> dtl dt) cl
-				| DTBind(bl,dt) ->
-					List.iter (fun ((v,_),_) ->
-						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-						locals := v :: !locals
-					) bl;
-					dtl dt
-			in
-			Array.iter dtl dt.dt_dt_lookup;
-			List.iter (fun (v,_) ->
-				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-				locals := v :: !locals
-			) dt.dt_var_init;
-			Type.map_expr loop e
 		| TFor(v,e1,e2) ->
 			let e1 = loop e1 in
 			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
@@ -1384,7 +1428,6 @@ let mk_function_context ctx cf =
 	in
 	{
 		field = cf;
-		local_vars = !locals;
 		expr = e;
 		loop_stack = [];
 	}
@@ -1422,19 +1465,6 @@ let generate_method ctx c cf stat =
 	match ctx.fctx.expr with
 	| None -> newline ctx
 	| Some {eexpr = TFunction ({tf_expr = {eexpr = TBlock el}; tf_type = t})} ->
-		let el = match ctx.fctx.local_vars with
-			| [] -> el
-			| _ ->
-				let einit = mk (TVars (List.map (fun v ->
-					(* if there's a local var to a still unresolved type parameter, we must pre-allocate it *)
-					match follow v.v_type with
-					| TInst({ cl_kind = KTypeParameter _ },_) ->
-						v, Some (Expr.mk_stack_tp_init ctx v.v_type cf.cf_pos)
-					| _ ->
-						v, None
-				) ctx.fctx.local_vars)) ctx.con.com.basic.tvoid cf.cf_pos in
-				einit :: el
-		in
 		let e = mk (TBlock el) t cf.cf_pos in
 		generate_expr ctx e
 	| _ -> assert false
@@ -1518,14 +1548,11 @@ let generate_class ctx c =
 				| Some e ->
 					let fctx = mk_function_context ctx cf in
 					let e = Option.get fctx.expr in
-					let locals = fctx.local_vars in
-					let einit = mk (TVars (List.map (fun v -> v,None) locals)) ctx.con.com.basic.tvoid cf.cf_pos in
 					let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
 					let ethis = mk (TTypeExpr (TClassDecl c)) ta cf.cf_pos in
 					let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
 					let eassign = mk (TBinop(OpAssign,efield,e)) efield.etype cf.cf_pos in
-					let e = Codegen.concat einit eassign in
-					cf.cf_expr <- Some e;
+					cf.cf_expr <- Some eassign;
 					add_init e;
 		) svars;
 	end;
@@ -1712,18 +1739,18 @@ let generate_enum ctx en =
 
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
-		let ctx = mk_type_context con c.cl_path (Some mt) in
+		let ctx = mk_type_context con c.cl_path  in
 		if c.cl_path <> ([],"hxc") then add_dependency ctx ([],"hxc");
 		generate_class ctx c;
 		close_type_context ctx;
 	| TEnumDecl en when not en.e_extern ->
-		let ctx = mk_type_context con en.e_path (Some mt) in
+		let ctx = mk_type_context con en.e_path  in
 		add_dependency ctx ([],"hxc");
 		generate_enum ctx en;
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()
 	| TAbstractDecl a ->
-		let ctx = mk_type_context con a.a_path (Some mt) in
+		let ctx = mk_type_context con a.a_path  in
 		ctx.buf <- ctx.buf_c;
 		spr ctx (generate_typedef_declaration ctx (TAbstract(a,List.map snd a.a_types)));
 		newline ctx;
@@ -1736,7 +1763,7 @@ let generate_type con mt = match mt with
 		()
 
 let generate_anon_file con =
-	let ctx = mk_type_context con (["hxc"],"AnonTypes") None in
+	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
 
 	spr ctx "// forward declarations";
 	PMap.iter (fun _ (s,_) ->
@@ -1788,7 +1815,7 @@ let generate_anon_file con =
 	close_type_context ctx
 
 let generate_init_file con =
-	let ctx = mk_type_context con (["hxc"],"Init") None in
+	let ctx = mk_type_context con (["hxc"],"Init") in
 	ctx.buf <- ctx.buf_c;
 	print ctx "void _hx_init() {";
 	let b = open_block ctx in
@@ -1840,6 +1867,10 @@ let get_type com path = try
 with | Not_found ->
 	failwith("The type " ^ Ast.s_type_path path ^ " is required and was not found")
 
+let add_filters con =
+	TypeParams.configure con;
+	VarDeclarations.configure con
+
 let generate com =
 	let t_typeref = get_type com ([],"typeref") in
 	let t_pointer = get_type com (["c"],"Pointer") in
@@ -1865,5 +1896,8 @@ let generate com =
 		filters = [];
 		filters_dirty = false;
 	} in
+	add_filters con;
+	let gen = Filters.run_filters_types con in
+	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
 	generate_hxc_files con
