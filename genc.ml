@@ -845,7 +845,7 @@ let close_type_context ctx =
 			if cur <> content then raise Not_found
 		with Not_found | Sys_error _ ->
 			let ch_h = open_out_bin filepath in
-			print_endline ("Writing to " ^ filepath);
+			print_endline ("Writing " ^ filepath);
 			output_string ch_h content;
 			close_out ch_h;
 	in
@@ -1858,7 +1858,9 @@ let generate_init_file con =
 let generate_make_file con =
 	let relpath path = path_to_file_path path in
 	let main_name = match con.com.main_class with Some path -> snd path | None -> "main" in
-	let ch = open_out_bin (con.com.file ^ "/Makefile") in
+	let filepath = con.com.file ^ "/Makefile" in
+	print_endline ("Writing " ^ filepath);
+	let ch = open_out_bin filepath in
 	output_string ch ("OUT = " ^ main_name ^ "\n");
 	output_string ch "ifndef MSVC\n";
 	output_string ch ("\tOUTFLAG := -o \n");
