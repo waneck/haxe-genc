@@ -1537,13 +1537,14 @@ let generate_class ctx c =
 			DynArray.add methods (cf,true)
 	) c.cl_ordered_statics;
 
+	let path = path_to_name c.cl_path in
+
 	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
 		| Some cf ->
 			match follow cf.cf_type, cf.cf_expr with
 			| TFun(args,_), Some e ->
-				let path = path_to_name c.cl_path in
 				let einit =
 					(if is_value_type ctx (TInst(c,List.map snd c.cl_types)) then
 						Expr.mk_ccode ctx (Printf.sprintf "%s this" path)
@@ -1628,10 +1629,14 @@ let generate_class ctx c =
 		| _ -> ()
 	) c.cl_meta;
 
+	(* forward declare class type *)
+	print ctx "typedef struct %s %s" path path;
+	newline ctx;
+
 	(* generate member struct *)
 	if not (DynArray.empty vars) then begin
 		spr ctx "// member var structure\n";
-		print ctx "typedef struct %s {" (path_to_name c.cl_path);
+		print ctx "typedef struct %s {" path;
 		let b = open_block ctx in
 		DynArray.iter (fun cf ->
 			newline ctx;
@@ -1639,11 +1644,11 @@ let generate_class ctx c =
 		) vars;
 		b();
 		newline ctx;
-		print ctx "} %s" (path_to_name c.cl_path);
+		print ctx "} %s" path;
 		newline ctx;
 		spr ctx "\n";
 	end else begin
-		print ctx "typedef struct %s { void* dummy; } %s" (path_to_name c.cl_path) (path_to_name c.cl_path);
+		print ctx "typedef struct %s { void* dummy; } %s" path path;
 		newline ctx;
 	end;
 
