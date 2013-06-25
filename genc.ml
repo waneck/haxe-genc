@@ -1925,6 +1925,7 @@ let generate_anon_file con =
 		print ctx "} %s" s;
 	) con.anon_types;
 	newline ctx;
+
 	spr ctx "// constructor forward declarations";
 	PMap.iter (fun _ (s,cfl) ->
 		newline ctx;
@@ -1936,42 +1937,16 @@ let generate_anon_file con =
 
 	spr ctx "// constructor definitions";
 	PMap.iter (fun _ (s,cfl) ->
-		let is_varargs = ref false in
-		let rec loop cfl = match cfl with
-			| cf :: cfl ->
-				if Meta.has Meta.Optional cf.cf_meta then begin
-					is_varargs := true;
-					["","..."]
-				end else (cf.cf_name,s_type_with_name ctx cf.cf_type cf.cf_name) :: loop cfl
-			| [] ->
-				[]
-		in
-		let field_names = loop cfl in
 		newline ctx;
-		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map snd field_names));
+		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) cfl));
 		let b = open_block ctx in
 		newline ctx;
 		print ctx "%s* this = (%s*) malloc(sizeof(%s))" s s s;
-		if !is_varargs then begin
-			ctx.dependencies <- PMap.add ([],"stdarg") false ctx.dependencies;
-			newline ctx;
-			spr ctx "va_list _hx_args";
-			newline ctx;
-			(* TODO: this is a bit retarded *)
-			print ctx "va_start(_hx_args, %s)" (fst (List.hd (List.tl (List.rev field_names))));
-		end;
 		List.iter (fun cf ->
 			newline ctx;
-			if Meta.has Meta.Optional cf.cf_meta then
-				print ctx "this->%s = va_arg(_hx_args, %s)" cf.cf_name (s_type ctx cf.cf_type)
-			else
-				print ctx "this->%s = %s" cf.cf_name cf.cf_name;
+			print ctx "this->%s = %s" cf.cf_name cf.cf_name;
 		) cfl;
 		newline ctx;
-		if !is_varargs then begin
-			spr ctx "va_end(_hx_args)";
-			newline ctx;
-		end;
 		spr ctx "return this";
 		b();
 		newline ctx;
