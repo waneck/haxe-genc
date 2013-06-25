@@ -745,6 +745,107 @@ module VarDeclarations = struct
 		Filters.add_filter con name priority filter
 end
 
+let sort_anon_fields fields =
+	List.sort (fun cf1 cf2 ->
+		match Meta.has Meta.Optional cf1.cf_meta, Meta.has Meta.Optional cf2.cf_meta with
+		| false,false | true,true -> compare cf1.cf_name cf2.cf_name
+		| true, false -> 1
+		| false, true -> -1
+	) fields
+
+let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
+
+(*
+	This filter handles unification cases where AST transformation may be required.
+	These occur in the following nodes:
+
+		- TBinop(OpAssign,_,_)
+		- TVars
+		- TCall
+		- TArrayDecl
+		- TObjectDecl
+		- TReturn
+		- TODO: TIf, TCast and TSwitch may be missing
+
+	It may perform the following transformations:
+		- pad TObjectDecl with null for optional arguments
+*)
+module TypeChecker = struct
+
+	let name = "type_checker"
+
+	let priority = Filters.solve_deps name [DBefore VarDeclarations.priority]
+
+	let rec check gen e t =
+		match e.eexpr,follow t with
+		| TObjectDecl fl,(TAnon an as ta) ->
+			let fields = sort_anon_fields (pmap_to_list an.a_fields) in
+			let fl = List.map (fun cf ->
+				try cf.cf_name,List.assoc cf.cf_name fl
+				with Not_found -> cf.cf_name,mk (TConst TNull) (mk_mono()) e.epos
+			) fields in
+			{ e with eexpr = TObjectDecl fl; etype = ta}
+		(* TODO:
+			For some reason nested objects seem to have casts sometimes. Doing this
+			is not entirely correct, we should check for the compatibility or
+			e1.etype and t maybe.
+		*)
+		| TCast(e1,None),t ->
+			{ e with eexpr = TCast(check gen e1 t,None)}
+		| _ ->
+			e
+
+	let filter gen = function e ->
+		match e.eexpr with
+		| TBinop(OpAssign,e1,e2) ->
+			{e with eexpr = TBinop(OpAssign,gen.map e1,check gen (gen.map e2) e1.etype)}
+		| TVars vl ->
+			{e with eexpr = TVars(List.map (fun (v,eo) -> v,match eo with None -> None | Some e -> Some (check gen (gen.map e) v.v_type)) vl)}
+		| TCall(e1,el) ->
+			begin match follow e1.etype with
+				| TFun(args,ret) ->
+					let rec loop acc el tl = match el,tl with
+						| e :: el, (_,_,t) :: tl ->
+							loop ((check gen (gen.map e) t) :: acc) el tl
+						| [], [] ->
+							acc
+						| [],_ ->
+							(* should not happen due to padded nulls *)
+							assert false
+						| _, [] ->
+							(* not sure about this one *)
+							assert false
+					in
+					{e with eexpr = TCall(gen.map e1,(List.rev (loop [] el args)))}
+				| _ -> Type.map_expr gen.map e
+			end
+		| TArrayDecl el ->
+			begin match follow e.etype with
+				| TInst({cl_path=[],"Array"},[t]) -> {e with eexpr = TArrayDecl(List.map (fun e -> check gen (gen.map e) t) el)}
+				| _ -> Type.map_expr gen.map e
+			end
+		| TObjectDecl fl ->
+			begin match follow e.etype with
+				| TAnon an ->
+					let fl = List.map (fun (n,e) ->
+						let t = (PMap.find n an.a_fields).cf_type in
+						n,check gen (gen.map e) t
+					) fl in
+					{ e with eexpr = TObjectDecl fl }
+				| _ -> Type.map_expr gen.map e
+			end
+		| TReturn (Some e1) ->
+			begin match follow gen.gfield.cf_type with
+				| TFun(_,tr) -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tr))}
+				| _ -> assert false
+			end
+		| _ ->
+			Type.map_expr gen.map e
+
+	let configure con =
+		Filters.add_filter con name priority filter
+
+end
 
 (* Output and context *)
 
@@ -951,8 +1052,8 @@ let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 (* Type signature *)
 
 let anon_signature ctx fields =
-	let fields = PMap.fold (fun cf acc -> cf :: acc) fields [] in
-	let fields = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) fields in
+	let fields = pmap_to_list fields in
+	let fields = sort_anon_fields fields in
 	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
 	try fst (PMap.find id ctx.con.anon_types)
 	with Not_found ->
@@ -1152,8 +1253,7 @@ and generate_expr ctx e = match e.eexpr with
 	| TLocal v ->
 		spr ctx v.v_name;
 	| TObjectDecl fl ->
-		let s = match follow e.etype with TAnon a -> anon_signature ctx a.a_fields | _ -> assert false in
-		let fl = List.sort (fun (n1,_) (n2,_) -> compare n1 n2) fl in
+		let s = match follow e.etype with TAnon an -> anon_signature ctx an.a_fields | _ -> assert false in
 		print ctx "new_%s(" s;
 		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
 		spr ctx ")";
@@ -1836,16 +1936,42 @@ let generate_anon_file con =
 
 	spr ctx "// constructor definitions";
 	PMap.iter (fun _ (s,cfl) ->
+		let is_varargs = ref false in
+		let rec loop cfl = match cfl with
+			| cf :: cfl ->
+				if Meta.has Meta.Optional cf.cf_meta then begin
+					is_varargs := true;
+					["","..."]
+				end else (cf.cf_name,s_type_with_name ctx cf.cf_type cf.cf_name) :: loop cfl
+			| [] ->
+				[]
+		in
+		let field_names = loop cfl in
 		newline ctx;
-		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) cfl));
+		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map snd field_names));
 		let b = open_block ctx in
 		newline ctx;
 		print ctx "%s* this = (%s*) malloc(sizeof(%s))" s s s;
+		if !is_varargs then begin
+			ctx.dependencies <- PMap.add ([],"stdarg") false ctx.dependencies;
+			newline ctx;
+			spr ctx "va_list _hx_args";
+			newline ctx;
+			(* TODO: this is a bit retarded *)
+			print ctx "va_start(_hx_args, %s)" (fst (List.hd (List.tl (List.rev field_names))));
+		end;
 		List.iter (fun cf ->
 			newline ctx;
-			print ctx "this->%s = %s" cf.cf_name cf.cf_name;
+			if Meta.has Meta.Optional cf.cf_meta then
+				print ctx "this->%s = va_arg(_hx_args, %s)" cf.cf_name (s_type ctx cf.cf_type)
+			else
+				print ctx "this->%s = %s" cf.cf_name cf.cf_name;
 		) cfl;
 		newline ctx;
+		if !is_varargs then begin
+			spr ctx "va_end(_hx_args)";
+			newline ctx;
+		end;
 		spr ctx "return this";
 		b();
 		newline ctx;
@@ -1912,7 +2038,8 @@ with | Not_found ->
 
 let add_filters con =
 	TypeParams.configure con;
-	VarDeclarations.configure con
+	VarDeclarations.configure con;
+	TypeChecker.configure con
 
 let generate com =
 	let t_typeref = get_type com ([],"typeref") in
