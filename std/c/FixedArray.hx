@@ -23,7 +23,8 @@ package c;
 import c.Pointer;
 import c.Lib;
 
-@:struct class FixedArray<T> implements ArrayAccess<T>
+@:struct
+class FixedArray<T> implements ArrayAccess<T>
 {
 	public var array(default, null):Pointer<T>;
 	public var length(default, null):Int;

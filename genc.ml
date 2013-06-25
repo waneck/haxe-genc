@@ -17,6 +17,11 @@ open Type
 
 *)
 
+type dependency_type =
+	| DFull
+	| DForward
+	| DCStd
+
 type function_context = {
 	field : tclass_field;
 	expr : texpr option;
@@ -50,7 +55,7 @@ and type_context = {
 	mutable buf : Buffer.t;
 	mutable tabs : string;
 	mutable fctx : function_context;
-	mutable dependencies : (path,bool) PMap.t;
+	mutable dependencies : (path,dependency_type) PMap.t;
 }
 
 and gen_context = {
@@ -931,12 +936,12 @@ let close_type_context ctx =
 	spr "#include <string.h>\n";
 
 	let relpath path = path_to_file_path ((get_relative_path ctx.type_path path),snd path) in
-	PMap.iter (fun path b ->
+	PMap.iter (fun path dept ->
 		let name = path_to_name path in
-		if b then begin
-			if path = (["c"],"AnonTypes") || path = (["c"],"Exception") then spr (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
-			else spr (Printf.sprintf "typedef struct %s %s;\n" name name);
-		end else spr (Printf.sprintf "#include <%s.h>\n" (path_to_file_path path))
+		match dept with
+			| DCStd -> spr (Printf.sprintf "#include <%s.h>\n" (path_to_file_path path))
+			| DFull -> spr (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
+			| DForward -> spr (Printf.sprintf "typedef struct %s %s;\n" name name);
 	) ctx.dependencies;
 	Buffer.add_buffer buf ctx.buf_h;
 	spr "\n#endif";
@@ -958,8 +963,11 @@ let close_type_context ctx =
 	if String.length sc > 0 then begin
 		let buf = Buffer.create (Buffer.length ctx.buf_c) in
 		Buffer.add_string buf ("#include \"" ^ (snd ctx.type_path) ^ ".h\"\n");
-		PMap.iter (fun path b ->
-			if b then Buffer.add_string buf (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
+		PMap.iter (fun path dept ->
+			match dept with
+			| DFull | DForward ->
+				Buffer.add_string buf (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
+			| _ -> ()
 		) ctx.dependencies;
 		Buffer.add_string buf sc;
 		write_if_changed (ctx.file_path_no_ext ^ ".c") (Buffer.contents buf);
@@ -967,8 +975,8 @@ let close_type_context ctx =
 
 (* Dependency handling *)
 
-let add_dependency ctx path =
-	if path <> ctx.type_path then ctx.dependencies <- PMap.add path true ctx.dependencies
+let add_dependency ctx dept path =
+	if path <> ctx.type_path then ctx.dependencies <- PMap.add path dept ctx.dependencies
 
 let parse_include com s p =
 	if s.[0] = '<' then begin
@@ -979,17 +987,17 @@ let parse_include com s p =
 		else
 			String.length s - 2
 		in
-		([],String.sub s 1 i),false
+		([],String.sub s 1 i),DCStd
 	end else
-		([],s),true
+		([],s),DForward
 
 let check_include_meta ctx meta =
 	try
 		let _,el,p = get_meta Meta.Include meta in
 		List.iter (fun e -> match fst e with
 			| EConst(String s) when String.length s > 0 ->
-				let path,b = parse_include ctx.con.com s p in
-				ctx.dependencies <- PMap.add path b ctx.dependencies
+				let path,dept = parse_include ctx.con.com s p in
+				add_dependency ctx dept path
 			| _ ->
 				()
 		) el;
@@ -998,13 +1006,16 @@ let check_include_meta ctx meta =
 		false
 
 let add_class_dependency ctx c =
-	if not (check_include_meta ctx c.cl_meta) && not c.cl_extern then add_dependency ctx c.cl_path
+	if not (check_include_meta ctx c.cl_meta) && not c.cl_extern then
+		add_dependency ctx (if Meta.has Meta.Struct c.cl_meta then DFull else DForward) c.cl_path
 
 let add_enum_dependency ctx en =
-	if not (check_include_meta ctx en.e_meta) && not en.e_extern then add_dependency ctx en.e_path
+	if not (check_include_meta ctx en.e_meta) && not en.e_extern then
+		add_dependency ctx (if Meta.has Meta.Struct en.e_meta then DFull else DForward) en.e_path
 
 let add_abstract_dependency ctx a =
-	if not (check_include_meta ctx a.a_meta) then add_dependency ctx a.a_path
+	if not (check_include_meta ctx a.a_meta) then
+		add_dependency ctx (if Meta.has Meta.Struct a.a_meta then DFull else DForward) a.a_path
 
 let add_type_dependency ctx t = match follow t with
 	| TInst(c,_) ->
@@ -1012,20 +1023,20 @@ let add_type_dependency ctx t = match follow t with
 	| TEnum(en,_) ->
 		add_enum_dependency ctx en
 	| TAnon _ ->
-		add_dependency ctx (["c"],"AnonTypes");
+		add_dependency ctx DFull (["c"],"AnonTypes");
 	| TAbstract(a,_) ->
 		add_abstract_dependency ctx a
 	| TDynamic _ ->
-		add_dependency ctx ([],"Dynamic")
+		add_dependency ctx DForward ([],"Dynamic")
 	| _ ->
 		(* TODO: that doesn't seem quite right *)
-		add_dependency ctx ([],"Dynamic")
+		add_dependency ctx DForward ([],"Dynamic")
 
 (* Helper *)
 
 let rec is_value_type ctx t = match follow t with
 	| TAbstract({ a_impl = None }, _) -> true
-	(* | TInst(c,_) -> has_meta Meta.Struct c.cl_meta *)
+	| TInst(c,_) -> has_meta Meta.Struct c.cl_meta
 	| TEnum(_,_) -> false (* TODO: define when a TEnum will be stack-allocated and when it won't *)
 	| TAbstract(a,tl) ->
 		if has_meta Meta.NotNull a.a_meta then
@@ -1084,7 +1095,7 @@ let rec s_type ctx t =
 		(path_to_name c.cl_path) ^ ptr
 	| TEnum(en,_) ->
 		let ptr = if is_value_type ctx t then "" else "*" in
-		if not en.e_extern then add_dependency ctx en.e_path;
+		add_enum_dependency ctx en;
 		(path_to_name en.e_path) ^ ptr
 	| TAnon a ->
 		begin match !(a.a_status) with
@@ -1092,7 +1103,7 @@ let rec s_type ctx t =
 		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
 		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
 		| _ ->
-			add_dependency ctx (["c"],"AnonTypes");
+			add_dependency ctx DFull (["c"],"AnonTypes");
 			(anon_signature ctx a.a_fields) ^ "*"
 		end
 	| _ -> "void*"
@@ -1231,7 +1242,7 @@ and generate_expr ctx e = match e.eexpr with
 	| TTypeExpr (TClassDecl c) ->
 		spr ctx (path_to_name c.cl_path);
 	| TTypeExpr (TEnumDecl e) ->
-		add_dependency ctx e.e_path;
+		add_enum_dependency ctx e;
 		spr ctx (path_to_name e.e_path);
 	| TTypeExpr (TTypeDecl _ | TAbstractDecl _) ->
 		(* shouldn't happen? *)
@@ -1240,7 +1251,7 @@ and generate_expr ctx e = match e.eexpr with
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf)
 	| TField(_,FEnum(en,ef)) ->
-		add_dependency ctx en.e_path;
+		add_enum_dependency ctx en;
 		print ctx "new_%s()" (full_enum_field_name en ef)
 	| TField(e1,fa) ->
 		let n = field_name fa in
@@ -1390,15 +1401,15 @@ and generate_expr ctx e = match e.eexpr with
 		generate_expr ctx e1;
 		begin match follow e1.etype with
 			| TEnum(en,_) ->
-				add_dependency ctx en.e_path;
+				add_enum_dependency ctx en;
 				let s,_,_ = match ef.ef_type with TFun(args,_) -> List.nth args i | _ -> assert false in
 				print ctx "->args.%s.%s" ef.ef_name s;
 			| _ ->
 				assert false
 		end
 	| TThrow e1 ->
-		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
-		add_dependency ctx (["c"],"Exception");
+		add_dependency ctx DCStd ([],"setjmp");
+		add_dependency ctx DFull (["c"],"Exception");
 		spr ctx "c_Exception_thrownObject = ";
 		generate_expr ctx e1;
 		newline ctx;
@@ -1523,8 +1534,8 @@ let mk_function_context ctx cf =
 		| TArrayDecl el ->
 			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
-			ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
-			add_dependency ctx (["c"],"Exception");
+			add_dependency ctx DCStd ([],"setjmp");
+			add_dependency ctx DFull (["c"],"Exception");
 			let esubj = Expr.mk_ccode ctx "(setjmp(*c_Exception_push()))" in
 			let epop = Expr.mk_ccode ctx "c_Exception_pop()" in
 			let epopassign = Expr.mk_ccode ctx "jmp_buf* _hx_jmp_buf = c_Exception_pop()" in
@@ -1714,9 +1725,9 @@ let generate_class ctx c =
 	(* check if we have the main class *)
 	(match ctx.con.com.main_class with
 	| Some path when path = c.cl_path ->
-		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
-		add_dependency ctx (["c"],"Exception");
-		add_dependency ctx (["c"],"Init");
+		add_dependency ctx DCStd ([],"setjmp");
+		add_dependency ctx DFull (["c"],"Exception");
+		add_dependency ctx DForward (["c"],"Init");
 		print ctx "int main() {\n\t_hx_init();\n\tswitch(setjmp(*c_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ());
 
@@ -1770,13 +1781,13 @@ let generate_class ctx c =
 		) methods;
 	end;
 
-	add_dependency ctx ([],"typeref");
+	add_dependency ctx DForward ([],"typeref");
 	spr ctx (get_typeref_forward ctx c.cl_path);
 	newline ctx
 
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
-	add_dependency ctx ([],"typeref");
+	add_dependency ctx DForward ([],"typeref");
 	spr ctx (get_typeref_forward ctx en.e_path);
 	newline ctx;
 
@@ -1879,7 +1890,7 @@ let generate_typeref con t =
 	spr ctx (generate_typedef_declaration ctx t);
 	newline ctx;
 	ctx.buf <- ctx.buf_h;
-	add_dependency ctx ([],"typeref");
+	add_dependency ctx DForward ([],"typeref");
 	spr ctx (get_typeref_forward ctx path);
 	newline ctx;
 	close_type_context ctx
@@ -1887,12 +1898,12 @@ let generate_typeref con t =
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
 		let ctx = mk_type_context con c.cl_path  in
-		if c.cl_path <> ([],"hxc") then add_dependency ctx ([],"hxc");
+		if c.cl_path <> ([],"hxc") then add_dependency ctx DForward ([],"hxc");
 		generate_class ctx c;
 		close_type_context ctx;
 	| TEnumDecl en when not en.e_extern ->
 		let ctx = mk_type_context con en.e_path  in
-		add_dependency ctx ([],"hxc");
+		add_dependency ctx DForward ([],"hxc");
 		generate_enum ctx en;
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()
@@ -1960,7 +1971,7 @@ let generate_init_file con =
 	print ctx "void _hx_init() {";
 	let b = open_block ctx in
 	List.iter (fun path ->
-		add_dependency ctx path;
+		add_dependency ctx DForward path;
 		newline ctx;
 		print ctx "%s__hx_init()" (path_to_name path);
 	) con.init_modules;
@@ -1987,7 +1998,10 @@ let generate_make_file con =
 	output_string ch ("all: $(OUT)\n");
 	List.iter (fun ctx ->
 		output_string ch (Printf.sprintf "%s.$(OBJEXT): %s.c " (relpath ctx.type_path) (relpath ctx.type_path));
-		PMap.iter (fun path b -> if b then output_string ch (Printf.sprintf "%s.h " (relpath path)) ) ctx.dependencies;
+		PMap.iter (fun path dept -> match dept with
+			| DFull | DForward -> output_string ch (Printf.sprintf "%s.h " (relpath path))
+			| _ -> ()
+		) ctx.dependencies;
 		output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OUTFLAG)%s.$(OBJEXT) -c %s.c\n\n" (relpath ctx.type_path) (relpath ctx.type_path))
 	) con.generated_types;
 	output_string ch "OBJECTS = ";
