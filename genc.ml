@@ -37,6 +37,7 @@ type context = {
 	mutable generated_types : type_context list;
 	mutable t_typeref : t -> t;
 	mutable t_pointer : t -> t;
+	mutable c_string : tclass;
 	mutable filters : (string * float * filter) list;
 	mutable filters_dirty : bool;
 }
@@ -81,8 +82,9 @@ module Expr = struct
 		| TEnum(e,_) -> e.e_path
 		| TAbstract(a,_) -> a.a_path
 		| _ -> [],"Dynamic"
-		let mk_local v p =
-			{ eexpr = TLocal v; etype = v.v_type; epos = p }
+
+	let mk_local v p =
+		{ eexpr = TLocal v; etype = v.v_type; epos = p }
 
 	let mk_ref con p e =
 		{
@@ -971,7 +973,9 @@ let rec s_type ctx t =
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TAbstract({a_path = [],"Bool"},[]) -> "int"
-	| TInst({cl_path = [],"String"},[]) -> "char*"
+	| TInst({cl_path = [],"String"},[]) ->
+		add_class_dependency ctx ctx.con.c_string;
+		"const char*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
 		let ptr = if is_value_type ctx t then "" else "*" in
@@ -1763,6 +1767,18 @@ let generate_enum ctx en =
 			assert false
 	) ctors
 
+let generate_typeref con t =
+	let path = Expr.t_path t in
+	let ctx = mk_type_context con path  in
+	ctx.buf <- ctx.buf_c;
+	spr ctx (generate_typedef_declaration ctx t);
+	newline ctx;
+	ctx.buf <- ctx.buf_h;
+	add_dependency ctx ([],"typeref");
+	spr ctx (get_typeref_forward ctx path);
+	newline ctx;
+	close_type_context ctx
+
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
 		let ctx = mk_type_context con c.cl_path  in
@@ -1776,15 +1792,7 @@ let generate_type con mt = match mt with
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()
 	| TAbstractDecl a ->
-		let ctx = mk_type_context con a.a_path  in
-		ctx.buf <- ctx.buf_c;
-		spr ctx (generate_typedef_declaration ctx (TAbstract(a,List.map snd a.a_types)));
-		newline ctx;
-		ctx.buf <- ctx.buf_h;
-		add_dependency ctx ([],"typeref");
-		spr ctx (get_typeref_forward ctx a.a_path);
-		newline ctx;
-		close_type_context ctx;
+		generate_typeref con (TAbstract(a,List.map snd a.a_types))
 	| _ ->
 		()
 
@@ -1904,6 +1912,7 @@ let add_filters con =
 let generate com =
 	let t_typeref = get_type com ([],"typeref") in
 	let t_pointer = get_type com (["c"],"Pointer") in
+	let c_string = mk_class null_module ([],"String") Ast.null_pos in
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
@@ -1923,6 +1932,7 @@ let generate com =
 		t_pointer = (match follow t_pointer with
 			| TAbstract(a,_) -> fun t -> TAbstract(a,[t])
 			| _ -> assert false);
+		c_string = c_string;
 		filters = [];
 		filters_dirty = false;
 	} in
@@ -1930,4 +1940,5 @@ let generate com =
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
+	generate_typeref con (TInst(c_string,[]));
 	generate_hxc_files con
