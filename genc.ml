@@ -311,20 +311,14 @@ module Filters = struct
 					let old_scope = !temps_in_scope in
 					let old_declared = !declared_vars in
 					declared_vars := [];
-					let rec loop acc = match acc with
-						| { eexpr = TVars vdecl } :: acc ->
-							declared_vars := (List.rev vdecl) @ !declared_vars;
-							loop acc
-						| _ -> acc
-					in
-					let el = loop el in
-					let e = { e with eexpr = TBlock el } in
+					(* run loop *)
 					let el = match (mk_block (run e)).eexpr with
 						| TBlock el -> el
 						| _ -> assert false
 					in
-					let ret = match !declared_vars with
-						| [] -> e
+					(* change loop with new declared vars *)
+					let el = match !declared_vars with
+						| [] -> el
 						| vars ->
 							let vars = List.map (function
 								| (v,None) -> (match follow v.v_type with
@@ -333,8 +327,22 @@ module Filters = struct
 									| _ -> v,None)
 								| var -> var
 							) vars in
-							{ e with eexpr = TBlock({ eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el) }
+							{ eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el
 					in
+					(* ensure no uninitialized type parameter *)
+					let rec loop el acc = match el with
+						| { eexpr = TVars vdecl } :: el ->
+							loop el ({ e with eexpr = TVars(List.map (function
+								| (v,None) -> (match follow v.v_type with
+									| TInst({ cl_kind = KTypeParameter _ },_) ->
+										v, Some(Expr.mk_stack_tp_init gen.gcon v.v_type e.epos)
+									| _ -> v,None)
+								| var -> var
+							) (vdecl)) } :: acc)
+						| _ -> (List.rev acc) @ el
+					in
+					let el = loop el [] in
+					let ret = { e with eexpr = TBlock(el) } in
 					temps_in_scope := old_scope;
 					declared_vars := old_declared;
 					ret
@@ -455,7 +463,7 @@ module TypeParams = struct
 	let type_parameter_expr con p path = try
 		PMap.find path con.type_parameters
 	with | Not_found ->
-		con.com.error ("Cannot find type parameter called " ^ s_type_path path) p;
+		con.com.warning ("Cannot find type parameter called " ^ s_type_path path) p;
 		null t_dynamic p
 
 	let type_param_name t =
@@ -492,7 +500,7 @@ module TypeParams = struct
 			(* constructors have special treatment *)
 			| "new", _ -> (match gen.mtype with
 				| Some (TClassDecl c) ->
-					List.map (fun (_,t) -> alloc_var (type_param_name t) t, None) c.cl_types, List.map snd c.cl_types, true
+					List.map (fun (_,t) -> alloc_var (type_param_name t) (gen.gcon.t_typeref t), None) c.cl_types, List.map snd c.cl_types, true
 				| _ -> [],[],false)
 			| _ -> [],[],false
 		in
@@ -514,14 +522,14 @@ module TypeParams = struct
 				(match cf.cf_expr with
 				| Some ({ eexpr = TFunction(tf) } as e) ->
 					let added_exprs = if is_ctor then
-						List.map (fun (v,_) -> {
+						List.map2 (fun (v,_) t -> {
 							eexpr = TBinop(
 								Ast.OpAssign,
-								type_parameter_expr gen.gcon cf.cf_pos (Expr.t_path v.v_type),
+								type_parameter_expr gen.gcon cf.cf_pos (Expr.t_path t),
 								{ eexpr = TLocal v; etype = v.v_type; epos = cf.cf_pos });
 							etype = v.v_type;
 							epos = cf.cf_pos
-						}) tf_args
+						}) tf_args types
 					else
 						[]
 					in
@@ -557,7 +565,8 @@ module TypeParams = struct
 
 		(* needed vars for this filter *)
 		function e -> match e.eexpr with
-			| TNew(c,tl,el) when tl <> [] ->
+			| TNew(c,tl,el) when tl <> [] && c.cl_path <> ([],"typeref") ->
+				print_endline (Gencommon.debug_expr e);
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
@@ -591,7 +600,7 @@ module TypeParams = struct
 				) el args
 				in
 				List.iter (gen.free_temp) !temps;
-				let el = el @ get_param_args gen e cf e1 in
+				let el = get_param_args gen e cf e1 @ el in
 				let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 				(* if type parameter is being cast into a concrete one, we need to dereference it *)
 				if is_type_param gen.gcon ret && not (is_type_param gen.gcon applied_ret) then
@@ -1559,7 +1568,7 @@ let generate_class ctx c =
 					let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
 					let eassign = mk (TBinop(OpAssign,efield,e)) efield.etype cf.cf_pos in
 					cf.cf_expr <- Some eassign;
-					add_init e;
+					add_init eassign;
 		) svars;
 	end;
 
