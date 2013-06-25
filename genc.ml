@@ -166,7 +166,7 @@ module Expr = struct
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
 				[
-					{ eexpr = TConst (TString "ALLOCA"); etype = t_dynamic; epos = p };
+					{ eexpr = TConst (TString "malloc"); etype = t_dynamic; epos = p };
 					{
 						eexpr = TCall(
 							{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
