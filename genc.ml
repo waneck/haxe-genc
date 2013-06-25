@@ -770,7 +770,7 @@ let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 		- TArrayDecl
 		- TObjectDecl
 		- TReturn
-		- TODO: TIf, TCast and TSwitch may be missing
+		- TODO: TIf and TSwitch may be missing
 
 	It may perform the following transformations:
 		- pad TObjectDecl with null for optional arguments
@@ -790,13 +790,10 @@ module TypeChecker = struct
 				with Not_found -> cf.cf_name,mk (TConst TNull) (mk_mono()) e.epos
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
-		(* TODO:
-			For some reason nested objects seem to have casts sometimes. Doing this
-			is not entirely correct, we should check for the compatibility or
-			e1.etype and t maybe.
-		*)
-		| TCast(e1,None),t ->
-			{ e with eexpr = TCast(check gen e1 t,None)}
+		| TMeta(m,e1),t ->
+			{ e with eexpr = TMeta(m,check gen e1 t)}
+		| TParenthesis(e1),t ->
+			{ e with eexpr = TParenthesis(check gen e1 t)}
 		| _ ->
 			e
 
@@ -844,6 +841,12 @@ module TypeChecker = struct
 				| TFun(_,tr) -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tr))}
 				| _ -> assert false
 			end
+		| TCast (e1,None) ->
+			let t = follow e.etype in
+			if e1.etype != t then
+				{e with eexpr = TCast(check gen (gen.map e1) t,None)}
+			else
+				{e with eexpr = TCast(gen.map e1,None)}
 		| _ ->
 			Type.map_expr gen.map e
 
