@@ -430,14 +430,9 @@ module TypeParams = struct
 	| _ ->
 		let monos = List.map (fun _ -> mk_mono()) params in
 		let original = apply_params params monos original_t in
-		print_endline "---";
-		print_endline (s_type (print_context()) original);
-		print_endline (s_type (print_context()) original_t);
-		print_endline (s_type (print_context()) applied_t);
 		(try
 			unify applied_t original
 		with | Unify_error _ ->
-			print_endline "errr";
 			gen.gcom.warning "This expression may be invalid" p
 		);
 		monos
@@ -568,7 +563,6 @@ module TypeParams = struct
 		(* needed vars for this filter *)
 		function e -> match e.eexpr with
 			| TNew(c,tl,el) when tl <> [] && c.cl_path <> ([],"typeref") ->
-				print_endline (Gencommon.debug_expr e);
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
