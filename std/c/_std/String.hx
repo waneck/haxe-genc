@@ -19,149 +19,56 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
-/**
-	The basic String class.
 
-	A haxe String is immutable, it is not possible to modify individual
-	characters. No method of this class changes the state of `this` String.
+class String {
 
-	Strings can be constructed using the string literal syntax "string value".
-
-	String can be concatenated by using the + operator. If an operand is not a
-	String, it is passed through Std.string() first.
-**/
-extern class String {
-
-	/**
-		The number of characters in `this` String.
-	**/
 	var length(default,null) : Int;
 
-	/**
-		Creates a copy from a given String.
-	**/
-	function new(string:String) : Void;
+	public function new(string:String) {
 
-	/**
-		Returns a String where all characters of `this` String are upper case.
+	}
 
-		Affects the characters `a-z`. Other characters remain unchanged.
-	**/
-	function toUpperCase() : String;
+	function toUpperCase() {
+		
+	}
 
-	/**
-		Returns a String where all characters of `this` String are lower case.
+	function toLowerCase() {
+		
+	}
 
-		Affects the characters `A-Z`. Other characters remain unchanged.
-	**/
-	function toLowerCase() : String;
+	function charAt(index : Int) {
+		
+	}
 
-	/**
-		Returns the character at position `index` of `this` String.
+	function charCodeAt( index : Int) {
+		
+	}
 
-		If `index` is negative or exceeds `this.length`, the empty String ""
-		is returned.
-	**/
-	function charAt(index : Int) : String;
+	function indexOf( str : String, ?startIndex : Int ) {
+		
+	}
 
-	/**
-		Returns the character code at position `index` of `this` String.
+	function lastIndexOf( str : String, ?startIndex : Int ) {
+		
+	}
 
-		If `index` is negative or exceeds `this.length`, null is returned.
+	function split( delimiter : String ) {
+		
+	}
 
-		To obtain the character code of a single character, "x".code can be used
-		instead to inline the character code at compile time. Note that this
-		only works on String literals of length 1.
-	**/
-	function charCodeAt( index : Int) : Null<Int>;
+	public function substr( pos : Int, ?len : Int ) {
 
-	/**
-		Returns the position of the leftmost occurence of `str` within `this`
-		String.
+	}
 
-		If `startIndex` is given, the search is performed within the substring
-		of `this` String starting from `startIndex`. Otherwise the search is
-		performed within `this` String. In either case, the returned position
-		is relative to the beginning of `this` String.
+	function substring( startIndex : Int, ?endIndex : Int ) {
+		
+	}
 
-		If `str` cannot be found, -1 is returned.
-	**/
-	function indexOf( str : String, ?startIndex : Int ) : Int;
+	public function toString() {
+		return this;
+	}
 
-	/**
-		Returns the position of the rightmost occurence of `str` within `this`
-		String.
-
-		If `startIndex` is given, the search is performed within the substring
-		of `this` String from 0 to `startIndex`. Otherwise the search is
-		performed within `this` String. In either case, the returned position
-		is relative to the beginning of `this` String.
-
-		If `str` cannot be found, -1 is returned.
-	**/
-	function lastIndexOf( str : String, ?startIndex : Int ) : Int;
-
-	/**
-		Splits `this` String at each occurence of `delimiter`.
-
-		If `delimiter` is the empty String "", `this` String is split into an
-		Array of `this.length` elements, where the elements correspond to the
-		characters of `this` String.
-
-		If `delimiter` is not found within `this` String, the result is an Array
-		with one element, which equals `this` String.
-
-		If `delimiter` is null, the result is unspecified.
-
-		Otherwise, `this` String is split into parts at each occurence of
-		`delimiter`. If `this` String starts (or ends) with [delimiter}, the
-		result Array contains a leading (or trailing) empty String "" element.
-		Two subsequent delimiters also result in an empty String "" element.
-	**/
-	function split( delimiter : String ) : Array<String>;
-
-	/**
-		Returns `len` characters of `this` String, starting at position `pos`.
-
-		If `len` is omitted, all characters from position `pos` to the end of
-		`this` String are included.
-
-		If `pos` is negative, its value is calculated from the end of `this`
-		String by `this.length + pos`. If this yields a negative value, 0 is
-		used instead.
-
-		If the calculated position + `len` exceeds `this.length`, the characters
-		from that position to the end of `this` String are returned.
-
-		If `len` is negative, the result is unspecified.
-	**/
-	function substr( pos : Int, ?len : Int ) : String;
-
-	/**
-		Returns the part of `this` String from `startIndex` to `endIndex`.
-
-		If `startIndex` or `endIndex` are negative, 0 is used instead.
-
-		If `startIndex` exceeds `endIndex`, they are swapped.
-
-		If the (possibly swapped) `endIndex` is omitted or exceeds
-		`this.length`, `this.length` is used instead.
-
-		If the (possibly swapped) `startIndex` exceeds `this.length`, the empty
-		String "" is returned.
-	**/
-	function substring( startIndex : Int, ?endIndex : Int ) : String;
-
-	/**
-		Returns the String itself.
-	**/
-	function toString() : String;
-
-	/**
-		Returns the String corresponding to the character code `code`.
-
-		If `code` is negative or has another invalid value, the result is
-		unspecified.
-	**/
-	static function fromCharCode( code : Int ) : String;
+	static function fromCharCode( code : Int ) {
+		
+	}
 }

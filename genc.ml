@@ -37,7 +37,6 @@ type context = {
 	mutable generated_types : type_context list;
 	mutable t_typeref : t -> t;
 	mutable t_pointer : t -> t;
-	mutable c_string : tclass;
 	mutable filters : (string * float * filter) list;
 	mutable filters_dirty : bool;
 }
@@ -976,7 +975,6 @@ let rec s_type ctx t =
 		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TAbstract({a_path = [],"Bool"},[]) -> "int"
 	| TInst({cl_path = [],"String"},[]) ->
-		add_class_dependency ctx ctx.con.c_string;
 		"const char*"
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
@@ -1914,7 +1912,6 @@ let add_filters con =
 let generate com =
 	let t_typeref = get_type com ([],"typeref") in
 	let t_pointer = get_type com (["c"],"Pointer") in
-	let c_string = mk_class null_module ([],"String") Ast.null_pos in
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
@@ -1934,7 +1931,6 @@ let generate com =
 		t_pointer = (match follow t_pointer with
 			| TAbstract(a,_) -> fun t -> TAbstract(a,[t])
 			| _ -> assert false);
-		c_string = c_string;
 		filters = [];
 		filters_dirty = false;
 	} in
@@ -1942,5 +1938,4 @@ let generate com =
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
-	generate_typeref con (TInst(c_string,[]));
 	generate_hxc_files con
