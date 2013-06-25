@@ -166,7 +166,7 @@ module Expr = struct
 			eexpr = TCall(
 				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
 				[
-					{ eexpr = TConst (TString "malloc"); etype = t_dynamic; epos = p };
+					{ eexpr = TConst (TString "ALLOCA"); etype = t_dynamic; epos = p };
 					{
 						eexpr = TCall(
 							{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
@@ -616,13 +616,13 @@ module TypeParams = struct
 				let out_var = Option.get out_var in
 				let ret_val = Expr.mk_comma_block gen.gcon e.epos [
 					{
-						eexpr = TBinop(Ast.OpAssign, Expr.mk_local out_var e.epos, gen.map er);
+						eexpr = TBinop(Ast.OpAssign, Expr.mk_local out_var e.epos, er);
 						etype = er.etype;
 						epos = e.epos;
 					};
 					Expr.mk_local out_var e.epos
 				] in
-				{ e with eexpr = TReturn(Some( ret_val )) }
+				{ e with eexpr = TReturn(Some( gen.map ret_val )) }
 			(* type parameter extra indirection handling *)
 			(* we need to handle the following cases: *)
 			(* - param -> param assign: always copy *)
