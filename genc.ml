@@ -449,10 +449,18 @@ module TypeParams = struct
 		| TField(_, (FInstance(_,cf) | FStatic(_,cf))) when is_type_param con cf.cf_type -> true
 		| _ -> false
 
-	let get_param_args gen e cf ef = match cf.cf_params with
+	let get_param_args gen e cf e1 ef = match cf.cf_params with
 		| [] -> []
 		| _ ->
-			let params = infer_params gen e.epos cf.cf_type ef.etype cf.cf_params in
+      let cft = match follow ef.etype with
+        | TInst(c,_) ->
+          apply_params c.cl_types (List.map (fun _ -> mk_mono()) c.cl_types) cf.cf_type
+        (* | TAbstract(a,_) -> apply_params a.a_types p e1.etype *)
+        (* | TEnum(e,_) -> apply_params e.e_types p e1.etype *)
+        | _ ->
+          cf.cf_type
+      in
+			let params = infer_params gen e.epos cft e1.etype cf.cf_params in
 			List.map (Expr.mk_type_param gen.gcon e.epos) params
 
 	let get_fun t = match follow t with | TFun(r1,r2) -> (r1,r2) | _ -> assert false
@@ -596,7 +604,7 @@ module TypeParams = struct
 				) el args
 				in
 				List.iter (gen.free_temp) !temps;
-				let el = get_param_args gen e cf e1 @ el in
+				let el = get_param_args gen e cf e1 ef @ el in
 				let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 				(* if type parameter is being cast into a concrete one, we need to dereference it *)
 				if is_type_param gen.gcon ret && not (is_type_param gen.gcon applied_ret) then
