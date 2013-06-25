@@ -992,6 +992,13 @@ let rec s_type ctx t =
 		end
 	| _ -> "void*"
 
+let s_type_with_name ctx t n =
+	match follow t with
+	| TFun(args,ret) ->
+		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
+	| _ ->
+		(s_type ctx t) ^ " " ^ n
+
 let get_type_id ctx t =
 	let id = Type.s_type (print_context()) (follow t) in
 	try
@@ -1167,7 +1174,7 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx ")"
 	| TVars(vl) ->
 		let f (v,eo) =
-			print ctx "%s %s" (s_type ctx v.v_type) v.v_name;
+			spr ctx (s_type_with_name ctx v.v_type v.v_name);
 			begin match eo with
 				| None -> ()
 				| Some e ->
@@ -1420,7 +1427,7 @@ let mk_function_context ctx cf =
 			let c1 = [Expr.mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
-				let eassign = Expr.mk_ccode ctx ((s_type ctx v.v_type) ^ " " ^ v.v_name ^ " = c_hxc_Exception_thrownObject") in
+				let eassign = Expr.mk_ccode ctx ((s_type_with_name ctx v.v_type v.v_name) ^ " = c_hxc_Exception_thrownObject") in
 				let e = Codegen.concat eassign (Codegen.concat epopassign (loop e)) in
 				let e = mk (TBlock [e]) e.etype e.epos in
 				if v.v_type == t_dynamic then begin
@@ -1461,9 +1468,9 @@ let generate_function_header ctx c cf stat =
 			end
 		| _ -> assert false
 	in
-	let sargs = List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args in
-	let sargs = if stat then sargs else ((s_type ctx (monofy_class c)) ^ " this") :: sargs in
-	print ctx "%s %s(%s)" (s_type ctx ret) s (String.concat "," sargs)
+	let sargs = List.map (fun (n,_,t) -> s_type_with_name ctx t n) args in
+	let sargs = if stat then sargs else (s_type_with_name ctx (monofy_class c) "this") :: sargs in
+	print ctx "%s(%s)" (s_type_with_name ctx ret s) (String.concat "," sargs)
 
 let get_typeref_forward ctx path =
 	Printf.sprintf "extern const typeref %s__typeref" (path_to_name path)
@@ -1560,7 +1567,7 @@ let generate_class ctx c =
 	if not (DynArray.empty svars) then begin
 		spr ctx "// static vars\n";
 		DynArray.iter (fun cf ->
-			print ctx "%s %s" (s_type ctx cf.cf_type) (full_field_name c cf);
+			spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
 			newline ctx;
 			match cf.cf_expr with
 				| None -> ()
@@ -1624,7 +1631,7 @@ let generate_class ctx c =
 		let b = open_block ctx in
 		DynArray.iter (fun cf ->
 			newline ctx;
-			print ctx "%s %s" (s_type ctx cf.cf_type) cf.cf_name;
+			spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
 		) vars;
 		b();
 		newline ctx;
@@ -1682,7 +1689,7 @@ let generate_enum ctx en =
 			let b = open_block ctx in
 			List.iter (fun (n,_,t) ->
 				newline ctx;
-				print ctx "%s %s" (s_type ctx t) n;
+				spr ctx (s_type_with_name ctx t n);
 			) args;
 			b();
 			newline ctx;
@@ -1721,7 +1728,7 @@ let generate_enum ctx en =
 		newline ctx;
 		match ef.ef_type with
 		| TFun(args,ret) ->
-			print ctx "%s new_%s(%s)" (s_type ctx ret) (full_enum_field_name en ef) (String.concat "," (List.map (fun (n,_,t) -> Printf.sprintf "%s %s" (s_type ctx t) n) args));
+			print ctx "%s new_%s(%s)" (s_type ctx ret) (full_enum_field_name en ef) (String.concat "," (List.map (fun (n,_,t) -> s_type_with_name ctx t n) args));
 		| _ ->
 			assert false
 	) ctors;
@@ -1798,7 +1805,7 @@ let generate_anon_file con =
 		let b = open_block ctx in
 		List.iter (fun cf ->
 			newline ctx;
-			print ctx "%s %s" (s_type ctx cf.cf_type) cf.cf_name;
+			spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
 		) cfl;
 		b();
 		newline ctx;
@@ -1808,7 +1815,7 @@ let generate_anon_file con =
 	spr ctx "// constructor forward declarations";
 	PMap.iter (fun _ (s,cfl) ->
 		newline ctx;
-		print ctx "%s* new_%s(%s)" s s (String.concat "," (List.map (fun cf -> Printf.sprintf "%s %s" (s_type ctx cf.cf_type) cf.cf_name) cfl));
+		print ctx "%s* new_%s(%s)" s s (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) cfl));
 	) con.anon_types;
 	newline ctx;
 
@@ -1817,7 +1824,7 @@ let generate_anon_file con =
 	spr ctx "// constructor definitions";
 	PMap.iter (fun _ (s,cfl) ->
 		newline ctx;
-		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> Printf.sprintf "%s %s" (s_type ctx cf.cf_type) cf.cf_name) cfl));
+		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) cfl));
 		let b = open_block ctx in
 		newline ctx;
 		print ctx "%s* this = (%s*) malloc(sizeof(%s))" s s s;
