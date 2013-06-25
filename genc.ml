@@ -313,7 +313,7 @@ module Filters = struct
 					declared_vars := [];
 					let rec loop acc = match acc with
 						| { eexpr = TVars vdecl } :: acc ->
-							declared_vars := vdecl @ !declared_vars;
+							declared_vars := (List.rev vdecl) @ !declared_vars;
 							loop acc
 						| _ -> acc
 					in
@@ -333,7 +333,7 @@ module Filters = struct
 									| _ -> v,None)
 								| var -> var
 							) vars in
-							{ e with eexpr = TBlock({ eexpr = TVars(vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el) }
+							{ e with eexpr = TBlock({ eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el) }
 					in
 					temps_in_scope := old_scope;
 					declared_vars := old_declared;
@@ -420,9 +420,14 @@ module TypeParams = struct
 	| _ ->
 		let monos = List.map (fun _ -> mk_mono()) params in
 		let original = apply_params params monos original_t in
+		print_endline "---";
+		print_endline (s_type (print_context()) original);
+		print_endline (s_type (print_context()) original_t);
+		print_endline (s_type (print_context()) applied_t);
 		(try
 			unify applied_t original
 		with | Unify_error _ ->
+			print_endline "errr";
 			gen.gcom.warning "This expression may be invalid" p
 		);
 		monos
@@ -552,11 +557,11 @@ module TypeParams = struct
 
 		(* needed vars for this filter *)
 		function e -> match e.eexpr with
-			| TNew(c,(_::_ as tl),el) ->
+			| TNew(c,tl,el) when tl <> [] ->
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
-			when function_has_type_parameter gen.gcon cf.cf_type ->
+			when function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"] ->
 				let temps = ref [] in
 				let ef = gen.map ef in
 				let args, ret = get_fun cf.cf_type in
@@ -586,7 +591,7 @@ module TypeParams = struct
 				) el args
 				in
 				List.iter (gen.free_temp) !temps;
-				let el = el @ get_param_args gen e cf ef in
+				let el = el @ get_param_args gen e cf e1 in
 				let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 				(* if type parameter is being cast into a concrete one, we need to dereference it *)
 				if is_type_param gen.gcon ret && not (is_type_param gen.gcon applied_ret) then
@@ -1030,7 +1035,8 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		| "increment", [a] ->
 			generate_expr ctx a;
 			spr ctx "++"
-		| _ -> assert false);
+		| _ ->
+			ctx.con.com.error "This expression is invalid" e.epos);
 		spr ctx ")";
 	| TField(e1,FInstance(c,cf)),el ->
 		add_class_dependency ctx c;
