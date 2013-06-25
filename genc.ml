@@ -331,6 +331,8 @@ module Filters = struct
 					in
 					(* ensure no uninitialized type parameter *)
 					let rec loop el acc = match el with
+						| { eexpr = TVars [] } :: el ->
+							loop el acc
 						| { eexpr = TVars vdecl } :: el ->
 							loop el ({ e with eexpr = TVars(List.map (function
 								| (v,None) -> (match follow v.v_type with
@@ -695,7 +697,7 @@ module VarDeclarations = struct
 		| TBlock(el) ->
 			let first = ref true in
 			let el = List.map (fun e -> match e.eexpr with
-				| TVars(v) when !first ->
+				| TVars(v) when !first && not (List.exists (fun (v,_) -> TypeParams.is_type_param gen.gcon v.v_type) v) ->
 					e
 				| _ ->
 					first := false;
