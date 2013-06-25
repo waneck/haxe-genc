@@ -1,4 +1,4 @@
-package c.hxc;
+package c;
 
 import c.Pointer;
 

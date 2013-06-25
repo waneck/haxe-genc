@@ -1,6 +1,6 @@
 package c;
 
-import c.hxc.Exception;
+import c.Exception;
 import c.TypeReference;
 
 @:headerCode('

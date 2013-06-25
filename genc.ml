@@ -834,7 +834,7 @@ let close_type_context ctx =
 	PMap.iter (fun path b ->
 		let name = path_to_name path in
 		if b then begin
-			if path = (["hxc"],"AnonTypes") || path = (["c";"hxc"],"Exception") then spr (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
+			if path = (["c"],"AnonTypes") || path = (["c"],"Exception") then spr (Printf.sprintf "#include \"%s.h\"\n" (relpath path))
 			else spr (Printf.sprintf "typedef struct %s %s;\n" name name);
 		end else spr (Printf.sprintf "#include <%s.h>\n" (path_to_file_path path))
 	) ctx.dependencies;
@@ -864,6 +864,8 @@ let close_type_context ctx =
 		Buffer.add_string buf sc;
 		write_if_changed (ctx.file_path_no_ext ^ ".c") (Buffer.contents buf);
 	end
+
+(* Dependency handling *)
 
 let add_dependency ctx path =
 	if path <> ctx.type_path then ctx.dependencies <- PMap.add path true ctx.dependencies
@@ -910,7 +912,7 @@ let add_type_dependency ctx t = match follow t with
 	| TEnum(en,_) ->
 		add_enum_dependency ctx en
 	| TAnon _ ->
-		add_dependency ctx (["hxc"],"AnonTypes");
+		add_dependency ctx (["c"],"AnonTypes");
 	| TAbstract(a,_) ->
 		add_abstract_dependency ctx a
 	| TDynamic _ ->
@@ -991,7 +993,7 @@ let rec s_type ctx t =
 		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
 		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
 		| _ ->
-			add_dependency ctx (["hxc"],"AnonTypes");
+			add_dependency ctx (["c"],"AnonTypes");
 			(anon_signature ctx a.a_fields) ^ "*"
 		end
 	| _ -> "void*"
@@ -1298,11 +1300,11 @@ and generate_expr ctx e = match e.eexpr with
 		end
 	| TThrow e1 ->
 		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
-		add_dependency ctx (["c";"hxc"],"Exception");
-		spr ctx "c_hxc_Exception_thrownObject = ";
+		add_dependency ctx (["c"],"Exception");
+		spr ctx "c_Exception_thrownObject = ";
 		generate_expr ctx e1;
 		newline ctx;
-		print ctx "(longjmp(*c_hxc_Exception_peek(),%i))" (get_type_id ctx e1.etype);
+		print ctx "(longjmp(*c_Exception_peek(),%i))" (get_type_id ctx e1.etype);
 	| TPatMatch dt ->
 		let fl = ctx.con.num_labels in
 		ctx.con.num_labels <- ctx.con.num_labels + (Array.length dt.dt_dt_lookup) + 1;
@@ -1424,14 +1426,14 @@ let mk_function_context ctx cf =
 			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
 			ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
-			add_dependency ctx (["c";"hxc"],"Exception");
-			let esubj = Expr.mk_ccode ctx "(setjmp(*c_hxc_Exception_push()))" in
-			let epop = Expr.mk_ccode ctx "c_hxc_Exception_pop()" in
-			let epopassign = Expr.mk_ccode ctx "jmp_buf* _hx_jmp_buf = c_hxc_Exception_pop()" in
+			add_dependency ctx (["c"],"Exception");
+			let esubj = Expr.mk_ccode ctx "(setjmp(*c_Exception_push()))" in
+			let epop = Expr.mk_ccode ctx "c_Exception_pop()" in
+			let epopassign = Expr.mk_ccode ctx "jmp_buf* _hx_jmp_buf = c_Exception_pop()" in
 			let c1 = [Expr.mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
-				let eassign = Expr.mk_ccode ctx ((s_type_with_name ctx v.v_type v.v_name) ^ " = c_hxc_Exception_thrownObject") in
+				let eassign = Expr.mk_ccode ctx ((s_type_with_name ctx v.v_type v.v_name) ^ " = c_Exception_thrownObject") in
 				let e = Codegen.concat eassign (Codegen.concat epopassign (loop e)) in
 				let e = mk (TBlock [e]) e.etype e.epos in
 				if v.v_type == t_dynamic then begin
@@ -1614,9 +1616,9 @@ let generate_class ctx c =
 	(match ctx.con.com.main_class with
 	| Some path when path = c.cl_path ->
 		ctx.dependencies <- PMap.add ([],"setjmp") false ctx.dependencies;
-		add_dependency ctx (["c";"hxc"],"Exception");
-		add_dependency ctx (["hxc"],"Init");
-		print ctx "int main() {\n\t_hx_init();\n\tswitch(setjmp(*c_hxc_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
+		add_dependency ctx (["c"],"Exception");
+		add_dependency ctx (["c"],"Init");
+		print ctx "int main() {\n\t_hx_init();\n\tswitch(setjmp(*c_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
 	| _ -> ());
 
 	ctx.buf <- ctx.buf_h;
@@ -1797,7 +1799,7 @@ let generate_type con mt = match mt with
 		()
 
 let generate_anon_file con =
-	let ctx = mk_type_context con (["hxc"],"AnonTypes") in
+	let ctx = mk_type_context con (["c"],"AnonTypes") in
 
 	spr ctx "// forward declarations";
 	PMap.iter (fun _ (s,_) ->
@@ -1849,7 +1851,7 @@ let generate_anon_file con =
 	close_type_context ctx
 
 let generate_init_file con =
-	let ctx = mk_type_context con (["hxc"],"Init") in
+	let ctx = mk_type_context con (["c"],"Init") in
 	ctx.buf <- ctx.buf_c;
 	print ctx "void _hx_init() {";
 	let b = open_block ctx in
