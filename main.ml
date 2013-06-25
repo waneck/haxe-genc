@@ -1218,10 +1218,6 @@ try
 		com.main <- main;
 		com.types <- types;
 		com.modules <- modules;
-		List.iter (fun t ->
-			Codegen.remove_generic_base tctx t;
-			Codegen.remove_extern_fields tctx t
-		) com.types;
 		let filters = [
 			Codegen.Abstract.handle_abstract_casts tctx;
 			Codegen.promote_complex_rhs com;
@@ -1234,6 +1230,10 @@ try
 		Codegen.post_process_end();
 		List.iter (fun f -> f()) (List.rev com.filters);
 		List.iter (Codegen.save_class_state tctx) com.types;
+		List.iter (fun t ->
+			Codegen.remove_generic_base tctx t;
+			Codegen.remove_extern_fields tctx t
+		) com.types;
 		if Common.defined_value_safe com Define.DisplayMode = "usage" then
 			Codegen.detect_usage com;
 		let dce_mode = (try Common.defined_value com Define.Dce with _ -> "no") in
