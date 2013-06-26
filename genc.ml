@@ -945,13 +945,14 @@ let close_type_context ctx =
 	let buf = Buffer.create (Buffer.length ctx.buf_h) in
 	let spr = Buffer.add_string buf in
 	let n = "_h" ^ path_to_name ctx.type_path in
+	let relpath path = path_to_file_path ((get_relative_path ctx.type_path path),snd path) in
 	spr (Printf.sprintf "#ifndef %s\n" n);
 	spr (Printf.sprintf "#define %s\n" n);
 	spr "#include <stdio.h>\n";
 	spr "#include <stdlib.h>\n";
 	spr "#include <string.h>\n";
+	if ctx.type_path <> ([],"hxc") then spr (Printf.sprintf "#include \"%s.h\"\n" (relpath ([],"hxc")));
 
-	let relpath path = path_to_file_path ((get_relative_path ctx.type_path path),snd path) in
 	PMap.iter (fun path dept ->
 		let name = path_to_name path in
 		match dept with
@@ -1113,6 +1114,9 @@ let rec s_type ctx t =
 		let ptr = if is_value_type ctx t then "" else "*" in
 		add_enum_dependency ctx en;
 		(path_to_name en.e_path) ^ ptr
+	| TAbstract(a,_) when Meta.has Meta.Native a.a_meta ->
+		let ptr = if is_value_type ctx t then "" else "*" in
+		(path_to_name a.a_path) ^ ptr
 	| TAnon a ->
 		begin match !(a.a_status) with
 		| Statics c -> "Class_" ^ (path_to_name c.cl_path) ^ "*"
@@ -1918,12 +1922,10 @@ let generate_typeref con t =
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
 		let ctx = mk_type_context con c.cl_path  in
-		if c.cl_path <> ([],"hxc") then add_dependency ctx DForward ([],"hxc");
 		generate_class ctx c;
 		close_type_context ctx;
 	| TEnumDecl en when not en.e_extern ->
 		let ctx = mk_type_context con en.e_path  in
-		add_dependency ctx DForward ([],"hxc");
 		generate_enum ctx en;
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()

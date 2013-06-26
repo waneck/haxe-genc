@@ -9,7 +9,15 @@ import c.TypeReference;
 #else
 	#define ALLOCA(n) _alloca(n)
 #endif
+
+typedef unsigned char uint8;
 ')
 @:keep @:native('hxc') class Boot
 {
+}
+
+@:native("uint8")
+@:coreType
+abstract UInt8 from Int to Int {
+	
 }
