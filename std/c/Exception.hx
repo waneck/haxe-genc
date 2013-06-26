@@ -21,10 +21,10 @@ class Exception {
 	}
 
 	static public function pop():Pointer<JmpBuf> {
-		return untyped stack.pop();
+		return stack.pop();
 	}
 
 	static public function peek():Pointer<JmpBuf> {
-		return untyped stack[stack.length - 1];
+		return stack[stack.length - 1];
 	}
 }

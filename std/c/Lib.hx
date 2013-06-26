@@ -14,6 +14,11 @@ class Lib
 
 	@:extern public static inline function alloc(byteSize:Int):Pointer<Void>
 	{
-		return untyped malloc(byteSize);
+		return untyped __call("malloc", byteSize);
+	}
+	
+	@:extern public static inline function calloc(num:Int, sizeEach:Int):Pointer<Void>
+	{
+		return untyped __call("calloc", num, sizeEach);
 	}
 }

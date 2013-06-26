@@ -29,6 +29,8 @@ private typedef VectorData<T> = #if flash10
 	cs.NativeArray<T>
 #elseif java
 	java.NativeArray<T>
+#elseif c
+	c.FixedArray<T>
 #else
 	Array<T>
 #end
@@ -63,6 +65,8 @@ abstract Vector<T>(VectorData<T>) {
 			this = new java.NativeArray(length);
 		#elseif cpp
 			this = untyped (new Array<T>()).__SetSizeExact(length);
+		#elseif c
+			this = untyped (new c.FixedArray<T>(length));
 		#else
 			this = [];
 			untyped this.length = length;

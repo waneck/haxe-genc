@@ -79,6 +79,20 @@ and gen_context = {
 
 and filter = gen_context->(texpr->texpr)
 
+let rec follow t =
+	match t with
+	| TMono r ->
+		(match !r with
+		| Some t -> follow t
+		| _ -> t)
+	| TLazy f ->
+		follow (!f())
+	| TType (t,tl) ->
+		follow (apply_params t.t_types tl t.t_type)
+	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
+		follow (Codegen.Abstract.get_underlying_type a pl)
+	| _ -> t
+
 module Expr = struct
 
 	let t_path t = match follow t with
@@ -658,8 +672,7 @@ module TypeParams = struct
 					{ e with eexpr = TBinop(op, gen.map e1, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.t_pointer e1.etype) (gen.map e2))) }
 			(* - pointer array access -> pointer + typeref's size * index *)
 			| TArray(e1, idx) -> (match follow e1.etype with
-				| TAbstract({a_path=["c"], "Pointer"},[t])
-				| TInst({cl_path=["c"], "_PointerR"},[t]) when is_type_param gen.gcon t ->
+				| TAbstract({a_path=["c"], "Pointer"},[t]) when is_type_param gen.gcon t ->
 					{ e with
 						eexpr = TBinop(
 							Ast.OpAdd, gen.map e1,
@@ -1397,9 +1410,13 @@ and generate_expr ctx e = match e.eexpr with
 	| TMeta(_,e) ->
 		generate_expr ctx e
 	| TCast(e1,_) ->
-		print ctx "((%s) " (s_type ctx e.etype);
-		generate_expr ctx e1;
-		spr ctx ")"
+		begin match follow e1.etype with
+		| TInst(c,_) when Meta.has Meta.Struct c.cl_meta -> generate_expr ctx e1;
+		| _ ->
+			print ctx "((%s) " (s_type ctx e.etype);
+			generate_expr ctx e1;
+			spr ctx ")"
+		end
 	| TEnumParameter (e1,ef,i) ->
 		generate_expr ctx e1;
 		begin match follow e1.etype with
@@ -1663,7 +1680,7 @@ let generate_class ctx c =
 					(if is_value_type ctx (TInst(c,List.map snd c.cl_types)) then
 						Expr.mk_ccode ctx (Printf.sprintf "%s this" path)
 					else
-  					Expr.mk_ccode ctx (Printf.sprintf "%s* this = (%s*) malloc(sizeof(%s))" path path path))
+  					Expr.mk_ccode ctx (Printf.sprintf "%s* this = (%s*) calloc(1, sizeof(%s))" path path path))
 				in
 				let ereturn = Expr.mk_ccode ctx "return this" in
 				let e = match e.eexpr with
@@ -1910,7 +1927,7 @@ let generate_type con mt = match mt with
 		generate_enum ctx en;
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()
-	| TAbstractDecl a ->
+	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
 		generate_typeref con (TAbstract(a,List.map snd a.a_types))
 	| _ ->
 		()
@@ -2036,6 +2053,8 @@ let add_filters con =
 let generate com =
 	let t_typeref = get_type com ([],"typeref") in
 	let t_pointer = get_type com (["c"],"Pointer") in
+	(* HACK: Pointer is actually a @:coreType *)
+	(match t_pointer with TAbstract(a,_) -> a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta | _ -> assert false);
 	let con = {
 		com = com;
 		cvar = alloc_var "__c" t_dynamic;
