@@ -28,9 +28,15 @@ type function_context = {
 	mutable loop_stack : string option list;
 }
 
+type hxc = {
+	mutable t_typeref : t -> t;
+	mutable t_pointer : t -> t;
+}
+
 type context = {
 	com : Common.context;
 	cvar : tvar;
+	hxc : hxc;
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
 	mutable num_anon_types : int;
@@ -40,8 +46,6 @@ type context = {
 	mutable type_parameters : (path, texpr) PMap.t;
 	mutable init_modules : path list;
 	mutable generated_types : type_context list;
-	mutable t_typeref : t -> t;
-	mutable t_pointer : t -> t;
 	mutable filters : (string * float * filter) list;
 	mutable filters_dirty : bool;
 }
@@ -174,7 +178,7 @@ module Expr = struct
 		}
 
 	let mk_type_param con pos t =
-		let t = con.t_typeref t in
+		let t = con.hxc.t_typeref t in
 		let c,p = match follow t with
 			| TInst(c,p) -> c,p
 			| _ -> assert false
@@ -500,7 +504,7 @@ module TypeParams = struct
 	| [] -> ()
 	| types ->
 		let vars = List.map (fun (s,t) ->
-			let f = Expr.mk_class_field (type_param_name t) (gen.gcon.t_typeref t) false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) [] in
+			let f = Expr.mk_class_field (type_param_name t) (gen.gcon.hxc.t_typeref t) false c.cl_pos (Var {v_read = AccNormal; v_write = AccNormal}) [] in
 			let key = Expr.t_path t in
 			let value = {
 				eexpr = TField({ eexpr = TConst TThis; etype = TInst(c, List.map snd c.cl_types); epos = c.cl_pos }, FInstance(c,f));
@@ -521,11 +525,11 @@ module TypeParams = struct
 	let change_parameter_function gen cf =
 		let tf_args, types, is_ctor = match cf.cf_name, cf.cf_params with
 			| _, _ :: _ ->
-				List.map (fun (_,t) -> alloc_var (type_param_name t) (gen.gcon.t_typeref t),None) cf.cf_params, List.map snd cf.cf_params, false
+				List.map (fun (_,t) -> alloc_var (type_param_name t) (gen.gcon.hxc.t_typeref t),None) cf.cf_params, List.map snd cf.cf_params, false
 			(* constructors have special treatment *)
 			| "new", _ -> (match gen.mtype with
 				| Some (TClassDecl c) ->
-					List.map (fun (_,t) -> alloc_var (type_param_name t) (gen.gcon.t_typeref t), None) c.cl_types, List.map snd c.cl_types, true
+					List.map (fun (_,t) -> alloc_var (type_param_name t) (gen.gcon.hxc.t_typeref t), None) c.cl_types, List.map snd c.cl_types, true
 				| _ -> [],[],false)
 			| _ -> [],[],false
 		in
@@ -628,7 +632,7 @@ module TypeParams = struct
 				let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 				(* if type parameter is being cast into a concrete one, we need to dereference it *)
 				if is_type_param gen.gcon ret && not (is_type_param gen.gcon applied_ret) then
-					Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.t_pointer applied_ret) eret)
+					Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.hxc.t_pointer applied_ret) eret)
 				else
 					eret
 			| TReturn (Some er) when Option.is_some out_var ->
@@ -667,9 +671,9 @@ module TypeParams = struct
 					List.iter (gen.free_temp) !temps;
 					ret
 				end else if is_field_type_param gen.gcon e1 then
-					{ e with eexpr = TBinop(op, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.t_pointer e2.etype) (gen.map e1)), gen.map e2) }
+					{ e with eexpr = TBinop(op, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.hxc.t_pointer e2.etype) (gen.map e1)), gen.map e2) }
 				else
-					{ e with eexpr = TBinop(op, gen.map e1, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.t_pointer e1.etype) (gen.map e2))) }
+					{ e with eexpr = TBinop(op, gen.map e1, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.hxc.t_pointer e1.etype) (gen.map e2))) }
 			(* - pointer array access -> pointer + typeref's size * index *)
 			| TArray(e1, idx) -> (match follow e1.etype with
 				| TAbstract({a_path=["c"], "Pointer"},[t]) when is_type_param gen.gcon t ->
@@ -1643,7 +1647,7 @@ let generate_class ctx c =
 			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
 			DynArray.add methods (cf2,stat);
 			cf.cf_expr <- None;
-			cf.cf_type <- ctx.con.t_pointer cf.cf_type;
+			cf.cf_type <- ctx.con.hxc.t_pointer cf.cf_type;
 			add_init (Expr.mk_ccode ctx (Printf.sprintf "%s = %s" (full_field_name c cf) (full_field_name c cf2)));
 		| _ ->
 			()
@@ -2047,12 +2051,20 @@ let add_filters con =
 	TypeChecker.configure con
 
 let generate com =
-	let t_typeref = get_type com ([],"typeref") in
-	let t_pointer = get_type com (["c"],"Pointer") in
-	(* HACK: Pointer is actually a @:coreType *)
-	(match t_pointer with TAbstract(a,_) -> a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta | _ -> assert false);
+	let hxc = {
+		t_typeref = (match follow (get_type com ([],"typeref")) with
+			| TInst(c,_) -> fun t -> TInst(c,[t])
+			| _ -> assert false);
+		t_pointer = (match get_type com (["c"],"Pointer") with
+			| TAbstract(a,_) ->
+				(* HACK: Pointer is actually a @:coreType *)
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				(fun t -> TAbstract(a,[t]))
+			| _ -> assert false);
+	} in
 	let con = {
 		com = com;
+		hxc = hxc;
 		cvar = alloc_var "__c" t_dynamic;
 		num_temp_funcs = 0;
 		num_labels = 0;
@@ -2064,12 +2076,6 @@ let generate com =
 		type_parameters = PMap.empty;
 		init_modules = [];
 		generated_types = [];
-		t_typeref = (match follow t_typeref with
-			| TInst(c,_) -> fun t -> TInst(c,[t])
-			| _ -> assert false);
-		t_pointer = (match follow t_pointer with
-			| TAbstract(a,_) -> fun t -> TAbstract(a,[t])
-			| _ -> assert false);
 		filters = [];
 		filters_dirty = false;
 	} in
