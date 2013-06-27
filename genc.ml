@@ -742,8 +742,9 @@ module VarDeclarations = struct
 				| DTGuard(_,dt1,dt2) ->
 					dtl dt1;
 					(match dt2 with None -> () | Some dt -> dtl dt)
-				| DTSwitch(_,cl) ->
-					List.iter (fun (_,dt) -> dtl dt) cl
+				| DTSwitch(_,cl,dto) ->
+					List.iter (fun (_,dt) -> dtl dt) cl;
+					(match dto with None -> () | Some dt -> dtl dt)
 				| DTBind(bl,dt) ->
 					List.iter (fun ((v,_),_) ->
 						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
@@ -1463,16 +1464,7 @@ and generate_expr ctx e = match e.eexpr with
 				(match dt2 with None -> () | Some dt ->
 					spr ctx " else ";
 					loop dt)
-			| DTSwitch(e,cl) ->
-				let def = ref None in
-				let cl = List.filter (fun (e,dt) ->
-					match e.eexpr with
-	 				| TMeta((Meta.MatchAny,_,_),_) ->
-						def := Some dt;
-						false
-					| _ ->
-						true
-				) cl in
+			| DTSwitch(e,cl,dto) ->
 				spr ctx "switch(";
 				generate_expr ctx e;
 				spr ctx ") {";
@@ -1486,7 +1478,7 @@ and generate_expr ctx e = match e.eexpr with
 					newline ctx;
 					spr ctx "break";
 				) cl;
-				begin match !def with
+				begin match dto with
 					| None -> ()
 					| Some dt ->
 						newline ctx;
