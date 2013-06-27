@@ -14,9 +14,9 @@ class Exception {
 	static var stack:Array<Pointer<JmpBuf>> = new Array();
 	static var thrownObject:Dynamic;
 
-	static public function push():Pointer<JmpBuf> untyped {
-		var buf:Pointer<JmpBuf> = untyped __c("(jmp_buf*) malloc(sizeof(jmp_buf))");
-		stack.push(untyped buf);
+	static public function push():Pointer<JmpBuf> {
+		var buf:Pointer<JmpBuf> = cast Lib.alloc(Lib.sizeof(new TypeReference<JmpBuf>()));
+		stack.push(buf);
 		return buf;
 	}
 

@@ -2,6 +2,7 @@ package c;
 
 import c.Exception;
 import c.TypeReference;
+import c.Types;
 
 @:headerCode('
 #ifndef _MSC_VER
@@ -10,14 +11,9 @@ import c.TypeReference;
 	#define ALLOCA(n) _alloca(n)
 #endif
 
-typedef unsigned char uint8;
+typedef unsigned char hx_uint8;
+typedef char hx_int8;
 ')
 @:keep @:native('hxc') class Boot
 {
-}
-
-@:native("uint8")
-@:coreType
-abstract UInt8 from Int to Int {
-	
 }

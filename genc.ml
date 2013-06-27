@@ -107,7 +107,7 @@ module Expr = struct
 	let mk_ref con p e =
 		{
 			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__adressof" t_dynamic); etype = t_dynamic; epos = p },
+				{ eexpr = TLocal(alloc_var "__addressof" t_dynamic); etype = t_dynamic; epos = p },
 				[e]
 			);
 			etype = t_dynamic;
@@ -166,7 +166,7 @@ module Expr = struct
 	let mk_sizeof con p e =
 		{
 			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
+				{ eexpr = TLocal(alloc_var "__sizeof" t_dynamic); etype = t_dynamic; epos = p },
 				[e]
 			);
 			etype = con.com.basic.tint;
@@ -189,7 +189,7 @@ module Expr = struct
 					{ eexpr = TConst (TString "ALLOCA"); etype = t_dynamic; epos = p };
 					{
 						eexpr = TCall(
-							{ eexpr = TLocal(alloc_var "__sizeof__" t_dynamic); etype = t_dynamic; epos = p },
+							{ eexpr = TLocal(alloc_var "__sizeof" t_dynamic); etype = t_dynamic; epos = p },
 							[mk_type_param con p t]
 						);
 						etype = con.com.basic.tint;
@@ -1159,7 +1159,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		concat ctx "," (generate_expr ctx) p;
 		spr ctx ")";
 	(* pass by reference call *)
-	| TLocal({v_name = "__adressof"}),[e1] ->
+	| TLocal({v_name = "__addressof"}),[e1] ->
 		spr ctx "&";
 		generate_expr ctx e1;
 	(* dereference operator *)
@@ -1167,13 +1167,13 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		spr ctx "*";
 		generate_expr ctx e1;
 	(* sizeof *)
-	| TLocal({v_name = "__sizeof__"}),[e1] ->
+	| TLocal({v_name = "__sizeof"}),[e1] ->
 		(* get TypeReference's type *)
 		let t = match follow e1.etype with
-			| TInst({cl_path = [],"typeref"},[t]) -> t
-			| _ -> ctx.con.com.error "This expression cannot be generated. Expected a TypeReference type" e1.epos; assert false
+			| TInst({cl_path = [],"typeref"},[t]) -> follow t
+			| t -> t
 		in
-		(match follow t with
+		(match t with
 		| TInst({cl_kind = KTypeParameter _},_) ->
 			(* indirection *)
 			spr ctx "(";
