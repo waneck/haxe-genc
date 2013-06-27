@@ -1160,12 +1160,14 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		spr ctx ")";
 	(* pass by reference call *)
 	| TLocal({v_name = "__addressof"}),[e1] ->
-		spr ctx "&";
+		spr ctx "&(";
 		generate_expr ctx e1;
+		spr ctx ")"
 	(* dereference operator *)
 	| TLocal({v_name = "__deref"}),[e1] ->
-		spr ctx "*";
+		spr ctx "*(";
 		generate_expr ctx e1;
+		spr ctx ")"
 	(* sizeof *)
 	| TLocal({v_name = "__sizeof"}),[e1] ->
 		(* get TypeReference's type *)
