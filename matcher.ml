@@ -845,8 +845,8 @@ let rec compile mctx stl pmat =
 			) sigma in
 			let def = default mctx pmat in
 			let dt = match def,cases with
- 			| _,[{c_def = CFields _},dt] ->
-				dt
+			| _ when List.exists (fun (c,_) -> match c.c_def with CFields _ -> true | _ -> false) cases ->
+				switch st_head cases
 			| _ when not inf && PMap.is_empty !all ->
 				switch st_head cases
 			| [],_ when inf && not mctx.need_val ->
@@ -899,10 +899,7 @@ let convert_con ctx con = match con.c_def with
 	| CExpr e -> e
 	| CEnum(e,ef) -> mk_const ctx con.c_pos (TInt (Int32.of_int ef.ef_index))
 	| CArray i -> mk_const ctx con.c_pos (TInt (Int32.of_int i))
-	| CAny ->
-		let t = mk_mono() in
-		mk (TMeta((Meta.MatchAny,[],con.c_pos),mk (TConst (TNull)) t con.c_pos)) t con.c_pos
-	| CFields _ -> assert false
+	| CAny | CFields _ -> assert false
 
 let convert_switch ctx st cases loop =
 	let e_st = convert_st ctx st in
@@ -926,15 +923,22 @@ let convert_switch ctx st cases loop =
 		e_st
 	in
 	let null = ref None in
+	let def = ref None in
 	let cases = List.filter (fun (con,dt) ->
 		match con.c_def with
 		| CConst TNull ->
 			null := Some (loop dt);
 			false
+		| CAny ->
+			def := Some (loop dt);
+			false
 		| _ ->
 			true
 	) cases in
-	let dt = DTSwitch(e, List.map (fun (c,dt) -> convert_con ctx c, loop dt) cases) in
+	let dt = match cases with
+		| [{c_def = CFields _},dt] -> loop dt
+		| _ -> DTSwitch(e, List.map (fun (c,dt) -> convert_con ctx c, loop dt) cases, !def)
+	in
 	match !null with
 	| None -> dt
 	| Some dt_null ->
