@@ -117,6 +117,10 @@ class Bytes {
 		var newarr = new cs.NativeArray(len);
 		cs.system.Array.Copy(b, pos, newarr, 0, len);
 		return new Bytes(len, newarr);
+		#elseif c
+		var r = new c.FixedArray(len);
+		c.Lib.memcpy(c.Lib.getAddress(b), pos, c.Lib.getAddress(r), 0, len);
+		return new Bytes(len, r);
 		#else
 		return new Bytes(len,b.slice(pos,pos+len));
 		#end
@@ -145,6 +149,8 @@ class Bytes {
 		return untyped __php__("$this->b < $other->b ? -1 : ($this->b == $other->b ? 0 : 1)");
 		//#elseif cs
 		//TODO: memcmp if unsafe flag is on
+		#elseif c
+		return 0;
 		#else
 		var b1 = b;
 		var b2 = other.b;
@@ -181,6 +187,8 @@ class Bytes {
 		try
 			return new String(b, pos, len, "UTF-8")
 		catch (e:Dynamic) throw e;
+		#elseif c
+		return null;
 		#else
 		var s = "";
 		var b = b;
@@ -224,11 +232,14 @@ class Bytes {
 			return new String(b, 0, length, "UTF-8");
 		}
 		catch (e:Dynamic) throw e;
+		#elseif c
+		return null;
 		#else
 		return readString(0,length);
 		#end
 	}
 
+	#if !c
 	public function toHex() : String {
 		var s = new StringBuf();
 		var chars = [];
@@ -242,7 +253,8 @@ class Bytes {
 		}
 		return s.toString();
 	}
-
+	#end
+	
 	public inline function getData() : BytesData {
 		return b;
 	}
@@ -264,6 +276,8 @@ class Bytes {
 		return new Bytes(length, new cs.NativeArray(length));
 		#elseif java
 		return new Bytes(length, new java.NativeArray(length));
+		#elseif c
+		return new Bytes(length, new c.FixedArray(length));
 		#else
 		var a = new Array();
 		for( i in 0...length )
@@ -296,6 +310,8 @@ class Bytes {
 			return new Bytes(b.length, b);
 		}
 		catch (e:Dynamic) throw e;
+		#elseif c
+		return null;
 		#else
 		var a = new Array();
 		// utf8-decode
@@ -330,6 +346,8 @@ class Bytes {
 		return new Bytes(untyped __call__("strlen", b), b);
 		#elseif cs
 		return new Bytes(b.Length,b);
+		#elseif c
+		return new Bytes(b.length,b);
 		#else
 		return new Bytes(b.length,b);
 		#end
@@ -350,6 +368,8 @@ class Bytes {
 		return untyped b[pos];
 		#elseif java
 		return untyped b[pos] & 0xFF;
+		#elseif c
+		return b[pos];
 		#else
 		return b[pos];
 		#end
