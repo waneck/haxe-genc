@@ -80,6 +80,8 @@ class Bytes {
 		java.lang.System.arraycopy(src.b, srcpos, b, pos, len);
 		#elseif cs
 		cs.system.Array.Copy(src.b, srcpos, b, pos, len);
+		#elseif c
+		c.Lib.memcpy(b.array + pos, src.b.array + srcpos, len);
 		#else
 		var b1 = b;
 		var b2 = src.b;
@@ -97,7 +99,7 @@ class Bytes {
 	}
 
 	public function sub( pos : Int, len : Int ) : Bytes {
-		#if (!neko && !c)
+		#if !neko
 		if( pos < 0 || len < 0 || pos + len > length ) throw Error.OutsideBounds;
 		#end
 		#if neko
