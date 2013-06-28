@@ -31,7 +31,7 @@ import c.Lib;
 
 	@:extern private static inline function memcpy<T>(src:FixedArray<T>, srcPos:Int, dest:FixedArray<T>, destPos:Int, length:Int):Void
 	{
-		Lib.memcpy(src.array, srcPos, dest.array, destPos, length);
+		FixedArray.copy(src.array, srcPos, dest.array, destPos, length);
 	}
 
 	@:keep private static function ofNative<X>(native:FixedArray<X>):Array<X>
@@ -45,7 +45,7 @@ import c.Lib;
 	@:keep private static function ofPointerCopy<T>(len:Int, array:Pointer<T>):Array<T>
 	{
 		var ret:Pointer<T> = cast Lib.alloc(len * Lib.sizeof(new TypeReference<T>()));
-		Lib.memcpy(array, 0, ret, 0, len);
+		FixedArray.copy(array, 0, ret, 0, len);
 		var f = new FixedArray(len, ret);
 		var ret = new Array();
 		ret.__a = f;

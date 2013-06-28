@@ -2,11 +2,11 @@ package c;
 
 class Lib
 {
-	@:extern public static inline function memcpy<A>(src:Pointer<A>, srcPos:Int, dest:Pointer<A>, destPos:Int, length:Int):Void
+	@:extern public static inline function memcpy<A,B>(dest:Pointer<A>, src:Pointer<B>, length:Int):Void
 	{
-		untyped __call("memcpy",(dest + destPos), (src + srcPos), length * sizeof(new TypeReference<A>()) );
+		untyped __call("memcpy",dest, src, length);
 	}
-
+	
 	@:extern public static inline function sizeof<T>(c:TypeReference<T>):Int
 	{
 		return untyped __sizeof(c);
