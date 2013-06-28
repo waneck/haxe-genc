@@ -1077,7 +1077,10 @@ let begin_loop ctx =
 		| _ ->
 			assert false
 
-let full_field_name c cf = (path_to_name c.cl_path) ^ "_" ^ cf.cf_name
+let full_field_name c cf =
+	if Meta.has Meta.Plain cf.cf_meta then cf.cf_name
+	else (path_to_name c.cl_path) ^ "_" ^ cf.cf_name
+
 let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)

@@ -362,6 +362,7 @@ module MetaInfo = struct
 		| Op -> ":op",("Declares an abstract field as being an operator overload",[HasParam "The operation";UsedOn TAbstractField])
 		| Optional -> ":optional",("Marks the field of a structure as optional",[UsedOn TClassField])
 		| Overload -> ":overload",("Allows the field to be called with different argument types",[HasParam "Function specification (no expression)";UsedOn TClassField])
+		| Plain -> ":plain",("Generate a class field unqualified",[UsedOn TClassField;Platform C])
 		| Public -> ":public",("Marks a class field as being public",[UsedOn TClassField])
 		| PublicFields -> ":publicFields",("Forces all class fields of inheriting classes to be public",[UsedOn TClass])
 		| PrivateAccess -> ":privateAccess",("Internally used by the typer to allow context-sensitive private access",[Internal])
