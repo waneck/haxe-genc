@@ -97,7 +97,7 @@ class Bytes {
 	}
 
 	public function sub( pos : Int, len : Int ) : Bytes {
-		#if !neko
+		#if (!neko && !c)
 		if( pos < 0 || len < 0 || pos + len > length ) throw Error.OutsideBounds;
 		#end
 		#if neko
@@ -118,9 +118,9 @@ class Bytes {
 		cs.system.Array.Copy(b, pos, newarr, 0, len);
 		return new Bytes(len, newarr);
 		#elseif c
-		var r = new c.FixedArray(len);
-		c.Lib.memcpy(c.Lib.getAddress(b), pos, c.Lib.getAddress(r), 0, len);
-		return new Bytes(len, r);
+		var b2 = new Bytes(len, new c.FixedArray(len));
+		c.Lib.memcpy(c.Lib.getAddress(b2.b.array), c.Lib.getAddress(b.array) + pos, len);
+		return b2;
 		#else
 		return new Bytes(len,b.slice(pos,pos+len));
 		#end
