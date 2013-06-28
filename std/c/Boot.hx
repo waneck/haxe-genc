@@ -13,6 +13,8 @@ import c.Types;
 
 typedef unsigned char hx_uint8;
 typedef char hx_int8;
+typedef unsigned long hx_uint32;
+typedef long hx_int32;
 ')
 @:keep @:native('hxc') class Boot
 {
