@@ -25,17 +25,25 @@ import c.Types;
 
 @:notNull
 @:runtimeValue
-abstract Pointer<T>(Int) {
+abstract Pointer<T>(_Pointer) {
 	public function new(i:Int) {
-		this = i;
+		this = untyped i;
 	}
 	
 	@:extern @:op(A+B) public function add(offset:Int):Pointer<T> {
-		return new Pointer<T>(this + offset);
+		return new Pointer<T>( untyped __call("ADD_P_INT",this,offset) );
 	}
-	
+	@:extern @:op(A+B) public function sub(offset:Int):Pointer<T> {
+		return new Pointer<T>( untyped __call("SUB_P_INT",this,offset) );
+	}
+	@:extern @:op(A+B) public function addp(offset:Pointer<T>):Pointer<T> {
+		return new Pointer<T>(untyped __call("ADD_P_P",this,offset));
+	}
+	@:extern @:op(A+B) public function subp(offset:Pointer<T>):Pointer<T> {
+		return new Pointer<T>(untyped __call("SUB_P_P",this,offset));
+	}
 	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
-		return new Pointer(++this);
+		return new Pointer(untyped __call("INCR_P",this));
 	}
 	
 	@:extern @:arrayAccess public inline function __get(index:Int):T {
@@ -45,6 +53,15 @@ abstract Pointer<T>(Int) {
 	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
 		return untyped this[index] = value;
 	}
+	
+	public inline function toInt():Int{
+		return untyped this;
+	}
+	
+	public static inline function fromInt<T>(v:Int):Pointer<T> {
+		return new Pointer(v);
+	}
+	
 }
 
 abstract ConstPointer<T>(Pointer<T>) {
@@ -52,3 +69,5 @@ abstract ConstPointer<T>(Pointer<T>) {
 		return cast s;
 	}
 }
+
+extern private class _Pointer {}

@@ -49,6 +49,6 @@ class FixedArray<T> implements ArrayAccess<T>
 	
 	@:extern public static inline function copy<A>(src:Pointer<A>, srcPos:Int, dest:Pointer<A>, destPos:Int, length:Int):Void
 	{
-		Lib.memcpy((dest + destPos), (src + srcPos), length * Lib.sizeof(new TypeReference<A>()) );
+		Lib.memcpy((dest.add(destPos)), (src.add(srcPos)), length * Lib.sizeof(new TypeReference<A>()) );
 	}
 }
