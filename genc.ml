@@ -1231,7 +1231,31 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")"
 
+and generate_constant ctx e = function
+	| TString s ->
+		print ctx "\"%s\"" s
+	| TInt i ->
+		print ctx "%ld" i
+	| TFloat s ->
+		print ctx "%s" s
+	| TNull when TypeParams.is_type_param ctx.con e.etype ->
+		generate_expr ctx (Expr.mk_type_param ctx.con e.epos e.etype);
+		spr ctx "->nullval"
+	| TNull ->
+		spr ctx "NULL"
+	| TSuper ->
+		(* TODO: uhm... *)
+		()
+	| TBool true ->
+		spr ctx "1"
+	| TBool false ->
+		spr ctx "0"
+	| TThis ->
+		spr ctx "this"
+
 and generate_expr ctx e = match e.eexpr with
+	| TConst c ->
+		generate_constant ctx e c
 	| TArray(e1, e2) ->
 		generate_expr ctx e1;
 		spr ctx "[";
@@ -1254,26 +1278,6 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 		spr ctx "}";
 		newline ctx;
-	| TConst(TString s) ->
-		print ctx "\"%s\"" s
-	| TConst(TInt i) ->
-		print ctx "%ld" i
-	| TConst(TFloat s) ->
-		print ctx "%s" s
-	| TConst TNull when TypeParams.is_type_param ctx.con e.etype ->
-		generate_expr ctx (Expr.mk_type_param ctx.con e.epos e.etype);
-		spr ctx "->nullval"
-	| TConst(TNull) ->
-		spr ctx "NULL"
-	| TConst(TSuper) ->
-		(* TODO: uhm... *)
-		()
-	| TConst(TBool true) ->
-		spr ctx "1"
-	| TConst(TBool false) ->
-		spr ctx "0"
-	| TConst(TThis) ->
-		spr ctx "this"
 	| TCall(e1,el) ->
 		generate_call ctx e e1 el
 	| TTypeExpr (TClassDecl c) ->
