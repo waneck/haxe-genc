@@ -1165,7 +1165,8 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	| TField(_,FStatic(_,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
+	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
+		ignore(check_include_meta ctx c.cl_meta);
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
