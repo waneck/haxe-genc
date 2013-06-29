@@ -1161,9 +1161,13 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		spr ctx ")";
 	| TLocal({v_name = "__c"}),[{eexpr = TConst(TString code)}] ->
 		spr ctx code;
-	| TLocal({v_name = "__call"}),{eexpr = TConst(TString name)} :: p ->
+	| TLocal({v_name = "__call"}),{eexpr = TConst(TString name)} :: el ->
 		print ctx "%s(" name;
-		concat ctx "," (generate_expr ctx) p;
+		concat ctx "," (generate_expr ctx) el;
+		spr ctx ")";
+	| TField(_,FStatic(_,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
+		print ctx "%s(" name;
+		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
 	(* pass by reference call *)
 	| TLocal({v_name = "__addressof"}),[e1] ->
