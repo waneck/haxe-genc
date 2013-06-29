@@ -43,10 +43,10 @@ abstract Pointer<T>(Int) {
 	
 	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
 		return new Pointer(lhs.value() - rhs.value());
+
 	}
-	
 	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
-		return new Pointer(++this);
+		return new Pointer(untyped __call("INCR_P",this));
 	}
 	
 	@:extern @:arrayAccess public inline function __get(index:Int):T {
@@ -56,10 +56,11 @@ abstract Pointer<T>(Int) {
 	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
 		return untyped this[index] = value;
 	}
-	
+
 	inline function value() {
 		return this;
 	}
+
 }
 
 abstract ConstPointer<T>(Pointer<T>) {
@@ -67,3 +68,4 @@ abstract ConstPointer<T>(Pointer<T>) {
 		return cast s;
 	}
 }
+
