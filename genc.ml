@@ -24,7 +24,6 @@ type dependency_type =
 
 type function_context = {
 	field : tclass_field;
-	expr : texpr option;
 	mutable loop_stack : string option list;
 }
 
@@ -940,7 +939,6 @@ let mk_type_context con path =
 		type_path = path;
 		fctx = {
 			field = null_field;
-			expr = None;
 			loop_stack = [];
 		};
 		dependencies = PMap.empty;
@@ -1334,9 +1332,8 @@ and generate_expr ctx e = match e.eexpr with
 	| TReturn None ->
 		spr ctx "return"
 	| TReturn (Some e1) ->
-		spr ctx "return (";
+		spr ctx "return ";
 		generate_expr ctx e1;
-		spr ctx ")"
 	| TVars(vl) ->
 		let f (v,eo) =
 			spr ctx (s_type_with_name ctx v.v_type v.v_name);
@@ -1438,9 +1435,6 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx e1;
 		spr ctx ")";
-	| TArrayDecl _ | TTry _ | TFor _ ->
-		(* handled in function context pass *)
-		assert false
 	| TMeta(_,e) ->
 		generate_expr ctx e
 	| TCast(e1,_) ->
@@ -1462,7 +1456,6 @@ and generate_expr ctx e = match e.eexpr with
 				assert false
 		end
 	| TThrow e1 ->
-		add_dependency ctx DCStd ([],"setjmp");
 		add_dependency ctx DFull (["c"],"Exception");
 		spr ctx "c_Exception_thrownObject = ";
 		generate_expr ctx e1;
@@ -1534,6 +1527,9 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 	| TFunction _ ->
 		print_endline ("Not implemented yet: " ^ (Expr.debug ctx e))
+	| TArrayDecl _ | TTry _ | TFor _ ->
+		(* handled in function context pass *)
+		assert false
 
 let mk_array_decl ctx el t p =
 	let ts, eparam = match follow t with
@@ -1559,7 +1555,7 @@ let mk_array_decl ctx el t p =
 	newline ctx;
 	spr ctx "}";
 	newline ctx;
-	let v = alloc_var name t_dynamic in
+	let v = alloc_var name (ctx.con.com.basic.tarray t) in
 	let ev = mk (TLocal v) v.v_type p in
 	mk (TCall(ev,el)) t p
 
@@ -1573,14 +1569,11 @@ let mk_array_decl ctx el t p =
 	- TTry is replaced with a TSwitch and uses setjmp
 	- TFor is replaced with TWhile
 *)
-let mk_function_context ctx cf =
-
+let init_field ctx cf =
 	let rec loop e = match e.eexpr with
 		| TArrayDecl el ->
 			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
-			add_dependency ctx DCStd ([],"setjmp");
-			add_dependency ctx DFull (["c"],"Exception");
 			let p = e.epos in
 			let hxc = ctx.con.hxc in
 			let epush = Expr.mk_static_call_2 hxc.c_exception "push" [] p in
@@ -1612,16 +1605,10 @@ let mk_function_context ctx cf =
 			]) ctx.con.com.basic.tvoid e.epos
 		| _ -> Type.map_expr loop e
 	in
-	let e = match cf.cf_expr with
+	match cf.cf_expr with
 		| None -> None
 		| Some {eexpr = TFunction tf} -> Some (loop tf.tf_expr)
 		| Some e -> Some (loop e)
-	in
-	{
-		field = cf;
-		expr = e;
-		loop_stack = [];
-	}
 
 let generate_function_header ctx c cf stat =
 	let args,ret,s = match follow cf.cf_type with
@@ -1651,9 +1638,13 @@ let generate_typedef_declaration ctx t =
 	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s), %s }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t) nullval
 
 let generate_method ctx c cf stat =
-	ctx.fctx <- mk_function_context ctx cf;
+	let e = init_field ctx cf in
+	ctx.fctx <- {
+		field = cf;
+		loop_stack = []
+	};
 	generate_function_header ctx c cf stat;
-	match ctx.fctx.expr with
+	match e with
 	| None -> newline ctx
 	| Some e -> generate_expr ctx e
 
@@ -1698,6 +1689,7 @@ let generate_class ctx c =
 
 	let path = path_to_name c.cl_path in
 	let t_class = monofy_class c in
+
 	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
@@ -1740,8 +1732,7 @@ let generate_class ctx c =
 			match cf.cf_expr with
 				| None -> ()
 				| Some e ->
-					let fctx = mk_function_context ctx cf in
-					let e = Option.get fctx.expr in
+					let e = Option.get (init_field ctx cf) in
 					let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
 					let ethis = mk (TTypeExpr (TClassDecl c)) ta cf.cf_pos in
 					let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
