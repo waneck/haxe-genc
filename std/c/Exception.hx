@@ -1,13 +1,7 @@
 package c;
 
+import c.CSetjmp;
 import c.Pointer;
-
-@:include("<setjmp.h>")
-@:native("jmp_buf")
-@:struct
-extern private class JmpBuf {
-	public function new():Void;
-}
 
 @:keep
 class Exception {
