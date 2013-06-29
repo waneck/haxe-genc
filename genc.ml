@@ -769,6 +769,38 @@ module VarDeclarations = struct
 		Filters.add_filter con name priority filter
 end
 
+(*
+	Transforms (x = value) function arguments to if (x == null) x = value expressions.
+	Must run before VarDeclarations or the universe implodes.
+*)
+module DefaultValues = struct
+
+	let name = "default_values"
+
+	let priority = Filters.solve_deps name [DBefore VarDeclarations.priority]
+
+	let filter gen = function e ->
+		match e.eexpr with
+		| TFunction tf ->
+			let e = List.fold_left (fun e (v,co) ->
+				match co with
+				| None
+				| Some TNull -> e
+				| Some c ->
+					let eloc = Expr.mk_local v e.epos in
+					let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono()) e.epos) eloc gen.gcom.basic.tbool e.epos) in
+					let eassign = Codegen.binop OpAssign eloc (mk (TConst c) v.v_type e.epos) v.v_type e.epos in
+					let eif = mk (TIf(econd,eassign,None)) gen.gcom.basic.tvoid e.epos in
+					Codegen.concat eif e
+			) tf.tf_expr tf.tf_args in
+			{ e with eexpr = TFunction({tf with tf_expr = e})}
+		| _ ->
+			Type.map_expr gen.map e
+
+	let configure con =
+		Filters.add_filter con name priority filter
+end
+
 let sort_anon_fields fields =
 	List.sort (fun cf1 cf2 ->
 		match Meta.has Meta.Optional cf1.cf_meta, Meta.has Meta.Optional cf2.cf_meta with
@@ -1601,6 +1633,7 @@ let mk_function_context ctx cf =
 	in
 	let e = match cf.cf_expr with
 		| None -> None
+		| Some {eexpr = TFunction tf} -> Some (loop tf.tf_expr)
 		| Some e -> Some (loop e)
 	in
 	{
@@ -1641,10 +1674,7 @@ let generate_method ctx c cf stat =
 	generate_function_header ctx c cf stat;
 	match ctx.fctx.expr with
 	| None -> newline ctx
-	| Some {eexpr = TFunction ({tf_expr = {eexpr = TBlock el}; tf_type = t})} ->
-		let e = mk (TBlock el) t cf.cf_pos in
-		generate_expr ctx e
-	| _ -> assert false
+	| Some e -> generate_expr ctx e
 
 let generate_class ctx c =
 	let vars = DynArray.create () in
@@ -2062,7 +2092,8 @@ with | Not_found ->
 let add_filters con =
 	TypeParams.configure con;
 	VarDeclarations.configure con;
-	TypeChecker.configure con
+	TypeChecker.configure con;
+	DefaultValues.configure con
 
 let generate com =
 	let hxc = {
