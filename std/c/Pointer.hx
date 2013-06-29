@@ -26,12 +26,24 @@ import c.Types;
 @:notNull
 @:runtimeValue
 abstract Pointer<T>(Int) {
-	public function new(i:Int) {
+	public inline function new(i:Int) {
 		this = i;
 	}
 	
-	@:extern @:op(A+B) public function add(offset:Int):Pointer<T> {
-		return new Pointer<T>(this + offset);
+	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
+		return new Pointer(lhs.value() + offset);
+	}
+	
+	@:extern @:op(A+B) public static inline function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
+		return new Pointer(lhs.value() + rhs.value());
+	}
+	
+	@:extern @:op(A-B) public static inline function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
+		return new Pointer(lhs.value() - offset);
+	}
+	
+	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
+		return new Pointer(lhs.value() - rhs.value());
 	}
 	
 	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
@@ -44,6 +56,10 @@ abstract Pointer<T>(Int) {
 	
 	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
 		return untyped this[index] = value;
+	}
+	
+	inline function value() {
+		return this;
 	}
 }
 

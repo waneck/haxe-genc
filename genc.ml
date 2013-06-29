@@ -1220,20 +1220,6 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	(* pointer functions *)
-	| TField(_,FStatic({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("add"|"increment") } as cf))), p ->
-		spr ctx "(";
-		(match cf.cf_name, p with
-		| "add", [a;o] ->
-			generate_expr ctx a;
-			spr ctx " + ";
-			generate_expr ctx o
-		| "increment", [a] ->
-			generate_expr ctx a;
-			spr ctx "++"
-		| _ ->
-			ctx.con.com.error "This expression is invalid" e.epos);
-		spr ctx ")";
 	| TField(e1,FInstance(c,cf)),el ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
