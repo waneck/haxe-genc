@@ -26,20 +26,20 @@ import c.Types;
 @:notNull
 @:runtimeValue
 abstract Pointer<T>(_Pointer) {
-	public function new(i:Int) {
+	public inline function new(i:Int) {
 		this = untyped i;
 	}
 	
-	@:extern @:op(A+B) public function add(offset:Int):Pointer<T> {
+	@:extern @:op(A+B) public inline function add(offset:Int):Pointer<T> {
 		return new Pointer<T>( untyped __call("ADD_P_INT",this,offset) );
 	}
-	@:extern @:op(A+B) public function sub(offset:Int):Pointer<T> {
+	@:extern @:op(A+B) public inline function sub(offset:Int):Pointer<T> {
 		return new Pointer<T>( untyped __call("SUB_P_INT",this,offset) );
 	}
-	@:extern @:op(A+B) public function addp(offset:Pointer<T>):Pointer<T> {
+	@:extern @:op(A+B) public inline function addp(offset:Pointer<T>):Pointer<T> {
 		return new Pointer<T>(untyped __call("ADD_P_P",this,offset));
 	}
-	@:extern @:op(A+B) public function subp(offset:Pointer<T>):Pointer<T> {
+	@:extern @:op(A+B) public inline function subp(offset:Pointer<T>):Pointer<T> {
 		return new Pointer<T>(untyped __call("SUB_P_P",this,offset));
 	}
 	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
