@@ -32,6 +32,11 @@ type hxc = {
 	t_typeref : t -> t;
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
+	c_lib : tclass;
+	c_cstring : tclass;
+	cf_deref : tclass_field;
+	cf_addressof : tclass_field;
+	cf_sizeof : tclass_field;
 }
 
 type context = {
@@ -106,18 +111,21 @@ module Expr = struct
 		| TAbstract(a,_) -> a.a_path
 		| _ -> [],"Dynamic"
 
+	let mk_static_call c cf el p =
+		let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
+		let ethis = mk (TTypeExpr (TClassDecl c)) ta p in
+		let t,tr = match follow (monomorphs cf.cf_params cf.cf_type) with
+			| TFun(_,tr) as t -> t,tr
+			| _ -> assert false
+		in
+		let ef = mk (TField (ethis,(FStatic (c,cf)))) t p in
+		mk (TCall(ef,el)) tr p
+
+	let mk_static_call_2 c n el p =
+		mk_static_call c (PMap.find n c.cl_statics) el p
+
 	let mk_local v p =
 		{ eexpr = TLocal v; etype = v.v_type; epos = p }
-
-	let mk_ref con p e =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__addressof" t_dynamic); etype = t_dynamic; epos = p },
-				[e]
-			);
-			etype = t_dynamic;
-			epos = p;
-		}
 
 	let mk_comma_block con p el =
 		let t = match List.rev el with
@@ -135,6 +143,18 @@ module Expr = struct
 			epos = p;
 		}
 
+	let mk_cast t e =
+		{ e with eexpr = TCast(e, None); etype = t }
+
+	let mk_ref con p e =
+		mk_static_call con.hxc.c_lib con.hxc.cf_addressof [e] p
+
+	let mk_deref con p e =
+		mk_static_call con.hxc.c_lib con.hxc.cf_deref [e] p
+
+	let mk_sizeof con p e =
+		mk_static_call con.hxc.c_lib con.hxc.cf_sizeof [e] p
+
 	let mk_assign_ref con p local value =
 		mk_comma_block con p [
 			{
@@ -145,39 +165,6 @@ module Expr = struct
 			mk_ref con p local
 		]
 
-	let mk_cast t e =
-		{ e with eexpr = TCast(e, None); etype = t }
-
-	let mk_deref con p e =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__deref" t_dynamic); etype = t_dynamic; epos = p },
-				[e]
-			);
-			etype = t_dynamic;
-			epos = p;
-		}
-
-	let mk_call con p name args =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
-				{ eexpr = TConst(TString name); etype = t_dynamic; epos = p } :: args
-			);
-			etype = t_dynamic;
-			epos = p;
-		}
-
-	let mk_sizeof con p e =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__sizeof" t_dynamic); etype = t_dynamic; epos = p },
-				[e]
-			);
-			etype = con.com.basic.tint;
-			epos = p;
-		}
-
 	let mk_type_param con pos t =
 		let t = con.hxc.t_typeref t in
 		let c,p = match follow t with
@@ -187,24 +174,8 @@ module Expr = struct
 		{ eexpr = TNew(c,p,[]); etype = t; epos = pos }
 
 	let mk_stack_tp_init con t p =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
-				[
-					{ eexpr = TConst (TString "ALLOCA"); etype = t_dynamic; epos = p };
-					{
-						eexpr = TCall(
-							{ eexpr = TLocal(alloc_var "__sizeof" t_dynamic); etype = t_dynamic; epos = p },
-							[mk_type_param con p t]
-						);
-						etype = con.com.basic.tint;
-						epos = p;
-					}
-				]
-			);
-			etype = t;
-			epos = p;
-		}
+		let e = mk_static_call_2 con.hxc.c_lib "alloca" [mk_sizeof con p (mk_type_param con p t)] p in
+		{e with etype = t}
 
 	let mk_ccode ctx s =
 		mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
@@ -665,7 +636,7 @@ module TypeParams = struct
 							Expr.mk_local v e1.epos, (fun e -> { e with eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, e) })
 					in
 					let ret = Expr.mk_comma_block gen.gcon e.epos [
-						(Expr.mk_call gen.gcon e.epos "memcpy" [ wrap(gen.map e1); gen.map e2; Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos e1.etype) ]);
+						Expr.mk_static_call_2 (gen.gcon.hxc.c_cstring) "memcpy" [ wrap(gen.map e1); gen.map e2; Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos e1.etype) ] e.epos;
 						local
 					] in
 
@@ -1199,36 +1170,42 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
+	| TField(_,FStatic({cl_path = ["c"],"Lib"}, cf)),(e1 :: el) ->
+		begin match cf.cf_name with
+		| "getAddress" ->
+			spr ctx "&(";
+			generate_expr ctx e1;
+			spr ctx ")"
+		| "dereference" ->
+			spr ctx "*(";
+			generate_expr ctx e1;
+			spr ctx ")"
+		| "sizeof" ->
+			(* get TypeReference's type *)
+			let t = match follow e1.etype with
+				| TInst({cl_path = [],"typeref"},[t]) -> follow t
+				| t -> t
+			in
+			(match t with
+			| TInst({cl_kind = KTypeParameter _},_) ->
+				(* indirection *)
+				spr ctx "(";
+				generate_expr ctx e1;
+				spr ctx ")->refSize"
+			| _ ->
+				print ctx "sizeof(%s)" (s_type ctx t));
+		| "alloca" ->
+			spr ctx "ALLOCA(";
+			generate_expr ctx e1;
+			spr ctx ")"
+		| _ ->
+			assert false
+		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
 		ignore(check_include_meta ctx c.cl_meta);
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	(* pass by reference call *)
-	| TLocal({v_name = "__addressof"}),[e1] ->
-		spr ctx "&(";
-		generate_expr ctx e1;
-		spr ctx ")"
-	(* dereference operator *)
-	| TLocal({v_name = "__deref"}),[e1] ->
-		spr ctx "*(";
-		generate_expr ctx e1;
-		spr ctx ")"
-	(* sizeof *)
-	| TLocal({v_name = "__sizeof"}),[e1] ->
-		(* get TypeReference's type *)
-		let t = match follow e1.etype with
-			| TInst({cl_path = [],"typeref"},[t]) -> follow t
-			| t -> t
-		in
-		(match t with
-		| TInst({cl_kind = KTypeParameter _},_) ->
-			(* indirection *)
-			spr ctx "(";
-			generate_expr ctx e1;
-			spr ctx ")->refSize"
-		| _ ->
-			print ctx "sizeof(%s)" (s_type ctx t));
 	(* pointer functions *)
 	| TField(_,FStatic({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("add"|"increment") } as cf))), p ->
 		spr ctx "(";
@@ -2096,6 +2073,10 @@ let add_filters con =
 	DefaultValues.configure con
 
 let generate com =
+	let c_lib = match follow (get_type com (["c"],"Lib")) with
+		| TInst(c,_) -> c
+		| _ -> assert false
+	in
 	let hxc = {
 		t_typeref = (match follow (get_type com ([],"typeref")) with
 			| TInst(c,_) -> fun t -> TInst(c,[t])
@@ -2112,6 +2093,13 @@ let generate com =
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				(fun t -> TAbstract(a,[t]))
 			| _ -> assert false);
+		c_lib = c_lib;
+		c_cstring = (match get_type com (["c"],"CString") with
+			| TInst(c,_) -> c
+			| _ -> assert false);
+		cf_addressof = PMap.find "getAddress" c_lib.cl_statics;
+		cf_deref = PMap.find "dereference" c_lib.cl_statics;
+		cf_sizeof = PMap.find "sizeof" c_lib.cl_statics;
 	} in
 	let con = {
 		com = com;
