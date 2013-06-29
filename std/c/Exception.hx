@@ -15,7 +15,7 @@ class Exception {
 	static var thrownObject:Dynamic;
 
 	static public function push():Pointer<JmpBuf> {
-		var buf:Pointer<JmpBuf> = cast c.std.Stdlib.malloc(Lib.sizeof(new TypeReference<JmpBuf>()));
+		var buf:Pointer<JmpBuf> = cast c.CStdlib.malloc(Lib.sizeof(new TypeReference<JmpBuf>()));
 		stack.push(buf);
 		return buf;
 	}

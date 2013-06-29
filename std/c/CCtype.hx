@@ -1,10 +1,10 @@
-package c.std;
+package c;
 
 import c.Types;
 import c.Pointer;
 
 @:include("<ctype.h>")
-extern class Ctype {
+extern class CCtype {
 	@:plain static public function isalnum(ch:Int):Int;
 	@:plain static public function isalpha(ch:Int):Int;
 	@:plain static public function iscntrl(ch:Int):Int;

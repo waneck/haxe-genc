@@ -1,4 +1,4 @@
-package c.std;
+package c;
 
 import c.Types;
 import c.Pointer;
@@ -12,7 +12,7 @@ extern class File { }
 abstract FPosT from Int to Int { }
 
 @:include("<stdio.h>")
-extern class Stdio {
+extern class CStdio {
 
 	@:plain static var stdout:File;
 	@:plain static var stdin:File;
@@ -32,9 +32,9 @@ extern class Stdio {
 	@:plain static public var SEEK_SET:Int;
 	@:plain static public var TMP_MAX:Int;
 
-	@:plain static public function fopen(filename:String, mode:String):File;
+	@:plain static public function fopen(filename:ConstPointer<Int8>, mode:ConstPointer<Int8>):File;
 
-	@:plain static public function freopen(filename:String, mode:String, stream:File):File;
+	@:plain static public function freopen(filename:ConstPointer<Int8>, mode:ConstPointer<Int8>, stream:File):File;
 
 	@:plain static public function fclose(stream:File):Int;
 
@@ -48,7 +48,7 @@ extern class Stdio {
 
 	@:plain static public function fread(buffer:Pointer<Void>, size:SizeT, count:SizeT, stream:File):SizeT;
 
-	@:plain static public function fwrite(buffer:Pointer<Void>, size:SizeT, count:SizeT, stream:File):SizeT;
+	@:plain static public function fwrite(buffer:ConstPointer<Void>, size:SizeT, count:SizeT, stream:File):SizeT;
 
 	@:plain static public function fgetc(stream:File):Int;
 
@@ -60,7 +60,7 @@ extern class Stdio {
 
 	@:plain static public function putc(ch:Int, stream:File):Int;
 
-	@:plain static public function fputs(str:String, stream:File):Int;
+	@:plain static public function fputs(str:ConstPointer<Int8>, stream:File):Int;
 
 	@:plain static public function getchar():Int;
 
@@ -80,7 +80,7 @@ extern class Stdio {
 
 	@:plain static public function fseek(stream:File, offset:Int32, origin:Int):Int;
 
-	@:plain static public function fsetpos(stream:File, pos:FPosT):Int;
+	@:plain static public function fsetpos(stream:File, pos:ConstPointer<FPosT>):Int;
 
 	@:plain static public function rewind(stream:File):Void;
 
@@ -90,9 +90,9 @@ extern class Stdio {
 
 	@:plain static public function ferror(stream:File):Int;
 
-	@:plain static public function remove(fname:String):Int;
+	@:plain static public function remove(fname:ConstPointer<Int8>):Int;
 
-	@:plain static public function rename(old_filename:String, new_filename:String):Int;
+	@:plain static public function rename(old_filename:ConstPointer<Int8>, new_filename:ConstPointer<Int8>):Int;
 
 	@:plain static public function tmpfile():File;
 

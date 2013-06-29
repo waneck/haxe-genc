@@ -44,7 +44,7 @@ import c.Lib;
 
 	@:keep private static function ofPointerCopy<T>(len:Int, array:Pointer<T>):Array<T>
 	{
-		var ret:Pointer<T> = cast c.std.Stdlib.malloc(len * Lib.sizeof(new TypeReference<T>()));
+		var ret:Pointer<T> = cast c.CStdlib.malloc(len * Lib.sizeof(new TypeReference<T>()));
 		FixedArray.copy(array, 0, ret, 0, len);
 		var f = new FixedArray(len, ret);
 		var ret = new Array();

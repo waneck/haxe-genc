@@ -33,7 +33,7 @@ class FixedArray<T> implements ArrayAccess<T>
 	{
 		this.length = len;
 		if (array == null)
-			array = cast c.std.Stdlib.calloc(len, Lib.sizeof(new TypeReference<T>()));
+			array = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<T>()));
 		this.array = array;
 	}
 
