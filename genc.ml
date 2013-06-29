@@ -29,8 +29,9 @@ type function_context = {
 }
 
 type hxc = {
-	mutable t_typeref : t -> t;
-	mutable t_pointer : t -> t;
+	t_typeref : t -> t;
+	t_pointer : t -> t;
+	t_const_pointer : t -> t;
 }
 
 type context = {
@@ -598,7 +599,7 @@ module TypeParams = struct
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
-			when function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"] ->
+			when not (Meta.has Meta.Plain cf.cf_meta) && (function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"]) ->
 				let temps = ref [] in
 				let ef = gen.map ef in
 				let args, ret = get_fun cf.cf_type in
@@ -1107,6 +1108,7 @@ let rec s_type ctx t =
 		| TInst({cl_kind = KTypeParameter _},_) ->
 			"char*" (* we will manipulate an array of type parameters like an array of bytes *)
 		| _ -> s_type ctx t ^ "*")
+	| TAbstract({a_path = ["c"],"ConstPointer"},[t]) -> "const " ^ (s_type ctx t) ^ "*"
 	| TInst(({cl_path = [],"typeref"} as c),_) ->
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
@@ -2064,6 +2066,12 @@ let generate com =
 			| TInst(c,_) -> fun t -> TInst(c,[t])
 			| _ -> assert false);
 		t_pointer = (match get_type com (["c"],"Pointer") with
+			| TAbstract(a,_) ->
+				(* HACK: Pointer is actually a @:coreType *)
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				(fun t -> TAbstract(a,[t]))
+			| _ -> assert false);
+		t_const_pointer = (match get_type com (["c"],"ConstPointer") with
 			| TAbstract(a,_) ->
 				(* HACK: Pointer is actually a @:coreType *)
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;

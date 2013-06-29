@@ -34,9 +34,9 @@ extern class CTime {
 	@:plain static public function mktime(timeptr:Pointer<Tm>):TimeT;
 	@:plain static public function time(timer:Pointer<TimeT>):TimeT;
 
-	@:plain static public function asctime(timeptr:ConstPointer<Tm>):Pointer<Int8>;
-	@:plain static public function ctime(timer:ConstPointer<TimeT>):Pointer<Int8>;
+	@:plain static public function asctime(timeptr:ConstPointer<Tm>):Pointer<Char>;
+	@:plain static public function ctime(timer:ConstPointer<TimeT>):Pointer<Char>;
 	@:plain static public function gmtime(timer:ConstPointer<TimeT>):Pointer<Tm>;
 	@:plain static public function localtime(timer:ConstPointer<TimeT>):Pointer<Tm>;
-	@:plain static public function strftime(ptr:Pointer<Int8>, maxsize:SizeT, format:ConstPointer<Int8>, timeptr:ConstPointer<Tm>):SizeT;
+	@:plain static public function strftime(ptr:Pointer<Char>, maxsize:SizeT, format:ConstPointer<Char>, timeptr:ConstPointer<Tm>):SizeT;
 }

@@ -22,12 +22,12 @@ extern class CStdlib {
 	@:plain static public var NULL:Int;
 	@:plain static public var RAND_MAX:Int;
 
-	@:plain static public function atof(str:ConstPointer<Int8>):Float;
-	@:plain static public function atoi(str:ConstPointer<Int8>):Int;
-	@:plain static public function atol(str:ConstPointer<Int8>):Int32;
-	@:plain static public function strtod(str:ConstPointer<Int8>, endptr:Pointer<Pointer<UInt8>>):Float;
-	@:plain static public function strtol(str:ConstPointer<Int8>, endptr:Pointer<Pointer<UInt8>>, base:Int):Int32;
-	@:plain static public function strtoul(str:ConstPointer<Int8>, endptr:Pointer<Pointer<UInt8>>, base:Int):UInt32;
+	@:plain static public function atof(str:ConstPointer<Char>):Float;
+	@:plain static public function atoi(str:ConstPointer<Char>):Int;
+	@:plain static public function atol(str:ConstPointer<Char>):Int32;
+	@:plain static public function strtod(str:ConstPointer<Char>, endptr:Pointer<Pointer<UInt8>>):Float;
+	@:plain static public function strtol(str:ConstPointer<Char>, endptr:Pointer<Pointer<UInt8>>, base:Int):Int32;
+	@:plain static public function strtoul(str:ConstPointer<Char>, endptr:Pointer<Pointer<UInt8>>, base:Int):UInt32;
 
 	@:plain static public function rand():Int;
 	@:plain static public function srand(seed:UInt):Void;
@@ -40,8 +40,8 @@ extern class CStdlib {
 	@:plain static public function abort():Void;
 	@:plain static public function atexit(func:Void -> Void):Int;
 	@:plain static public function exit(status:Int):Void;
-	@:plain static public function getenv(name:ConstPointer<Int8>):Pointer<Int8>;
-	@:plain static public function system(command:ConstPointer<Int8>):Int;
+	@:plain static public function getenv(name:ConstPointer<Char>):Pointer<Char>;
+	@:plain static public function system(command:ConstPointer<Char>):Int;
 
 	@:plain static public function bsearch(key:ConstPointer<Void>, base:ConstPointer<Void>, num:SizeT, size:SizeT, compar:Pointer<Void> -> Pointer<Void> -> Int):Pointer<Void>;
 	@:plain static public function qsort(base:Pointer<Void>, num:SizeT, size:SizeT, compar:Pointer<Void> -> Pointer<Void> -> Int):Void;

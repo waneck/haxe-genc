@@ -1,5 +1,8 @@
 package c;
 
+import c.Pointer;
+import c.Types;
+
 @:native("typeref")
 @:keep class TypeReference<T>
 {
@@ -8,7 +11,7 @@ package c;
 	/** represents the size, in bytes, of a reference to that type; on reference types, it should be equal to word size **/
 	public var refSize(default, never):Int;
 	/** the fully qualified name of the type **/
-	public var name(default, never):String;
+	public var name(default, never):ConstPointer<Char>;
 
 	@:extern public function new() {}
 }
