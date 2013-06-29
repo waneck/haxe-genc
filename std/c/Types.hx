@@ -20,6 +20,11 @@ abstract UInt32 from Int to Int { }
 @:coreType
 abstract Int32 from Int to Int { }
 
+@:native("hx_uint")
+@:struct
+@:coreType
+abstract UInt from Int to Int { }
+
 @:native("size_t")
 @:struct
 @:coreType

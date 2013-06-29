@@ -21,14 +21,4 @@ class Lib
 	{
 		return untyped __addressof(t);
 	}
-	
-	@:extern public static inline function alloc(byteSize:Int):Pointer<Void>
-	{
-		return untyped __call("malloc", byteSize);
-	}
-		
-	@:extern public static inline function calloc(num:Int, sizeEach:Int):Pointer<Void>
-	{
-		return untyped __call("calloc", num, sizeEach);
-	}
 }

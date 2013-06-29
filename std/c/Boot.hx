@@ -11,6 +11,7 @@ import c.Types;
 	#define ALLOCA(n) _alloca(n)
 #endif
 
+typedef unsigned int hx_uint;
 typedef unsigned char hx_uint8;
 typedef char hx_int8;
 typedef unsigned long hx_uint32;
