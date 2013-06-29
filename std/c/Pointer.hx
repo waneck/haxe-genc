@@ -21,6 +21,8 @@
  */
 package c;
 
+import c.Types;
+
 @:notNull
 @:runtimeValue
 abstract Pointer<T>(Int) {
@@ -42,5 +44,11 @@ abstract Pointer<T>(Int) {
 	
 	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
 		return untyped this[index] = value;
+	}
+}
+
+abstract ConstPointer<T>(Pointer<T>) {
+	@:from static public function fromString(s:String):ConstPointer<Int8> {
+		return cast s;
 	}
 }
