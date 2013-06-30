@@ -1572,6 +1572,13 @@ let mk_array_decl ctx el t p =
 *)
 let init_field ctx cf =
 	let rec loop e = match e.eexpr with
+		| TArrayDecl [] ->
+			let c,t = match follow (ctx.con.com.basic.tarray (mk_mono())) with
+				| TInst(c,[t]) -> c,t
+				| _ -> assert false
+			in
+			(* TODO: this should probably be done earlier to handle type parameters *)
+			mk (TNew(c,[t],[Expr.mk_type_param ctx.con e.epos t])) ctx.con.com.basic.tvoid e.epos
 		| TArrayDecl el ->
 			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
