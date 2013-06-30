@@ -48,7 +48,7 @@ class Sys {
 	}
 
 	public static function args() : Array<String> {
-		return [];
+		return [for (i in 0...c.Boot.argc) cast c.Boot.argv[i]];
 	}
 
 	public static function getEnv( s : String ):String {
