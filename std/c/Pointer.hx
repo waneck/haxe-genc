@@ -45,6 +45,10 @@ abstract Pointer<T>(Int) {
 		return new Pointer(lhs.value() - rhs.value());
 	}
 
+	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
+		return new Pointer(++this);
+	}
+	
 	@:extern @:arrayAccess public inline function __get(index:Int):T {
 		return untyped this[index];
 	}
