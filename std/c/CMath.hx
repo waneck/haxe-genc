@@ -2,27 +2,27 @@ package c;
 
 @:include("<math.h>")
 extern class CMath {
-	@:plain static public var NAN:Float;
-	@:plain static public var INFINITY:Float;
-	@:plain static public var HUGE_VAL:Float;
-	@:plain static public var HUGE_VALF:Float;
-	@:plain static public var HUGE_VALL:Float;
+	@:require(C99) @:plain static public var NAN:Float;
+	@:require(C99) @:plain static public var INFINITY:Float;
+	@:require(C99) @:plain static public var HUGE_VAL:Float;
+	@:require(C99) @:plain static public var HUGE_VALF:Float;
+	@:require(C99) @:plain static public var HUGE_VALL:Float;
 
-	@:plain static public var MATH_ERRNO:Int;
-	@:plain static public var MATH_ERREXCEPT:Int;
+	@:require(C99) @:plain static public var MATH_ERRNO:Int;
+	@:require(C99) @:plain static public var MATH_ERREXCEPT:Int;
 
-	@:plain static public var FP_LAST_FMA:Int;
-	@:plain static public var FP_LAST_FMAF:Int;
-	@:plain static public var FP_LAST_FMAL:Int;
+	@:require(C99) @:plain static public var FP_LAST_FMA:Int;
+	@:require(C99) @:plain static public var FP_LAST_FMAF:Int;
+	@:require(C99) @:plain static public var FP_LAST_FMAL:Int;
 
-	@:plain static public var FP_INFINITE:Int;
-	@:plain static public var FP_NAN:Int;
-	@:plain static public var FP_NORMAL:Int;
-	@:plain static public var FP_SUBNORMAL:Int;
-	@:plain static public var FP_ZERO:Int;
+	@:require(C99) @:plain static public var FP_INFINITE:Int;
+	@:require(C99) @:plain static public var FP_NAN:Int;
+	@:require(C99) @:plain static public var FP_NORMAL:Int;
+	@:require(C99) @:plain static public var FP_SUBNORMAL:Int;
+	@:require(C99) @:plain static public var FP_ZERO:Int;
 
-	@:plain static public var FP_ILOGB0:Int;
-	@:plain static public var FP_ILOGBNAN:Int;
+	@:require(C99) @:plain static public var FP_ILOGB0:Int;
+	@:require(C99) @:plain static public var FP_ILOGBNAN:Int;
 
 	@:plain static public function cos(x:Float):Float;
 	@:plain static public function sin(x:Float):Float;
@@ -50,28 +50,28 @@ extern class CMath {
 	@:plain static public function floor(x:Float):Float;
 	@:plain static public function fmod(numer:Float, denom:Float):Float;
 
-	@:plain static public function copysign(x:Float, y:Float):Float;
-	@:plain static public function nextafter(x:Float, y:Float):Float;
-	@:plain static public function nexttoward(x:Float, y:Float):Float;
-
-	@:plain static public function fdim(x:Float, y:Float):Float;
-	@:plain static public function fmax(x:Float, y:Float):Float;
-	@:plain static public function fmin(x:Float, y:Float):Float;
-
 	@:plain static public function fabs(x:Float):Float;
 	@:plain static public function abs(x:Float):Float;
+	
+	@:require(C99) @:plain static public function copysign(x:Float, y:Float):Float;
+	@:require(C99) @:plain static public function nextafter(x:Float, y:Float):Float;
+	@:require(C99) @:plain static public function nexttoward(x:Float, y:Float):Float;
 
-	@:plain static public function fpclassify(x:Float):Int;
-	@:plain static public function isfinite(x:Float):Int;
-	@:plain static public function isinf(x:Float):Int;
-	@:plain static public function isnan(x:Float):Int;
-	@:plain static public function isnormal(x:Float):Int;
-	@:plain static public function signbit(x:Float):Int;
+	@:require(C99) @:plain static public function fdim(x:Float, y:Float):Float;
+	@:require(C99) @:plain static public function fmax(x:Float, y:Float):Float;
+	@:require(C99) @:plain static public function fmin(x:Float, y:Float):Float;
 
-	@:plain static public function isgreater(x:Float, y:Float):Int;
-	@:plain static public function isgreaterequal(x:Float, y:Float):Int;
-	@:plain static public function isless(x:Float, y:Float):Int;
-	@:plain static public function islessequal(x:Float, y:Float):Int;
-	@:plain static public function islessgreater(x:Float, y:Float):Int;
-	@:plain static public function isunordered(x:Float, y:Float):Int;
+	@:require(C99) @:plain static public function fpclassify(x:Float):Int;
+	@:require(C99) @:plain static public function isfinite(x:Float):Int;
+	@:require(C99) @:plain static public function isinf(x:Float):Int;
+	@:require(C99) @:plain static public function isnan(x:Float):Int;
+	@:require(C99) @:plain static public function isnormal(x:Float):Int;
+	@:require(C99) @:plain static public function signbit(x:Float):Int;
+
+	@:require(C99) @:plain static public function isgreater(x:Float, y:Float):Int;
+	@:require(C99) @:plain static public function isgreaterequal(x:Float, y:Float):Int;
+	@:require(C99) @:plain static public function isless(x:Float, y:Float):Int;
+	@:require(C99) @:plain static public function islessequal(x:Float, y:Float):Int;
+	@:require(C99) @:plain static public function islessgreater(x:Float, y:Float):Int;
+	@:require(C99) @:plain static public function isunordered(x:Float, y:Float):Int;
 }
