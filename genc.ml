@@ -1454,12 +1454,6 @@ and generate_expr ctx e = match e.eexpr with
 			| _ ->
 				assert false
 		end
-	| TThrow e1 ->
-		add_dependency ctx DFull (["c"],"Exception");
-		spr ctx "c_Exception_thrownObject = ";
-		generate_expr ctx e1;
-		newline ctx;
-		print ctx "(longjmp(*c_Exception_peek(),%i))" (get_type_id ctx e1.etype);
 	| TPatMatch dt ->
 		let fl = ctx.con.num_labels in
 		ctx.con.num_labels <- ctx.con.num_labels + (Array.length dt.dt_dt_lookup) + 1;
@@ -1526,8 +1520,8 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 	| TFunction _ ->
 		print_endline ("Not implemented yet: " ^ (Expr.debug ctx e))
-	| TArrayDecl _ | TTry _ | TFor _ ->
-		(* handled in function context pass *)
+	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ ->
+		(* handled in field init pass *)
 		assert false
 
 let mk_array_decl ctx el t p =
@@ -1558,7 +1552,6 @@ let mk_array_decl ctx el t p =
 	let ev = mk (TLocal v) v.v_type p in
 	mk (TCall(ev,el)) t p
 
-
 (* Type generation *)
 
 (*
@@ -1566,6 +1559,7 @@ let mk_array_decl ctx el t p =
 
 	- TArrayDecl introduces an init function which is TCalled
 	- TTry is replaced with a TSwitch and uses setjmp
+	- TThrow is replaced with a call to longjmp
 	- TFor is replaced with TWhile
 *)
 let init_field ctx cf =
@@ -1593,6 +1587,13 @@ let init_field ctx cf =
 					Some ([Expr.mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
 			) cl) in
 			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
+		| TThrow e1 ->
+			let p = e.epos in
+			let eassign = Codegen.binop OpAssign (Expr.mk_static_field_2 ctx.con.hxc.c_exception "thrownObject" p) e1 e1.etype e1.epos in
+			let epeek = Expr.mk_static_call_2 ctx.con.hxc.c_exception "peek" [] p in
+			let el = [Expr.mk_deref ctx.con p epeek;Expr.mk_int ctx (get_type_id ctx e1.etype) p] in
+			let ejmp = Codegen.mk_parent (Expr.mk_static_call_2 ctx.con.hxc.c_csetjmp "longjmp" el p) in
+			Expr.mk_comma_block ctx.con p [eassign;ejmp]
 		| TFor(v,e1,e2) ->
 			let e1 = loop e1 in
 			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
