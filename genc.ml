@@ -809,6 +809,7 @@ let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 
 	It may perform the following transformations:
 		- pad TObjectDecl with null for optional arguments
+		- use Array as argument list to "rest" argument
 *)
 module TypeChecker = struct
 
@@ -842,8 +843,18 @@ module TypeChecker = struct
 			begin match follow e1.etype with
 				| TFun(args,ret) ->
 					let rec loop acc el tl = match el,tl with
-						| e :: el, (_,_,t) :: tl ->
-							loop ((check gen (gen.map e) t) :: acc) el tl
+						| e :: el, (n,_,t) :: tl ->
+							(* check for rest argument *)
+							begin match e.eexpr with
+								| TArrayDecl el2 when n = "rest" && tl = [] && el = [] ->
+									let ta = match follow e.etype with
+										| TInst({cl_path=[],"Array"},[t]) -> t
+										| _ -> t_dynamic
+									in
+									loop acc el2 (List.map (fun _ -> "rest",false,ta) el2)
+								| _ ->
+									loop ((check gen (gen.map e) t) :: acc) el tl
+							end
 						| [], [] ->
 							acc
 						| [],_ ->
@@ -1172,10 +1183,6 @@ let get_type_id ctx t =
 (* Expr generation *)
 
 let rec generate_call ctx e e1 el = match e1.eexpr,el with
-	| TLocal({v_name = "__trace"}),[e1] ->
-		spr ctx "printf(\"%s\\n\",";
-		generate_expr ctx e1;
-		spr ctx ")";
 	| TLocal({v_name = "__c"}),[{eexpr = TConst(TString code)}] ->
 		spr ctx code;
 	| TLocal({v_name = "__call"}),{eexpr = TConst(TString name)} :: el ->

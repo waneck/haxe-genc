@@ -95,7 +95,7 @@ class Log {
 			untyped __java__("java.lang.System.out.println(str)");
 			#end
 		#elseif c
-			untyped __call("printf", "%s:%i: %s\\n", infos.fileName, infos.lineNumber,v);
+			c.CStdio.printf("%s:%i: %s\\n", [infos.fileName, infos.lineNumber, v]);
 		#end
 	}
 

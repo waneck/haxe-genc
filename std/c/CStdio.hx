@@ -72,7 +72,19 @@ extern class CStdio {
 
 	@:plain static public function ungetc(ch:Int, stream:File):Int;
 
-	// TODO: all varargs functions
+	@:plain static public function fscanf(stream:File, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function fprintf(stream:File, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function scanf(format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function printf(format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function sprintf(str:Pointer<Char>, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function sscanf(str:ConstPointer<Char>, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	// TODO: vprintf, vfprintf, vsprintf
 
 	@:plain static public function ftell(stream:File):Int32;
 
