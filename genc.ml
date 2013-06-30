@@ -1395,20 +1395,19 @@ and generate_expr ctx e = match e.eexpr with
 			b();
 			newline ctx;
 			spr ctx "}";
-			newline ctx;
 		in
 		let b = open_block ctx in
-		newline ctx;
 		List.iter (fun (el,e) ->
+			newline ctx;
 			spr ctx "case ";
 			concat ctx "," (generate_expr ctx) el;
 			spr ctx ":";
 			generate_case_expr e;
-			newline ctx;
 		) cases;
 		begin match edef with
 			| None -> ()
 			| Some e ->
+				newline ctx;
 				spr ctx "default:";
 				generate_case_expr e;
 		end;
