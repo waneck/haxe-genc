@@ -1111,8 +1111,8 @@ let rec s_type ctx t =
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TAbstract({a_path = [],"Bool"},[]) -> "int"
-	| TInst({cl_path = [],"String"},[]) ->
-		"const char*"
+	| TInst({cl_path = ["c"],"CCString"},[]) ->
+		"const char*" 
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
 		let ptr = if is_value_type ctx t then "" else "*" in
