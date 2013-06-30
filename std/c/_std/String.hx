@@ -59,8 +59,8 @@ import c.Lib;
 			var first:Int = p1[0];
 			var pos:Int = 0;
 			while (pos < l0){
-				var pchr:Pointer<Int8> = memchr(p0.add(pos),first,l0-pos);
-				if (pchr != Pointer.fromInt(0)){
+				var pchr:Pointer<Int8> = memchr(p0+pos,first,l0-pos);
+				if (pchr != new Pointer(0)){
 					pos = pchr.subp(p0).toInt();
 					if (memcmp(pchr,p1,l1) == 0){
 						return pos;
