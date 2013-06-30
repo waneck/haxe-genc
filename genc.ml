@@ -24,13 +24,26 @@ type dependency_type =
 
 type function_context = {
 	field : tclass_field;
-	expr : texpr option;
 	mutable loop_stack : string option list;
 }
 
 type hxc = {
-	mutable t_typeref : t -> t;
-	mutable t_pointer : t -> t;
+	t_typeref : t -> t;
+	t_pointer : t -> t;
+	t_const_pointer : t -> t;
+
+	t_jmp_buf : t;
+
+	c_lib : tclass;
+	c_boot : tclass;
+	c_exception : tclass;
+	c_cstring : tclass;
+	c_csetjmp : tclass;
+	c_cstdlib : tclass;
+
+	cf_deref : tclass_field;
+	cf_addressof : tclass_field;
+	cf_sizeof : tclass_field;
 }
 
 type context = {
@@ -105,18 +118,28 @@ module Expr = struct
 		| TAbstract(a,_) -> a.a_path
 		| _ -> [],"Dynamic"
 
+	let mk_static_field c cf p =
+		let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
+		let ethis = mk (TTypeExpr (TClassDecl c)) ta p in
+		let t = monomorphs cf.cf_params cf.cf_type in
+		mk (TField (ethis,(FStatic (c,cf)))) t p
+
+	let mk_static_call c cf el p =
+		let ef = mk_static_field c cf p in
+		let tr = match follow ef.etype with
+			| TFun(_,tr) -> tr
+			| _ -> assert false
+		in
+		mk (TCall(ef,el)) tr p
+
+	let mk_static_field_2 c n p =
+		mk_static_field c (PMap.find n c.cl_statics) p
+
+	let mk_static_call_2 c n el p =
+		mk_static_call c (PMap.find n c.cl_statics) el p
+
 	let mk_local v p =
 		{ eexpr = TLocal v; etype = v.v_type; epos = p }
-
-	let mk_ref con p e =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__addressof" t_dynamic); etype = t_dynamic; epos = p },
-				[e]
-			);
-			etype = t_dynamic;
-			epos = p;
-		}
 
 	let mk_comma_block con p el =
 		let t = match List.rev el with
@@ -134,6 +157,18 @@ module Expr = struct
 			epos = p;
 		}
 
+	let mk_cast t e =
+		{ e with eexpr = TCast(e, None); etype = t }
+
+	let mk_ref con p e =
+		mk_static_call con.hxc.c_lib con.hxc.cf_addressof [e] p
+
+	let mk_deref con p e =
+		mk_static_call con.hxc.c_lib con.hxc.cf_deref [e] p
+
+	let mk_sizeof con p e =
+		mk_static_call con.hxc.c_lib con.hxc.cf_sizeof [e] p
+
 	let mk_assign_ref con p local value =
 		mk_comma_block con p [
 			{
@@ -144,39 +179,6 @@ module Expr = struct
 			mk_ref con p local
 		]
 
-	let mk_cast t e =
-		{ e with eexpr = TCast(e, None); etype = t }
-
-	let mk_deref con p e =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__deref" t_dynamic); etype = t_dynamic; epos = p },
-				[e]
-			);
-			etype = t_dynamic;
-			epos = p;
-		}
-
-	let mk_call con p name args =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
-				{ eexpr = TConst(TString name); etype = t_dynamic; epos = p } :: args
-			);
-			etype = t_dynamic;
-			epos = p;
-		}
-
-	let mk_sizeof con p e =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__sizeof" t_dynamic); etype = t_dynamic; epos = p },
-				[e]
-			);
-			etype = con.com.basic.tint;
-			epos = p;
-		}
-
 	let mk_type_param con pos t =
 		let t = con.hxc.t_typeref t in
 		let c,p = match follow t with
@@ -186,24 +188,8 @@ module Expr = struct
 		{ eexpr = TNew(c,p,[]); etype = t; epos = pos }
 
 	let mk_stack_tp_init con t p =
-		{
-			eexpr = TCall(
-				{ eexpr = TLocal(alloc_var "__call" t_dynamic); etype = t_dynamic; epos = p },
-				[
-					{ eexpr = TConst (TString "ALLOCA"); etype = t_dynamic; epos = p };
-					{
-						eexpr = TCall(
-							{ eexpr = TLocal(alloc_var "__sizeof" t_dynamic); etype = t_dynamic; epos = p },
-							[mk_type_param con p t]
-						);
-						etype = con.com.basic.tint;
-						epos = p;
-					}
-				]
-			);
-			etype = t;
-			epos = p;
-		}
+		let e = mk_static_call_2 con.hxc.c_lib "alloca" [mk_sizeof con p (mk_type_param con p t)] p in
+		{e with etype = t}
 
 	let mk_ccode ctx s =
 		mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
@@ -598,7 +584,7 @@ module TypeParams = struct
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
-			when function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"] ->
+			when not (Meta.has Meta.Plain cf.cf_meta) && (function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"]) ->
 				let temps = ref [] in
 				let ef = gen.map ef in
 				let args, ret = get_fun cf.cf_type in
@@ -664,7 +650,7 @@ module TypeParams = struct
 							Expr.mk_local v e1.epos, (fun e -> { e with eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, e) })
 					in
 					let ret = Expr.mk_comma_block gen.gcon e.epos [
-						(Expr.mk_call gen.gcon e.epos "memcpy" [ wrap(gen.map e1); gen.map e2; Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos e1.etype) ]);
+						Expr.mk_static_call_2 (gen.gcon.hxc.c_cstring) "memcpy" [ wrap(gen.map e1); gen.map e2; Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos e1.etype) ] e.epos;
 						local
 					] in
 
@@ -768,6 +754,38 @@ module VarDeclarations = struct
 		Filters.add_filter con name priority filter
 end
 
+(*
+	Transforms (x = value) function arguments to if (x == null) x = value expressions.
+	Must run before VarDeclarations or the universe implodes.
+*)
+module DefaultValues = struct
+
+	let name = "default_values"
+
+	let priority = Filters.solve_deps name [DBefore VarDeclarations.priority]
+
+	let filter gen = function e ->
+		match e.eexpr with
+		| TFunction tf ->
+			let e = List.fold_left (fun e (v,co) ->
+				match co with
+				| None
+				| Some TNull -> e
+				| Some c ->
+					let eloc = Expr.mk_local v e.epos in
+					let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono()) e.epos) eloc gen.gcom.basic.tbool e.epos) in
+					let eassign = Codegen.binop OpAssign eloc (mk (TConst c) v.v_type e.epos) v.v_type e.epos in
+					let eif = mk (TIf(econd,eassign,None)) gen.gcom.basic.tvoid e.epos in
+					Codegen.concat eif e
+			) tf.tf_expr tf.tf_args in
+			{ e with eexpr = TFunction({tf with tf_expr = e})}
+		| _ ->
+			Type.map_expr gen.map e
+
+	let configure con =
+		Filters.add_filter con name priority filter
+end
+
 let sort_anon_fields fields =
 	List.sort (fun cf1 cf2 ->
 		match Meta.has Meta.Optional cf1.cf_meta, Meta.has Meta.Optional cf2.cf_meta with
@@ -792,6 +810,7 @@ let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 
 	It may perform the following transformations:
 		- pad TObjectDecl with null for optional arguments
+		- use Array as argument list to "rest" argument
 *)
 module TypeChecker = struct
 
@@ -825,8 +844,18 @@ module TypeChecker = struct
 			begin match follow e1.etype with
 				| TFun(args,ret) ->
 					let rec loop acc el tl = match el,tl with
-						| e :: el, (_,_,t) :: tl ->
-							loop ((check gen (gen.map e) t) :: acc) el tl
+						| e :: el, (n,_,t) :: tl ->
+							(* check for rest argument *)
+							begin match e.eexpr with
+								| TArrayDecl el2 when n = "rest" && tl = [] && el = [] ->
+									let ta = match follow e.etype with
+										| TInst({cl_path=[],"Array"},[t]) -> t
+										| _ -> t_dynamic
+									in
+									loop acc el2 (List.map (fun _ -> "rest",false,ta) el2)
+								| _ ->
+									loop ((check gen (gen.map e) t) :: acc) el tl
+							end
 						| [], [] ->
 							acc
 						| [],_ ->
@@ -922,7 +951,6 @@ let mk_type_context con path =
 		type_path = path;
 		fctx = {
 			field = null_field;
-			expr = None;
 			loop_stack = [];
 		};
 		dependencies = PMap.empty;
@@ -1107,6 +1135,7 @@ let rec s_type ctx t =
 		| TInst({cl_kind = KTypeParameter _},_) ->
 			"char*" (* we will manipulate an array of type parameters like an array of bytes *)
 		| _ -> s_type ctx t ^ "*")
+	| TAbstract({a_path = ["c"],"ConstPointer"},[t]) -> "const " ^ (s_type ctx t) ^ "*"
 	| TInst(({cl_path = [],"typeref"} as c),_) ->
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
@@ -1155,59 +1184,47 @@ let get_type_id ctx t =
 (* Expr generation *)
 
 let rec generate_call ctx e e1 el = match e1.eexpr,el with
-	| TLocal({v_name = "__trace"}),[e1] ->
-		spr ctx "printf(\"%s\\n\",";
-		generate_expr ctx e1;
-		spr ctx ")";
 	| TLocal({v_name = "__c"}),[{eexpr = TConst(TString code)}] ->
 		spr ctx code;
 	| TLocal({v_name = "__call"}),{eexpr = TConst(TString name)} :: el ->
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
+	| TField(_,FStatic({cl_path = ["c"],"Lib"}, cf)),(e1 :: el) ->
+		begin match cf.cf_name with
+		| "getAddress" ->
+			spr ctx "&(";
+			generate_expr ctx e1;
+			spr ctx ")"
+		| "dereference" ->
+			spr ctx "*(";
+			generate_expr ctx e1;
+			spr ctx ")"
+		| "sizeof" ->
+			(* get TypeReference's type *)
+			let t = match follow e1.etype with
+				| TInst({cl_path = [],"typeref"},[t]) -> follow t
+				| t -> t
+			in
+			(match t with
+			| TInst({cl_kind = KTypeParameter _},_) ->
+				(* indirection *)
+				spr ctx "(";
+				generate_expr ctx e1;
+				spr ctx ")->refSize"
+			| _ ->
+				print ctx "sizeof(%s)" (s_type ctx t));
+		| "alloca" ->
+			spr ctx "ALLOCA(";
+			generate_expr ctx e1;
+			spr ctx ")"
+		| _ ->
+			assert false
+		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
 		ignore(check_include_meta ctx c.cl_meta);
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
-		spr ctx ")";
-	(* pass by reference call *)
-	| TLocal({v_name = "__addressof"}),[e1] ->
-		spr ctx "&(";
-		generate_expr ctx e1;
-		spr ctx ")"
-	(* dereference operator *)
-	| TLocal({v_name = "__deref"}),[e1] ->
-		spr ctx "*(";
-		generate_expr ctx e1;
-		spr ctx ")"
-	(* sizeof *)
-	| TLocal({v_name = "__sizeof"}),[e1] ->
-		(* get TypeReference's type *)
-		let t = match follow e1.etype with
-			| TInst({cl_path = [],"typeref"},[t]) -> follow t
-			| t -> t
-		in
-		(match t with
-		| TInst({cl_kind = KTypeParameter _},_) ->
-			(* indirection *)
-			spr ctx "(";
-			generate_expr ctx e1;
-			spr ctx ")->refSize"
-		| _ ->
-			print ctx "sizeof(%s)" (s_type ctx t));
-	(* pointer functions *)
-	| TField(_,FStatic({cl_path = ["c";"_Pointer"],"Pointer_Impl_"}, ({ cf_name = ("add"|"increment") } as cf))), p ->
-		spr ctx "(";
-		(match cf.cf_name, p with
-		| "add", [a;o] ->
-			generate_expr ctx a;
-			spr ctx " + ";
-			generate_expr ctx o
-		| "increment", [a] ->
-			generate_expr ctx a;
-			spr ctx "++"
-		| _ ->
-			ctx.con.com.error "This expression is invalid" e.epos);
 		spr ctx ")";
 	| TField(e1,FInstance(c,cf)),el ->
 		add_class_dependency ctx c;
@@ -1229,7 +1246,31 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")"
 
+and generate_constant ctx e = function
+	| TString s ->
+		print ctx "\"%s\"" s
+	| TInt i ->
+		print ctx "%ld" i
+	| TFloat s ->
+		print ctx "%s" s
+	| TNull when TypeParams.is_type_param ctx.con e.etype ->
+		generate_expr ctx (Expr.mk_type_param ctx.con e.epos e.etype);
+		spr ctx "->nullval"
+	| TNull ->
+		spr ctx "NULL"
+	| TSuper ->
+		(* TODO: uhm... *)
+		()
+	| TBool true ->
+		spr ctx "1"
+	| TBool false ->
+		spr ctx "0"
+	| TThis ->
+		spr ctx "this"
+
 and generate_expr ctx e = match e.eexpr with
+	| TConst c ->
+		generate_constant ctx e c
 	| TArray(e1, e2) ->
 		generate_expr ctx e1;
 		spr ctx "[";
@@ -1252,26 +1293,6 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 		spr ctx "}";
 		newline ctx;
-	| TConst(TString s) ->
-		print ctx "\"%s\"" s
-	| TConst(TInt i) ->
-		print ctx "%ld" i
-	| TConst(TFloat s) ->
-		print ctx "%s" s
-	| TConst TNull when TypeParams.is_type_param ctx.con e.etype ->
-		generate_expr ctx (Expr.mk_type_param ctx.con e.epos e.etype);
-		spr ctx "->nullval"
-	| TConst(TNull) ->
-		spr ctx "NULL"
-	| TConst(TSuper) ->
-		(* TODO: uhm... *)
-		()
-	| TConst(TBool true) ->
-		spr ctx "1"
-	| TConst(TBool false) ->
-		spr ctx "0"
-	| TConst(TThis) ->
-		spr ctx "this"
 	| TCall(e1,el) ->
 		generate_call ctx e e1 el
 	| TTypeExpr (TClassDecl c) ->
@@ -1319,9 +1340,8 @@ and generate_expr ctx e = match e.eexpr with
 	| TReturn None ->
 		spr ctx "return"
 	| TReturn (Some e1) ->
-		spr ctx "return (";
+		spr ctx "return ";
 		generate_expr ctx e1;
-		spr ctx ")"
 	| TVars(vl) ->
 		let f (v,eo) =
 			spr ctx (s_type_with_name ctx v.v_type v.v_name);
@@ -1383,20 +1403,19 @@ and generate_expr ctx e = match e.eexpr with
 			b();
 			newline ctx;
 			spr ctx "}";
-			newline ctx;
 		in
 		let b = open_block ctx in
-		newline ctx;
 		List.iter (fun (el,e) ->
+			newline ctx;
 			spr ctx "case ";
 			concat ctx "," (generate_expr ctx) el;
 			spr ctx ":";
 			generate_case_expr e;
-			newline ctx;
 		) cases;
 		begin match edef with
 			| None -> ()
 			| Some e ->
+				newline ctx;
 				spr ctx "default:";
 				generate_case_expr e;
 		end;
@@ -1423,9 +1442,6 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx e1;
 		spr ctx ")";
-	| TArrayDecl _ | TTry _ | TFor _ ->
-		(* handled in function context pass *)
-		assert false
 	| TMeta(_,e) ->
 		generate_expr ctx e
 	| TCast(e1,_) ->
@@ -1446,13 +1462,6 @@ and generate_expr ctx e = match e.eexpr with
 			| _ ->
 				assert false
 		end
-	| TThrow e1 ->
-		add_dependency ctx DCStd ([],"setjmp");
-		add_dependency ctx DFull (["c"],"Exception");
-		spr ctx "c_Exception_thrownObject = ";
-		generate_expr ctx e1;
-		newline ctx;
-		print ctx "(longjmp(*c_Exception_peek(),%i))" (get_type_id ctx e1.etype);
 	| TPatMatch dt ->
 		let fl = ctx.con.num_labels in
 		ctx.con.num_labels <- ctx.con.num_labels + (Array.length dt.dt_dt_lookup) + 1;
@@ -1519,6 +1528,9 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 	| TFunction _ ->
 		print_endline ("Not implemented yet: " ^ (Expr.debug ctx e))
+	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ ->
+		(* handled in field init pass *)
+		assert false
 
 let mk_array_decl ctx el t p =
 	let ts, eparam = match follow t with
@@ -1544,10 +1556,9 @@ let mk_array_decl ctx el t p =
 	newline ctx;
 	spr ctx "}";
 	newline ctx;
-	let v = alloc_var name t_dynamic in
+	let v = alloc_var name (ctx.con.com.basic.tarray t) in
 	let ev = mk (TLocal v) v.v_type p in
 	mk (TCall(ev,el)) t p
-
 
 (* Type generation *)
 
@@ -1556,23 +1567,32 @@ let mk_array_decl ctx el t p =
 
 	- TArrayDecl introduces an init function which is TCalled
 	- TTry is replaced with a TSwitch and uses setjmp
+	- TThrow is replaced with a call to longjmp
 	- TFor is replaced with TWhile
 *)
-let mk_function_context ctx cf =
-
+let init_field ctx cf =
 	let rec loop e = match e.eexpr with
+		| TArrayDecl [] ->
+			let c,t = match follow (ctx.con.com.basic.tarray (mk_mono())) with
+				| TInst(c,[t]) -> c,t
+				| _ -> assert false
+			in
+			(* TODO: this should probably be done earlier to handle type parameters *)
+			mk (TNew(c,[t],[Expr.mk_type_param ctx.con e.epos t])) ctx.con.com.basic.tvoid e.epos
 		| TArrayDecl el ->
 			mk_array_decl ctx (List.map loop el) e.etype e.epos
 		| TTry (e1,cl) ->
-			add_dependency ctx DCStd ([],"setjmp");
-			add_dependency ctx DFull (["c"],"Exception");
-			let esubj = Expr.mk_ccode ctx "(setjmp(*c_Exception_push()))" in
-			let epop = Expr.mk_ccode ctx "c_Exception_pop()" in
-			let epopassign = Expr.mk_ccode ctx "jmp_buf* _hx_jmp_buf = c_Exception_pop()" in
+			let p = e.epos in
+			let hxc = ctx.con.hxc in
+			let epush = Expr.mk_static_call_2 hxc.c_exception "push" [] p in
+			let esubj = Codegen.mk_parent (Expr.mk_static_call_2 hxc.c_csetjmp "setjmp" [Expr.mk_deref ctx.con p epush] p) in
+			let epop = Expr.mk_static_call_2 hxc.c_exception "pop" [] p in
+			let loc = alloc_var "_hx_jmp_buf" (hxc.t_pointer hxc.t_jmp_buf) in
+			let epopassign = mk (TVars [loc,Some epop]) ctx.con.com.basic.tvoid p in
 			let c1 = [Expr.mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
-				let eassign = Expr.mk_ccode ctx ((s_type_with_name ctx v.v_type v.v_name) ^ " = c_Exception_thrownObject") in
+				let eassign = Codegen.binop OpAssign (mk (TVars [v,None]) ctx.con.com.basic.tvoid p) (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p) v.v_type p in
 				let e = Codegen.concat eassign (Codegen.concat epopassign (loop e)) in
 				let e = mk (TBlock [e]) e.etype e.epos in
 				if v.v_type == t_dynamic then begin
@@ -1582,6 +1602,13 @@ let mk_function_context ctx cf =
 					Some ([Expr.mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
 			) cl) in
 			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
+		| TThrow e1 ->
+			let p = e.epos in
+			let eassign = Codegen.binop OpAssign (Expr.mk_static_field_2 ctx.con.hxc.c_exception "thrownObject" p) e1 e1.etype e1.epos in
+			let epeek = Expr.mk_static_call_2 ctx.con.hxc.c_exception "peek" [] p in
+			let el = [Expr.mk_deref ctx.con p epeek;Expr.mk_int ctx (get_type_id ctx e1.etype) p] in
+			let ejmp = Codegen.mk_parent (Expr.mk_static_call_2 ctx.con.hxc.c_csetjmp "longjmp" el p) in
+			Expr.mk_comma_block ctx.con p [eassign;ejmp]
 		| TFor(v,e1,e2) ->
 			let e1 = loop e1 in
 			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
@@ -1593,15 +1620,10 @@ let mk_function_context ctx cf =
 			]) ctx.con.com.basic.tvoid e.epos
 		| _ -> Type.map_expr loop e
 	in
-	let e = match cf.cf_expr with
+	match cf.cf_expr with
 		| None -> None
+		| Some {eexpr = TFunction tf} -> Some (loop tf.tf_expr)
 		| Some e -> Some (loop e)
-	in
-	{
-		field = cf;
-		expr = e;
-		loop_stack = [];
-	}
 
 let generate_function_header ctx c cf stat =
 	let args,ret,s = match follow cf.cf_type with
@@ -1631,14 +1653,15 @@ let generate_typedef_declaration ctx t =
 	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s), %s }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t) nullval
 
 let generate_method ctx c cf stat =
-	ctx.fctx <- mk_function_context ctx cf;
+	let e = init_field ctx cf in
+	ctx.fctx <- {
+		field = cf;
+		loop_stack = []
+	};
 	generate_function_header ctx c cf stat;
-	match ctx.fctx.expr with
+	match e with
 	| None -> newline ctx
-	| Some {eexpr = TFunction ({tf_expr = {eexpr = TBlock el}; tf_type = t})} ->
-		let e = mk (TBlock el) t cf.cf_pos in
-		generate_expr ctx e
-	| _ -> assert false
+	| Some e -> generate_expr ctx e
 
 let generate_class ctx c =
 	let vars = DynArray.create () in
@@ -1656,7 +1679,8 @@ let generate_class ctx c =
 			DynArray.add methods (cf2,stat);
 			cf.cf_expr <- None;
 			cf.cf_type <- ctx.con.hxc.t_pointer cf.cf_type;
-			add_init (Expr.mk_ccode ctx (Printf.sprintf "%s = %s" (full_field_name c cf) (full_field_name c cf2)));
+			let ef1 = Expr.mk_static_field c cf cf.cf_pos in
+			add_init (Codegen.binop OpAssign ef1 (Expr.mk_static_field c cf2 cf2.cf_pos) ef1.etype ef1.epos);
 		| _ ->
 			()
 	in
@@ -1679,6 +1703,7 @@ let generate_class ctx c =
 	) c.cl_ordered_statics;
 
 	let path = path_to_name c.cl_path in
+	let t_class = monofy_class c in
 
 	(* add constructor as function *)
 	begin match c.cl_constructor with
@@ -1686,13 +1711,17 @@ let generate_class ctx c =
 		| Some cf ->
 			match follow cf.cf_type, cf.cf_expr with
 			| TFun(args,_), Some e ->
-				let einit =
-					(if is_value_type ctx (TInst(c,List.map snd c.cl_types)) then
-						Expr.mk_ccode ctx (Printf.sprintf "%s this" path)
-					else
-  					Expr.mk_ccode ctx (Printf.sprintf "%s* this = (%s*) calloc(1, sizeof(%s))" path path path))
+				let einit = if is_value_type ctx t_class then
+					None
+				else
+					let p = cf.cf_pos in
+					(* TODO: get rid of this *)
+					let esize = Expr.mk_ccode ctx (Printf.sprintf "sizeof(%s)" path) in
+					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx 1 p;esize] p)
 				in
-				let ereturn = Expr.mk_ccode ctx "return this" in
+				let loc = alloc_var "this" t_class in
+				let einit = mk (TVars [loc,einit]) ctx.con.com.basic.tvoid cf.cf_pos in
+				let ereturn = mk (TReturn (Some (Expr.mk_local loc cf.cf_pos))) t_dynamic cf.cf_pos in
 				let e = match e.eexpr with
 					| TFunction({tf_expr = ({eexpr = TBlock el } as ef) } as tf) ->
 						{e with eexpr = TFunction ({tf with tf_expr = {ef with eexpr = TBlock(einit :: el @ [ereturn])}})}
@@ -1718,8 +1747,7 @@ let generate_class ctx c =
 			match cf.cf_expr with
 				| None -> ()
 				| Some e ->
-					let fctx = mk_function_context ctx cf in
-					let e = Option.get fctx.expr in
+					let e = Option.get (init_field ctx cf) in
 					let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
 					let ethis = mk (TTypeExpr (TClassDecl c)) ta cf.cf_pos in
 					let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
@@ -1727,6 +1755,16 @@ let generate_class ctx c =
 					cf.cf_expr <- Some eassign;
 					add_init eassign;
 		) svars;
+	end;
+
+	(* check if we have the main class *)
+	begin match ctx.con.com.main_class with
+		| Some path when path = c.cl_path ->
+			let efield = Expr.mk_static_field_2 ctx.con.hxc.c_boot "mainFunc" c.cl_pos in
+			let efield2 = Expr.mk_static_field_2 c "main" c.cl_pos in
+			let eassign = mk (TBinop(OpAssign,efield,efield2)) efield.etype c.cl_pos in
+			add_init eassign
+		| _ -> ()
 	end;
 
 	(* add init field as function *)
@@ -1751,15 +1789,6 @@ let generate_class ctx c =
 			generate_method ctx c cf stat
 		) methods;
 	end;
-
-	(* check if we have the main class *)
-	(match ctx.con.com.main_class with
-	| Some path when path = c.cl_path ->
-		add_dependency ctx DCStd ([],"setjmp");
-		add_dependency ctx DFull (["c"],"Exception");
-		add_dependency ctx DForward (["c"],"Init");
-		print ctx "int main() {\n\t_hx_init();\n\tswitch(setjmp(*c_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
-	| _ -> ());
 
 	ctx.buf <- ctx.buf_h;
 
@@ -1797,8 +1826,8 @@ let generate_class ctx c =
 	if not (DynArray.empty svars) then begin
 		spr ctx "// static vars\n";
 		DynArray.iter (fun cf ->
-      print ctx "extern %s %s" (s_type ctx cf.cf_type) (full_field_name c cf);
-      newline ctx
+		spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
+		newline ctx
     ) svars
 	end;
 
@@ -2056,9 +2085,14 @@ with | Not_found ->
 let add_filters con =
 	TypeParams.configure con;
 	VarDeclarations.configure con;
-	TypeChecker.configure con
+	TypeChecker.configure con;
+	DefaultValues.configure con
 
 let generate com =
+	let c_lib = match follow (get_type com (["c"],"Lib")) with
+		| TInst(c,_) -> c
+		| _ -> assert false
+	in
 	let hxc = {
 		t_typeref = (match follow (get_type com ([],"typeref")) with
 			| TInst(c,_) -> fun t -> TInst(c,[t])
@@ -2069,6 +2103,32 @@ let generate com =
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				(fun t -> TAbstract(a,[t]))
 			| _ -> assert false);
+		t_const_pointer = (match get_type com (["c"],"ConstPointer") with
+			| TAbstract(a,_) ->
+				(* HACK: Pointer is actually a @:coreType *)
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				(fun t -> TAbstract(a,[t]))
+			| _ -> assert false);
+		t_jmp_buf = get_type com ([],"jmp_buf");
+		c_lib = c_lib;
+		c_boot = (match get_type com ([],"hxc") with
+			| TInst(c,_) -> c
+			| _ -> assert false);
+		c_exception = (match get_type com (["c"],"Exception") with
+			| TInst(c,_) -> c
+			| _ -> assert false);
+		c_cstring = (match get_type com (["c"],"CString") with
+			| TInst(c,_) -> c
+			| _ -> assert false);
+		c_cstdlib = (match get_type com (["c"],"CStdlib") with
+			| TInst(c,_) -> c
+			| _ -> assert false);
+		c_csetjmp = (match get_type com (["c"],"CSetjmp") with
+			| TInst(c,_) -> c
+			| _ -> assert false);
+		cf_addressof = PMap.find "getAddress" c_lib.cl_statics;
+		cf_deref = PMap.find "dereference" c_lib.cl_statics;
+		cf_sizeof = PMap.find "sizeof" c_lib.cl_statics;
 	} in
 	let con = {
 		com = com;

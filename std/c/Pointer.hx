@@ -23,29 +23,27 @@ package c;
 
 import c.Types;
 
-@:notNull
 @:runtimeValue
-abstract Pointer<T>(_Pointer) {
+abstract Pointer<T>(Int) {
 	public inline function new(i:Int) {
-		this = untyped i;
+		this = i;
 	}
 	
-	@:extern @:op(A+B) public inline function add(offset:Int):Pointer<T> {
-		return new Pointer<T>( untyped __call("ADD_P_INT",this,offset) );
-	}
-	@:extern @:op(A+B) public inline function sub(offset:Int):Pointer<T> {
-		return new Pointer<T>( untyped __call("SUB_P_INT",this,offset) );
-	}
-	@:extern @:op(A+B) public inline function addp(offset:Pointer<T>):Pointer<T> {
-		return new Pointer<T>(untyped __call("ADD_P_P",this,offset));
-	}
-	@:extern @:op(A+B) public inline function subp(offset:Pointer<T>):Pointer<T> {
-		return new Pointer<T>(untyped __call("SUB_P_P",this,offset));
-	}
-	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
-		return new Pointer(untyped __call("INCR_P",this));
+	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
+		return new Pointer(lhs.value() + offset);
 	}
 	
+	@:extern @:op(A+B) public static inline function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
+		return new Pointer(lhs.value() + rhs.value());
+	}
+	
+	@:extern @:op(A-B) public static inline function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
+		return new Pointer(lhs.value() - offset);
+	}
+	
+	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
+		return new Pointer(lhs.value() - rhs.value());
+
 	@:extern @:arrayAccess public inline function __get(index:Int):T {
 		return untyped this[index];
 	}
@@ -54,18 +52,13 @@ abstract Pointer<T>(_Pointer) {
 		return untyped this[index] = value;
 	}
 	
-	public inline function toInt():Int{
-		return untyped this;
+	inline function value() {
+		return this;
 	}
-	
-	public static inline function fromInt<T>(v:Int):Pointer<T> {
-		return new Pointer(v);
-	}
-	
 }
 
 abstract ConstPointer<T>(Pointer<T>) {
-	@:from static public function fromString(s:String):ConstPointer<Int8> {
+	@:from static public function fromString(s:String):ConstPointer<Char> {
 		return cast s;
 	}
 }

@@ -32,9 +32,9 @@ extern class CStdio {
 	@:plain static public var SEEK_SET:Int;
 	@:plain static public var TMP_MAX:Int;
 
-	@:plain static public function fopen(filename:ConstPointer<Int8>, mode:ConstPointer<Int8>):File;
+	@:plain static public function fopen(filename:ConstPointer<Char>, mode:ConstPointer<Char>):File;
 
-	@:plain static public function freopen(filename:ConstPointer<Int8>, mode:ConstPointer<Int8>, stream:File):File;
+	@:plain static public function freopen(filename:ConstPointer<Char>, mode:ConstPointer<Char>, stream:File):File;
 
 	@:plain static public function fclose(stream:File):Int;
 
@@ -42,9 +42,9 @@ extern class CStdio {
 
 	@:plain static public function fwide(stream:File, mode:Int):Int;
 
-	@:plain static public function setbuf(stream:File, buffer:Pointer<Int8>):Void;
+	@:plain static public function setbuf(stream:File, buffer:Pointer<Char>):Void;
 
-	@:plain static public function setvbuf(stream:File, buffer:Pointer<Int8>, mode:Int, size:SizeT):Int;
+	@:plain static public function setvbuf(stream:File, buffer:Pointer<Char>, mode:Int, size:SizeT):Int;
 
 	@:plain static public function fread(buffer:Pointer<Void>, size:SizeT, count:SizeT, stream:File):SizeT;
 
@@ -54,25 +54,37 @@ extern class CStdio {
 
 	@:plain static public function getc(stream:File):Int;
 
-	@:plain static public function fgets(str:Pointer<Int8>, count:Int, stream:File):Pointer<Int8>;
+	@:plain static public function fgets(str:Pointer<Char>, count:Int, stream:File):Pointer<Char>;
 
 	@:plain static public function fputc(ch:Int, stream:File):Int;
 
 	@:plain static public function putc(ch:Int, stream:File):Int;
 
-	@:plain static public function fputs(str:ConstPointer<Int8>, stream:File):Int;
+	@:plain static public function fputs(str:ConstPointer<Char>, stream:File):Int;
 
 	@:plain static public function getchar():Int;
 
-	@:plain static public function gets(str:Pointer<Int8>):Pointer<Int8>;
+	@:plain static public function gets(str:Pointer<Char>):Pointer<Char>;
 
 	@:plain static public function putchar(ch:Int):Int;
 
-	@:plain static public function puts(str:Pointer<Int8>):Int;
+	@:plain static public function puts(str:Pointer<Char>):Int;
 
 	@:plain static public function ungetc(ch:Int, stream:File):Int;
 
-	// TODO: all varargs functions
+	@:plain static public function fscanf(stream:File, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function fprintf(stream:File, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function scanf(format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function printf(format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function sprintf(str:Pointer<Char>, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	@:plain static public function sscanf(str:ConstPointer<Char>, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	
+	// TODO: vprintf, vfprintf, vsprintf
 
 	@:plain static public function ftell(stream:File):Int32;
 
@@ -90,11 +102,11 @@ extern class CStdio {
 
 	@:plain static public function ferror(stream:File):Int;
 
-	@:plain static public function remove(fname:ConstPointer<Int8>):Int;
+	@:plain static public function remove(fname:ConstPointer<Char>):Int;
 
-	@:plain static public function rename(old_filename:ConstPointer<Int8>, new_filename:ConstPointer<Int8>):Int;
+	@:plain static public function rename(old_filename:ConstPointer<Char>, new_filename:ConstPointer<Char>):Int;
 
 	@:plain static public function tmpfile():File;
 
-	@:plain static public function tmpnam(filename:Pointer<Int8>):Pointer<Int8>;
+	@:plain static public function tmpnam(filename:Pointer<Char>):Pointer<Char>;
 }

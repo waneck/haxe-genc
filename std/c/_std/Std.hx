@@ -31,19 +31,19 @@ import c.Boot;
 	}
 
 	public static function int( x : Float ) : Int {
-		return 0;
+		return cast x;
 	}
 
 	public static function parseInt( x : String ) : Null<Int> {
-		return 0;
+		return c.CStdlib.strtol(x, null, 0);
 	}
 
 	public static function parseFloat( x : String ) : Float {
-		return 0.0;
+		return c.CStdlib.strtod(x, null);
 	}
 
 	public static function random( x : Int ) : Int {
-		return 0;
+		return c.CStdlib.rand() % x;
 	}
 
 	public static function instance<T>(v:{}, c:Class<T>):T {

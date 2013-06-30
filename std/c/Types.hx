@@ -1,5 +1,15 @@
 package c;
 
+@:native("hx_char")
+@:struct
+@:coreType
+abstract Char from Int to Int { }
+
+@:native("hx_uchar")
+@:struct
+@:coreType
+abstract UChar from Int to Int { }
+
 @:native("hx_uint8")
 @:struct
 @:coreType
