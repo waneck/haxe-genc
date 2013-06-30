@@ -19,6 +19,23 @@ typedef char hx_int8;
 typedef unsigned long hx_uint32;
 typedef long hx_int32;
 ')
-@:keep @:native('hxc') class Boot
-{
+@:keep @:native('hxc') class Boot {
+	
+	static public var mainFunc:Void->Void;
+	static public var argc:Int;
+	static public var argv:Pointer<Pointer<Char>>;
+	
+	@:plain static public function main(argc:Int, argv:Pointer<Pointer<Char>>):Int {
+		Boot.argc = argc;
+		Boot.argv = argv;
+		untyped __c("_hx_init()");
+		try {
+			mainFunc();
+			return 0;
+		} catch(e:Dynamic) {
+			trace("Something went wrong");
+			return 1;
+		}
+		
+	}
 }

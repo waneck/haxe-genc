@@ -35,6 +35,7 @@ type hxc = {
 	t_jmp_buf : t;
 
 	c_lib : tclass;
+	c_boot : tclass;
 	c_exception : tclass;
 	c_cstring : tclass;
 	c_csetjmp : tclass;
@@ -1749,6 +1750,16 @@ let generate_class ctx c =
 		) svars;
 	end;
 
+	(* check if we have the main class *)
+	begin match ctx.con.com.main_class with
+		| Some path when path = c.cl_path ->
+			let efield = Expr.mk_static_field_2 ctx.con.hxc.c_boot "mainFunc" c.cl_pos in
+			let efield2 = Expr.mk_static_field_2 c "main" c.cl_pos in
+			let eassign = mk (TBinop(OpAssign,efield,efield2)) efield.etype c.cl_pos in
+			add_init eassign
+		| _ -> ()
+	end;
+
 	(* add init field as function *)
 	begin match c.cl_init with
 		| None -> ()
@@ -1771,15 +1782,6 @@ let generate_class ctx c =
 			generate_method ctx c cf stat
 		) methods;
 	end;
-
-	(* check if we have the main class *)
-	(match ctx.con.com.main_class with
-	| Some path when path = c.cl_path ->
-		add_dependency ctx DCStd ([],"setjmp");
-		add_dependency ctx DFull (["c"],"Exception");
-		add_dependency ctx DForward (["c"],"Init");
-		print ctx "int main() {\n\t_hx_init();\n\tswitch(setjmp(*c_Exception_push())) {\n\t\tcase 0: %s();break;\n\t\tdefault: printf(\"Something went wrong\");\n\t}\n}" (full_field_name c (PMap.find "main" c.cl_statics))
-	| _ -> ());
 
 	ctx.buf <- ctx.buf_h;
 
@@ -1817,8 +1819,8 @@ let generate_class ctx c =
 	if not (DynArray.empty svars) then begin
 		spr ctx "// static vars\n";
 		DynArray.iter (fun cf ->
-      print ctx "extern %s %s" (s_type ctx cf.cf_type) (full_field_name c cf);
-      newline ctx
+		spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
+		newline ctx
     ) svars
 	end;
 
@@ -2102,6 +2104,9 @@ let generate com =
 			| _ -> assert false);
 		t_jmp_buf = get_type com ([],"jmp_buf");
 		c_lib = c_lib;
+		c_boot = (match get_type com ([],"hxc") with
+			| TInst(c,_) -> c
+			| _ -> assert false);
 		c_exception = (match get_type com (["c"],"Exception") with
 			| TInst(c,_) -> c
 			| _ -> assert false);
