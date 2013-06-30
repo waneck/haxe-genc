@@ -23,7 +23,6 @@ package c;
 
 import c.Types;
 
-@:notNull
 @:runtimeValue
 abstract Pointer<T>(Int) {
 	public inline function new(i:Int) {
