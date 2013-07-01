@@ -22,6 +22,7 @@
 package c;
 
 import c.Types;
+
 @:runtimeValue
 abstract Pointer<T>(Int) {
 	public inline function new(i:Int) {
@@ -59,12 +60,13 @@ abstract Pointer<T>(Int) {
 	public inline function value() {
 		return this;
 	}
-
 }
 
 abstract ConstPointer<T>(Pointer<T>) {
+	public inline function new(ptr) this = ptr;
+	
 	@:from static public inline function fromString(s:String):ConstPointer<Char> {
-		return untyped s.__a;
+		return untyped s;
 	}
 }
 

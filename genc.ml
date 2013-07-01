@@ -36,6 +36,7 @@ type hxc = {
 
 	c_lib : tclass;
 	c_boot : tclass;
+	c_string : tclass;
 	c_exception : tclass;
 	c_cstring : tclass;
 	c_csetjmp : tclass;
@@ -827,10 +828,15 @@ module TypeChecker = struct
 				with Not_found -> cf.cf_name,mk (TConst TNull) (mk_mono()) e.epos
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
+		| TConst (TString s),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TDynamic _) ->
+			e
+		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])),_ ->
+			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
 		| TMeta(m,e1),t ->
 			{ e with eexpr = TMeta(m,check gen e1 t)}
 		| TParenthesis(e1),t ->
 			{ e with eexpr = TParenthesis(check gen e1 t)}
+
 		| _ ->
 			e
 
@@ -1231,6 +1237,13 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 			spr ctx "ALLOCA(";
 			generate_expr ctx e1;
 			spr ctx ")"
+		| "cCode" ->
+			let code = match e1.eexpr with
+				| TConst (TString s) -> s
+				| TCast ({eexpr = TConst (TString s) },None) -> s
+				| _ -> assert false
+			in
+			spr ctx code;
 		| _ ->
 			assert false
 		end
@@ -1261,8 +1274,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 
 and generate_constant ctx e = function
 	| TString s ->
-		add_dependency ctx DForward ([],"String");
-		print ctx "String_ofPointerCopyNT(NULL,\"%s\")" s
+		print ctx "\"%s\"" s;
 	| TInt i ->
 		print ctx "%ld" i
 	| TFloat s ->
@@ -2139,6 +2151,9 @@ let generate com =
 		c_exception = (match get_type com (["c"],"Exception") with
 			| TInst(c,_) -> c
 			| _ -> assert false);
+		c_string = (match get_type com ([],"String") with
+			| TInst(c,_) -> c
+			| _ -> assert false);		
 		c_cstring = (match get_type com (["c"],"CString") with
 			| TInst(c,_) -> c
 			| _ -> assert false);
