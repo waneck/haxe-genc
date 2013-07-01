@@ -67,7 +67,4 @@ abstract ConstPointer<T>(Pointer<T>) {
 		return cast s;
 	}
 }
-<<<<<<< HEAD
 
-=======
->>>>>>> initial string support
