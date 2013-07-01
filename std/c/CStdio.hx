@@ -101,6 +101,8 @@ extern class CStdio {
 	@:plain static public function feof(stream:File):Int;
 
 	@:plain static public function ferror(stream:File):Int;
+	
+	@:plain static public function perror(s:ConstPointer<Char>):Int;
 
 	@:plain static public function remove(fname:ConstPointer<Char>):Int;
 

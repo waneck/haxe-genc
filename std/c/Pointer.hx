@@ -43,7 +43,7 @@ abstract Pointer<T>(Int) {
 	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
 		return new Pointer(lhs.value() - rhs.value());
 	}
-	
+
 	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
 		return new Pointer(++this);
 	}
@@ -59,10 +59,12 @@ abstract Pointer<T>(Int) {
 	public inline function value() {
 		return this;
 	}
+
 }
 
 abstract ConstPointer<T>(Pointer<T>) {
-	@:from static public function fromString(s:String):ConstPointer<Char> {
+	@:from static public inline function fromString(s:String):ConstPointer<Char> {
 		return cast s;
 	}
 }
+
