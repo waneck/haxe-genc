@@ -63,7 +63,7 @@ abstract Pointer<T>(Int) {
 }
 
 abstract ConstPointer<T>(Pointer<T>) {
-	@:from static public function fromString(s:String):ConstPointer<Char> {
+	@:from static public inline function fromString(s:String):ConstPointer<Char> {
 		return cast s;
 	}
 }
