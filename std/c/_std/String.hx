@@ -24,19 +24,15 @@
 
 import c.Types;
 import c.Pointer;
+import c.TypeReference;
 import c.FixedArray;
 import c.Lib;
 
-@:include("<string.h>")
+//@:include("<string.h>")
 @:coreApi @:final class String {
 	
 	public var length(default,null) : Int;
-	
-	private var __a:FixedArray<Int8>;
-	
-	private function get_length():Int{
-		return __a.length; // 0x00
-	}
+	private var __a:Pointer<Int8>;
 
 	@:keep static inline function memchr(p:Pointer<Int8>, chr:Int, num:Int):Pointer<Int8>
 		return untyped __call("memchr",p,chr,num);
@@ -60,10 +56,13 @@ import c.Lib;
 			var pos:Int = 0;
 			while (pos < l0){
 				var pchr:Pointer<Int8> = memchr(p0+pos,first,l0-pos);
+				//untyped __c('printf("mm %d \\n",pos)');
 				if (pchr != new Pointer(0)){
-					pos = pchr.subp(p0).toInt();
+					pos = (pchr - p0).value();
 					if (memcmp(pchr,p1,l1) == 0){
 						return pos;
+					} else {
+						pos += 1;
 					}
 				} else {
 					return -1;
@@ -73,6 +72,27 @@ import c.Lib;
 		}
 	}
 	
+	@:keep private static function compare(s0:String,s1:String) : Int {
+		if (s0.length != s1.length)
+			return 1;
+		return memmem(s0.__a, s0.length, s1.__a, s1.length);
+	}
+	
+	@:keep private static function equals(s0:String,s1:String) : Bool {
+		return compare(s0,s1) == 0;
+	}
+	@:keep private static function concat(s0:String,s1:String) : String {
+		if (s0.length == 0)
+			return s1;
+		if (s1.length == 0)
+			return s0;
+		var ret = new String(null);
+		ret.length = s0.length + s1.length;
+		ret.__a = cast c.CStdlib.calloc(ret.length, Lib.sizeof(new TypeReference<Int8>()));
+		FixedArray.copy(s0.__a,0,ret.__a,0,s0.length);
+		FixedArray.copy(s1.__a,0,ret.__a,s0.length,s1.length);
+		return ret;
+	}
 	/* NT is null-terminated, for char* literals. 
 	 * How to deal with strings that aren't used after return (stack-allocation)? 
 	 * TODO: externs for string.h
@@ -87,23 +107,27 @@ import c.Lib;
 	@:keep private static function ofPointerCopy<T>(len:Int, p:Pointer<Int8>):String
 	{
 		var ret = new String(null);
-		ret.__a = new FixedArray<Int8>(len);
-		FixedArray.copy(p,0,ret.__a.array,0,len);
+		ret.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Int8>()));
+		FixedArray.copy(p,0,ret.__a,0,len);
+		ret.length = len;
 		return ret;
 	}
 	
 	@:keep private static function stringOfSize(len:Int):String{
 		var s = new String(null);
-		s.__a = new FixedArray<Int8>(len);
+		s.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Int8>()));
+		s.length = len;
 		return s;
 	}
 	
 	public function new(string:String) {
-		if (string != null){
-			__a = new FixedArray<Int8>(string.length);
-			FixedArray.copy(string.__a.array,0,__a.array,0,string.__a.length); // 0x00
+		if ( string != null ){
+			length = string.length;
+			__a = cast c.CStdlib.calloc(string.length, Lib.sizeof(new TypeReference<Int8>()));
+			FixedArray.copy(string.__a,0,__a,0,string.length); // 0x00
 		} else {
 			__a = null;
+			length = 0;
 		}
 	}
 
@@ -120,30 +144,35 @@ import c.Lib;
 	public function charAt(index : Int):String {
 		if (index > 0 && index < length){
 			var ret = stringOfSize(1);
-			ret.__a.array[0] = __a.array[index];
+			ret.__a[0] = __a[index];
 			return ret;
 		} else {
-			return stringOfSize(0); 
+			return null; 
 		}
 	}
 
 	public function charCodeAt( index : Int):Null<Int> {
 		if (index > 0 && index < length) 
-			return untyped __a.array[index]; // Field charCodeAt has different type than in core type
+			return untyped __a[index]; // Field charCodeAt has different type than in core type
 									 // index : Int -> Null<Int> should be index : Int -> Int ??
 		return null; // TODO this is *definitely* wrong here, null (0) is a valid char code
 	}
 
 	
 	public function indexOf( str : String, ?startIndex : Int ):Int {
-		if (str.length == 0)
+		if (str.length == 0){
 			return 0;
-		if (startIndex < 0 || startIndex >= length)
+		}
+		if (startIndex < 0 || startIndex >= length) {
 			return -1;
-		return memmem(	__a.array.add(startIndex),
-						__a.length - startIndex,
-						str.__a.array,
-						str.__a.length );
+		}
+		//untyped __c('printf("idxOf: sidx: %d \\n",startIndex)');
+		var p_tmp0 = __a + startIndex; // TODO inlining produces garbage
+		var ret = memmem(p_tmp0,
+						length-startIndex,
+						str.__a,
+						str.length );
+		return ret > -1 ? startIndex+ret : -1;
 	}
 
 	public function lastIndexOf( str : String, ?startIndex : Int ):Int {
@@ -153,10 +182,14 @@ import c.Lib;
 			return -1;
 		if (startIndex < 0 || startIndex >= length)
 			return -1;
-		var first = str.__a.array[0];
+		var first = str.__a[0];
+		startIndex = startIndex > 0 ? startIndex : length-1; // NULL == 0 issue, TODO
 		var pos = (length - str.length) < startIndex ? (length - str.length) : startIndex;
+		//untyped __c('printf("%d \\n",pos)');
 		do{
-			if (__a[pos] == first && (memcmp(__a.array.add(pos),str.__a.array,str.length) == 0)){
+			var p_tmp = __a + pos;      // TODO inlining produces garbage
+			var char_at_pos = __a[pos]; // TODO inlining produces garbage
+			if (char_at_pos == first && (memcmp(p_tmp,str.__a,str.length) == 0)){
 				return pos;
 			} else {
 				--pos;
@@ -180,10 +213,19 @@ import c.Lib;
 			return [this];
 		} else {
 			var ret = new Array();
-			do {
-				ret.push(substr(start,cur));
-				start += (cur + delimiter.length);
-			} while ((cur = indexOf(delimiter,start)) != -1);
+			while (true){
+				ret.push(substr(start,cur-start));
+				start    = (cur + delimiter.length);
+				var tmp  = indexOf(delimiter,start);
+				if (-1 == tmp){
+					if (cur < length){
+						ret.push(substr(start,length-cur));
+					}
+					break;
+				} else {
+					cur = tmp;
+				}
+			}
 			return ret;
 		}
 	}
@@ -202,7 +244,7 @@ import c.Lib;
 			len = length-pos;
 		}
 		var ret = stringOfSize(len);
-		FixedArray.copy( __a.array, pos, ret.__a.array, 0, len);
+		FixedArray.copy( __a, pos, ret.__a, 0, len);
 		return ret;
 	}
 
@@ -220,7 +262,7 @@ import c.Lib;
 
 	public static function fromCharCode( code : Int ):String {
 		var ret = stringOfSize(1);
-		ret.__a.array[0] = untyped code; //TODO int->Int8 conv
+		ret.__a[0] = untyped code; //TODO int->Int8 conv
 		return ret;
 	}
 }

@@ -22,11 +22,10 @@
 package c;
 
 import c.Types;
-
 @:runtimeValue
 abstract Pointer<T>(Int) {
 	public inline function new(i:Int) {
-		this = i;
+		this = untyped i;
 	}
 	
 	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
@@ -57,7 +56,7 @@ abstract Pointer<T>(Int) {
 		return untyped this[index] = value;
 	}
 	
-	inline function value() {
+	public inline function value() {
 		return this;
 	}
 }
@@ -67,5 +66,3 @@ abstract ConstPointer<T>(Pointer<T>) {
 		return cast s;
 	}
 }
-
-extern private class _Pointer {}
