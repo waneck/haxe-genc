@@ -18,6 +18,10 @@ typedef unsigned char hx_uint8;
 typedef char hx_int8;
 typedef unsigned long hx_uint32;
 typedef long hx_int32;
+typedef unsigned long long hx_uint64;
+typedef long long hx_int64;
+#define hx_strcmp(a,b) ((a == 0 && b == 0) ? 0 : (a == 0 || b == 0) ? 1 : String_compare(a,b))
+
 ')
 @:keep @:native('hxc') class Boot {
 	

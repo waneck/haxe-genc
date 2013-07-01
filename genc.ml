@@ -31,7 +31,7 @@ type hxc = {
 	t_typeref : t -> t;
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
-
+	t_int64 : t -> t;
 	t_jmp_buf : t;
 
 	c_lib : tclass;
@@ -1140,8 +1140,21 @@ let rec s_type ctx t =
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TAbstract({a_path = [],"Bool"},[]) -> "int"
-	| TInst({cl_path = ["c"],"CCString"},[]) ->
-		"const char*" 
+    | TAbstract( a, tps ) when Meta.has (Meta.Custom ":int") a.a_meta ->
+        let (meta,el,epos) = Meta.get (Meta.Custom ":int") a.a_meta in 
+        (match el with 
+         | [(EConst (String s),_)] -> ( match s with
+            | "int64" -> "hx_int64"
+            | "int32" -> "hx_int32"
+            | "int16" -> "hx_int16"
+            | "int8"  -> "hx_int8"
+            | "uint64" -> "hx_uint64"
+            | "uint32" -> "hx_uint32"
+            | "uint16" -> "hx_uint16"
+            | "uint8" -> "hx_uint8"
+            | _ -> s)
+        | _ -> assert false; 
+        )
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
 		let ptr = if is_value_type ctx t then "" else "*" in
@@ -1248,7 +1261,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 
 and generate_constant ctx e = function
 	| TString s ->
-		print ctx "\"%s\"" s
+		print ctx "String_ofPointerCopyNT(NULL,\"%s\")" s
 	| TInt i ->
 		print ctx "%ld" i
 	| TFloat s ->
@@ -1423,7 +1436,7 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 		spr ctx "}";
 	| TBinop((OpEq | OpNotEq) as op,e1,e2) when (match follow e1.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
-		spr ctx "strcmp(";
+		spr ctx "hx_strcmp(";
 		generate_expr ctx e1;
 		spr ctx ",";
 		generate_expr ctx e2;
@@ -1447,6 +1460,8 @@ and generate_expr ctx e = match e.eexpr with
 	| TCast(e1,_) ->
 		begin match follow e1.etype with
 		| TInst(c,_) when Meta.has Meta.Struct c.cl_meta -> generate_expr ctx e1;
+		| TAbstract({a_path = ["c"],"Pointer"},[t]) when ((s_type ctx e.etype) = "int") -> generate_expr ctx e1;
+		| TAbstract( a, tps ) when Meta.has (Meta.Custom ":int") a.a_meta -> generate_expr ctx e1;
 		| _ ->
 			print ctx "((%s) " (s_type ctx e.etype);
 			generate_expr ctx e1;
@@ -2104,6 +2119,12 @@ let generate com =
 				(fun t -> TAbstract(a,[t]))
 			| _ -> assert false);
 		t_const_pointer = (match get_type com (["c"],"ConstPointer") with
+			| TAbstract(a,_) ->
+				(* HACK: Pointer is actually a @:coreType *)
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				(fun t -> TAbstract(a,[t]))
+			| _ -> assert false);
+		t_int64 = (match get_type com (["c"],"Int64") with
 			| TAbstract(a,_) ->
 				(* HACK: Pointer is actually a @:coreType *)
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
