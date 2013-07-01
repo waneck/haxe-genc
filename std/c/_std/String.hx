@@ -27,6 +27,7 @@ import c.Pointer;
 import c.TypeReference;
 import c.FixedArray;
 import c.Lib;
+import c.CString.memcmp;
 
 //@:include("<string.h>")
 @:coreApi @:final class String {
@@ -34,12 +35,6 @@ import c.Lib;
 	public var length(default,null) : Int;
 	private var __a:Pointer<Char>;
 
-	@:keep static inline function memchr(p:Pointer<Char>, chr:Int, num:Int):Pointer<Char>
-		return untyped __call("memchr",p,chr,num);
-		
-	@:keep static inline function memcmp<T,U>(p0:Pointer<T>,p1:Pointer<U>, num:Int):Int
-		return untyped __call("memcmp",p0,p1,num);
-	
 	@:keep private static function memmem(p0:Pointer<Char>,l0:Int,p1:Pointer<Char>,l1:Int):Int{
 		// nothing is everywhere
 		if (l1 == 0)
@@ -55,7 +50,7 @@ import c.Lib;
 			var first:Int = p1[0];
 			var pos:Int = 0;
 			while (pos < l0){
-				var pchr:Pointer<Char> = memchr(p0+pos,first,l0-pos);
+				var pchr:Pointer<Char> = c.CString.memchr(p0+pos,first,l0-pos);
 				//untyped __c('printf("mm %d \\n",pos)');
 				if (pchr != new Pointer(0)){
 					pos = (pchr - p0).value();
@@ -97,8 +92,8 @@ import c.Lib;
 	 * How to deal with strings that aren't used after return (stack-allocation)?
 	 * TODO: externs for string.h
 	 */
-	@:keep private static function ofPointerCopyNT<T>(p:Pointer<Char>):String {
-		var len = untyped __call("strlen",p);
+	@:keep private static function ofPointerCopyNT(p:Pointer<Char>):String {
+		var len = c.CString.strlen(cast p);
 		return ofPointerCopy(len,p); // keep 0x00 for C-compat TODO: do we want that?
 	}
 	/*
