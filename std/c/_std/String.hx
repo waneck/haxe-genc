@@ -32,20 +32,20 @@ import c.Lib;
 @:coreApi @:final class String {
 	
 	public var length(default,null) : Int;
-	private var __a:Pointer<Int8>;
+	private var __a:Pointer<Char>;
 
-	@:keep static inline function memchr(p:Pointer<Int8>, chr:Int, num:Int):Pointer<Int8>
+	@:keep static inline function memchr(p:Pointer<Char>, chr:Int, num:Int):Pointer<Char>
 		return untyped __call("memchr",p,chr,num);
 		
 	@:keep static inline function memcmp<T,U>(p0:Pointer<T>,p1:Pointer<U>, num:Int):Int
 		return untyped __call("memcmp",p0,p1,num);
 	
-	@:keep private static function memmem(p0:Pointer<Int8>,l0:Int,p1:Pointer<Int8>,l1:Int):Int{
+	@:keep private static function memmem(p0:Pointer<Char>,l0:Int,p1:Pointer<Char>,l1:Int):Int{
 		// nothing is everywhere
 		if (l1 == 0)
 			return 0;
 		// can't be contained
-		else if(l1 > l0 || l0 == 0) 
+		else if(l1 > l0 || l0 == 0)
 			return -1;
 		// same string
 		else if (l0==l1 && memcmp(p0,p1,l0) == 0)
@@ -55,7 +55,7 @@ import c.Lib;
 			var first:Int = p1[0];
 			var pos:Int = 0;
 			while (pos < l0){
-				var pchr:Pointer<Int8> = memchr(p0+pos,first,l0-pos);
+				var pchr:Pointer<Char> = memchr(p0+pos,first,l0-pos);
 				//untyped __c('printf("mm %d \\n",pos)');
 				if (pchr != new Pointer(0)){
 					pos = (pchr - p0).value();
@@ -88,26 +88,26 @@ import c.Lib;
 			return s0;
 		var ret = new String(null);
 		ret.length = s0.length + s1.length;
-		ret.__a = cast c.CStdlib.calloc(ret.length, Lib.sizeof(new TypeReference<Int8>()));
+		ret.__a = cast c.CStdlib.calloc(ret.length, Lib.sizeof(new TypeReference<Char>()));
 		FixedArray.copy(s0.__a,0,ret.__a,0,s0.length);
 		FixedArray.copy(s1.__a,0,ret.__a,s0.length,s1.length);
 		return ret;
 	}
-	/* NT is null-terminated, for char* literals. 
-	 * How to deal with strings that aren't used after return (stack-allocation)? 
+	/* NT is null-terminated, for char* literals.
+	 * How to deal with strings that aren't used after return (stack-allocation)?
 	 * TODO: externs for string.h
 	 */
-	@:keep private static function ofPointerCopyNT<T>(p:Pointer<Int8>):String {
+	@:keep private static function ofPointerCopyNT<T>(p:Pointer<Char>):String {
 		var len = untyped __call("strlen",p);
 		return ofPointerCopy(len,p); // keep 0x00 for C-compat TODO: do we want that?
 	}
 	/*
-	 *  
+	 *
 	 */
-	@:keep private static function ofPointerCopy<T>(len:Int, p:Pointer<Int8>):String
+	@:keep private static function ofPointerCopy<T>(len:Int, p:Pointer<Char>):String
 	{
 		var ret = new String(null);
-		ret.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Int8>()));
+		ret.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Char>()));
 		FixedArray.copy(p,0,ret.__a,0,len);
 		ret.length = len;
 		return ret;
@@ -115,7 +115,7 @@ import c.Lib;
 	
 	@:keep private static function stringOfSize(len:Int):String{
 		var s = new String(null);
-		s.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Int8>()));
+		s.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Char>()));
 		s.length = len;
 		return s;
 	}
@@ -123,7 +123,7 @@ import c.Lib;
 	public function new(string:String) {
 		if ( string != null ){
 			length = string.length;
-			__a = cast c.CStdlib.calloc(string.length, Lib.sizeof(new TypeReference<Int8>()));
+			__a = cast c.CStdlib.calloc(string.length, Lib.sizeof(new TypeReference<Char>()));
 			FixedArray.copy(string.__a,0,__a,0,string.length); // 0x00
 		} else {
 			__a = null;
@@ -147,12 +147,12 @@ import c.Lib;
 			ret.__a[0] = __a[index];
 			return ret;
 		} else {
-			return null; 
+			return null;
 		}
 	}
 
 	public function charCodeAt( index : Int):Null<Int> {
-		if (index > 0 && index < length) 
+		if (index > 0 && index < length)
 			return untyped __a[index]; // Field charCodeAt has different type than in core type
 									 // index : Int -> Null<Int> should be index : Int -> Int ??
 		return null; // TODO this is *definitely* wrong here, null (0) is a valid char code
@@ -249,7 +249,7 @@ import c.Lib;
 	}
 
 	public function substring( startIndex : Int, ?endIndex : Int ):String {
-		// 
+		//
 		startIndex = startIndex < 0 ? 0 : startIndex;
 		endIndex = endIndex < 0 ? 0 : endIndex;
 		var len = endIndex - startIndex;

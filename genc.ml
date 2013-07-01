@@ -1261,6 +1261,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 
 and generate_constant ctx e = function
 	| TString s ->
+		add_dependency ctx DForward ([],"String");
 		print ctx "String_ofPointerCopyNT(NULL,\"%s\")" s
 	| TInt i ->
 		print ctx "%ld" i

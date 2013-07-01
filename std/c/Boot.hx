@@ -3,6 +3,8 @@ package c;
 import c.Exception;
 import c.TypeReference;
 import c.Types;
+import c.NInt;
+import String;
 
 @:headerCode('
 #ifndef _MSC_VER
