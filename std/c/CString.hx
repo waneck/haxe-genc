@@ -13,7 +13,7 @@ extern class CString {
 	@:plain static public function strcat(destination:Pointer<Char>, source:ConstPointer<Char>):Pointer<Char>;
 	@:plain static public function strncat(destination:Pointer<Char>, source:ConstPointer<Char>, num:SizeT):Pointer<Char>;
 
-	@:plain static public function memcmp(ptr1:Pointer<Void>, ptr2:Pointer<Void>, num:SizeT):Int;
+	@:plain static public function memcmp<A>(ptr1:Pointer<A>, ptr2:Pointer<A>, num:SizeT):Int;
 	@:plain static public function strcmp(str1:ConstPointer<Char>, str2:ConstPointer<Char>):Int;
 	@:plain static public function strcoll(str1:ConstPointer<Char>, str2:ConstPointer<Char>):Int;
 	@:plain static public function strncmp(str1:ConstPointer<Char>, str2:ConstPointer<Char>, num:SizeT):Int;
