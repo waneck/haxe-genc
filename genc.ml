@@ -62,8 +62,7 @@ type context = {
 	mutable type_parameters : (path, texpr) PMap.t;
 	mutable init_modules : path list;
 	mutable generated_types : type_context list;
-	mutable filters : (string * float * filter) list;
-	mutable filters_dirty : bool;
+	mutable filters : filter list;
 }
 
 and type_context = {
@@ -220,43 +219,12 @@ module Expr = struct
         { eexpr=TBinop(op,e1,e2); etype=et; epos=p }
 end
 
-type t_dependency =
-	| DAfter of float
-	| DBefore of float
-
 module Filters = struct
-	exception ImpossibleDependency of string
 
-	let max_dep = 10000.0
-	let min_dep = - (10000.0)
-
-	let solve_deps name (deps:t_dependency list) =
-		let vmin = min_dep -. 1.0 in
-		let vmax = max_dep +. 1.0 in
-		let rec loop dep vmin vmax =
-			match dep with
-			| [] ->
-				if vmin >= vmax then raise (ImpossibleDependency name);
-				(vmin +. vmax) /. 2.0
-			| head :: tail ->
-				match head with
-				| DBefore f ->
-					loop tail (max vmin f) vmax
-				| DAfter f ->
-					loop tail vmin (min vmax f)
-		in
-		loop deps vmin vmax
-
-	let add_filter con name priority filter =
-		con.filters <- (name, priority, filter) :: con.filters;
-		con.filters_dirty <- true
+	let add_filter con filter =
+		con.filters <- filter :: con.filters
 
 	let run_filters gen e =
-		(* sort by priority *)
-		if gen.gcon.filters_dirty then begin
-			gen.gcon.filters <- List.sort (fun (_,f1,_) (_,f2,_) -> - (compare f1 f2)) gen.gcon.filters;
-			gen.gcon.filters_dirty <- false
-		end;
 		(* local vars / temp vars handling *)
 		let declared_vars = ref [] in
 		let temps = ref (PMap.empty) in
@@ -311,7 +279,7 @@ module Filters = struct
 		);
 
 
-		let ret = List.fold_left (fun e (_,_,f) ->
+		let ret = List.fold_left (fun e f ->
 			let run = f gen in
 			let process_next_block = ref true in
 			(* set all temps as used, as we cannot guarantee for now the availability of a var *)
@@ -470,7 +438,7 @@ module Filters = struct
 				List.iter (run_filters_field gen) c.cl_ordered_statics;
 				gen.gfield <- null_field;
 				c.cl_init <- Option.map (run_filters gen) c.cl_init
-			| _ -> () (* TODO? *)
+			| _ -> ()
 		) con.com.types;
 		gen
 
@@ -493,10 +461,6 @@ end
 		callsite changes
 **)
 module TypeParams = struct
-
-	let name = "type_params_filter"
-
-	let priority = Filters.min_dep
 
 	let infer_params gen p original_t applied_t params = match params with
 	| [] -> []
@@ -748,9 +712,6 @@ module TypeParams = struct
 					Type.map_expr gen.map e)
 			| _ -> Type.map_expr gen.map e
 
-	let configure con =
-		Filters.add_filter con name priority filter
-
 end
 
 (** VarDeclarations **)
@@ -759,10 +720,6 @@ end
 	TPatMatch has some var names sanitized
 **)
 module VarDeclarations = struct
-
-	let name = "var_declarations"
-
-	let priority = Filters.solve_deps name [DBefore TypeParams.priority]
 
 	let filter gen = function e ->
 		match e.eexpr with
@@ -813,8 +770,6 @@ module VarDeclarations = struct
 			Type.map_expr gen.map e
 		| _ -> Type.map_expr gen.map e
 
-	let configure con =
-		Filters.add_filter con name priority filter
 end
 
 (*
@@ -822,10 +777,6 @@ end
 	Must run before VarDeclarations or the universe implodes.
 *)
 module DefaultValues = struct
-
-	let name = "default_values"
-
-	let priority = Filters.solve_deps name [DBefore VarDeclarations.priority]
 
 	let filter gen = function e ->
 		match e.eexpr with
@@ -845,8 +796,6 @@ module DefaultValues = struct
 		| _ ->
 			Type.map_expr gen.map e
 
-	let configure con =
-		Filters.add_filter con name priority filter
 end
 
 let sort_anon_fields fields =
@@ -876,10 +825,6 @@ let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 		- use Array as argument list to "rest" argument
 *)
 module TypeChecker = struct
-
-	let name = "type_checker"
-
-	let priority = Filters.solve_deps name [DBefore VarDeclarations.priority]
 
 	let rec check gen e t =
 		match e.eexpr,follow t with
@@ -981,9 +926,6 @@ module TypeChecker = struct
 			{ e with eexpr = TThrow (check gen e1 e1.etype) }
 		| _ ->
 			Type.map_expr gen.map e
-
-	let configure con =
-		Filters.add_filter con name priority filter
 
 end
 
@@ -2147,10 +2089,11 @@ with | Not_found ->
 	failwith("The type " ^ Ast.s_type_path path ^ " is required and was not found")
 
 let add_filters con =
-	TypeParams.configure con;
-	VarDeclarations.configure con;
-	TypeChecker.configure con;
-	DefaultValues.configure con
+	(* ascending priority *)
+	Filters.add_filter con TypeParams.filter;
+	Filters.add_filter con VarDeclarations.filter;
+	Filters.add_filter con TypeChecker.filter;
+	Filters.add_filter con DefaultValues.filter
 
 let generate com =
 	let c_lib = match follow (get_type com (["c"],"Lib")) with
@@ -2222,7 +2165,6 @@ let generate com =
 		init_modules = [];
 		generated_types = [];
 		filters = [];
-		filters_dirty = false;
 	} in
 	add_filters con;
 	let gen = Filters.run_filters_types con in
