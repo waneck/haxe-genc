@@ -587,7 +587,7 @@ let get_config com =
 			pf_can_init_member = (fun _ -> false);
 			pf_capture_policy = CPNone;
 			pf_pad_nulls = true;
-			pf_add_final_return = true;
+			pf_add_final_return = false;
 			pf_overload = false;
 			pf_pattern_matching = false;
 		}

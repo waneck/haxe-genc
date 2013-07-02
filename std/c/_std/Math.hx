@@ -25,7 +25,7 @@
 
 import c.CMath;
 
-@:include("<math.h>")
+@:include("<math.h>", "Math")
 class Math {
 	static public var PI(default,null) : Float = 3.141592654;
 
