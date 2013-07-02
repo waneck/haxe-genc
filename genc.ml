@@ -891,7 +891,7 @@ module TypeChecker = struct
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
 		(* literal String assigned to const char* = pass through *)
-		| TConst (TString s),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TDynamic _) ->
+		| TConst (TString s),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TDynamic _ | TAbstract({a_path=["c"],"VarArg"},_)) ->
 			e
 		(* literal String in other place = wrap *)
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])),_ ->
