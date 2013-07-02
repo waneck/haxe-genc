@@ -977,6 +977,8 @@ module TypeChecker = struct
 				{e with eexpr = TCast(check gen (gen.map e1) t,None)}
 			else
 				{e with eexpr = TCast(gen.map e1,None)}
+		| TThrow e1 -> 
+			{ e with eexpr = TThrow (check gen e1 e1.etype) }
 		| _ ->
 			Type.map_expr gen.map e
 
