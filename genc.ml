@@ -1529,7 +1529,7 @@ and generate_expr ctx e = match e.eexpr with
 		generate_expr ctx 
 			(Expr.mk_binop	op 
 							(Expr.mk_static_call_2 ctx.con.hxc.c_string "equals" [e1;e2] e1.epos)
-							(Expr.mk_int ctx 0 e1.epos) 
+							(Expr.mk_int ctx 1 e1.epos) 
 							e.etype 
 							e1.epos)
 	| TBinop(op,e1,e2) ->
