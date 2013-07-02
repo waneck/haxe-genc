@@ -32,6 +32,7 @@ type hxc = {
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
 	t_int64 : t -> t;
+	
 	t_jmp_buf : t;
 
 	c_lib : tclass;
@@ -41,6 +42,7 @@ type hxc = {
 	c_cstring : tclass;
 	c_csetjmp : tclass;
 	c_cstdlib : tclass;
+	c_bool    : tabstract;
 
 	cf_deref : tclass_field;
 	cf_addressof : tclass_field;
@@ -214,6 +216,8 @@ module Expr = struct
 			cf_expr = None;
 			cf_overloads = [];
 		}
+	let mk_binop op e1 e2 et p =
+        { eexpr=TBinop(op,e1,e2); etype=et; epos=p }
 end
 
 type t_dependency =
@@ -1522,11 +1526,12 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 		spr ctx "}";
 	| TBinop((OpEq | OpNotEq) as op,e1,e2) when (match follow e1.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
-		spr ctx "hx_strcmp(";
-		generate_expr ctx e1;
-		spr ctx ",";
-		generate_expr ctx e2;
-		print ctx ") %s 0" (if op = OpEq then "==" else "!=")
+		generate_expr ctx 
+			(Expr.mk_binop	op 
+							(Expr.mk_static_call_2 ctx.con.hxc.c_string "equals" [e1;e2] e1.epos)
+							(Expr.mk_int ctx 0 e1.epos) 
+							e.etype 
+							e1.epos)
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
 		print ctx " %s " (s_binop op);
@@ -2172,6 +2177,7 @@ let generate com =
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				(fun t -> TAbstract(a,[t]))
 			| _ -> assert false);
+		
 		t_jmp_buf = get_type com ([],"jmp_buf");
 		c_lib = c_lib;
 		c_boot = (match get_type com ([],"hxc") with
@@ -2192,6 +2198,9 @@ let generate com =
 		c_csetjmp = (match get_type com (["c"],"CSetjmp") with
 			| TInst(c,_) -> c
 			| _ -> assert false);
+		c_bool = (match get_type com ([],"Bool") with
+            | TAbstract(a,_) -> a
+            | _ -> assert false);
 		cf_addressof = PMap.find "getAddress" c_lib.cl_statics;
 		cf_deref = PMap.find "dereference" c_lib.cl_statics;
 		cf_sizeof = PMap.find "sizeof" c_lib.cl_statics;

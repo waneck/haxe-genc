@@ -68,9 +68,31 @@ import c.CString.memcmp;
 	}
 	
 	@:keep private static function compare(s0:String,s1:String) : Int {
-		if (s0.length != s1.length)
+		var p0:Pointer<Char> = cast s0;
+		var p1:Pointer<Char> = cast s1;
+		if (p0 == null) {
+			if (p1 == null) {
+				return 0;
+			} else {
+				return -1;
+			}
+		} else if (p1 == null) {
 			return 1;
-		return memmem(s0.__a, s0.length, s1.__a, s1.length);
+		} else {
+			var len = s0.length > s1.length ? s1.length : s0.length;
+			var cmp = memcmp(s0.__a, s1.__a, len);
+			if (cmp == 0){
+				if (s0.length > s1.length){
+					return 1;
+				} else if (s0.length < s1.length) {
+					return -1;
+				} else {
+					return 0;
+				}
+			} else {
+				return cmp;
+			}
+		}
 	}
 	
 	@:keep private static function equals(s0:String,s1:String) : Bool {
