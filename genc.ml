@@ -803,7 +803,7 @@ let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 
 		- TBinop(OpAssign,_,_)
 		- TVars
-		- TCall
+		- TCall and TNew
 		- TArrayDecl
 		- TObjectDecl
 		- TReturn
@@ -845,6 +845,31 @@ module TypeChecker = struct
 		| _ ->
 			e
 
+	let check_call_params gen el tl =
+		let rec loop acc el tl = match el,tl with
+			| e :: el, (n,_,t) :: tl ->
+				(* check for rest argument *)
+				begin match e.eexpr with
+					| TArrayDecl el2 when n = "rest" && tl = [] && el = [] ->
+						let ta = match follow e.etype with
+							| TInst({cl_path=[],"Array"},[t]) -> t
+							| _ -> t_dynamic
+						in
+						loop acc el2 (List.map (fun _ -> "rest",false,ta) el2)
+					| _ ->
+						loop ((check gen (gen.map e) t) :: acc) el tl
+				end
+			| [], [] ->
+				acc
+			| [],_ ->
+				(* should not happen due to padded nulls *)
+				assert false
+			| _, [] ->
+				(* not sure about this one *)
+				assert false
+		in	
+		List.rev (loop [] el tl)
+
 	let filter gen = function e ->
 		match e.eexpr with
 		| TBinop(OpAssign,e1,e2) ->
@@ -853,32 +878,17 @@ module TypeChecker = struct
 			{e with eexpr = TVars(List.map (fun (v,eo) -> v,match eo with None -> None | Some e -> Some (check gen (gen.map e) v.v_type)) vl)}
 		| TCall(e1,el) ->
 			begin match follow e1.etype with
-				| TFun(args,ret) ->
-					let rec loop acc el tl = match el,tl with
-						| e :: el, (n,_,t) :: tl ->
-							(* check for rest argument *)
-							begin match e.eexpr with
-								| TArrayDecl el2 when n = "rest" && tl = [] && el = [] ->
-									let ta = match follow e.etype with
-										| TInst({cl_path=[],"Array"},[t]) -> t
-										| _ -> t_dynamic
-									in
-									loop acc el2 (List.map (fun _ -> "rest",false,ta) el2)
-								| _ ->
-									loop ((check gen (gen.map e) t) :: acc) el tl
-							end
-						| [], [] ->
-							acc
-						| [],_ ->
-							(* should not happen due to padded nulls *)
-							assert false
-						| _, [] ->
-							(* not sure about this one *)
-							assert false
-					in
-					{e with eexpr = TCall(gen.map e1,(List.rev (loop [] el args)))}
+				| TFun(args,_) ->
+					{e with eexpr = TCall(gen.map e1,check_call_params gen el args)}
 				| _ -> Type.map_expr gen.map e
 			end
+		| TNew(c,tl,el) ->
+			let tcf,_ = get_constructor (fun cf -> apply_params c.cl_types tl cf.cf_type) c in
+			begin match follow tcf with
+				| TFun(args,_) ->
+					{e with eexpr = TNew(c,tl,check_call_params gen el args)}
+				| _ -> Type.map_expr gen.map e
+			end			
 		| TArrayDecl el ->
 			begin match follow e.etype with
 				| TInst({cl_path=[],"Array"},[t]) -> {e with eexpr = TArrayDecl(List.map (fun e -> check gen (gen.map e) t) el)}
