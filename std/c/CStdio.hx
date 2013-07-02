@@ -72,17 +72,17 @@ extern class CStdio {
 
 	@:plain static public function ungetc(ch:Int, stream:File):Int;
 
-	@:plain static public function fscanf(stream:File, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	@:plain static public function fscanf(stream:File, format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 	
-	@:plain static public function fprintf(stream:File, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	@:plain static public function fprintf(stream:File, format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 	
-	@:plain static public function scanf(format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	@:plain static public function scanf(format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 	
-	@:plain static public function printf(format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	@:plain static public function printf(format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 	
-	@:plain static public function sprintf(str:Pointer<Char>, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	@:plain static public function sprintf(str:Pointer<Char>, format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 	
-	@:plain static public function sscanf(str:ConstPointer<Char>, format:ConstPointer<Char>, rest:Array<Dynamic>):Void;
+	@:plain static public function sscanf(str:ConstPointer<Char>, format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 	
 	// TODO: vprintf, vfprintf, vsprintf
 

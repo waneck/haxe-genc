@@ -828,10 +828,15 @@ module TypeChecker = struct
 				with Not_found -> cf.cf_name,mk (TConst TNull) (mk_mono()) e.epos
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
+		(* literal String assigned to const char* = pass through *)
 		| TConst (TString s),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TDynamic _) ->
 			e
+		(* literal String in other place = wrap *)
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])),_ ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
+		(* String assigned to const char* or VarArg = unwrap *)
+		| _,(TAbstract({a_path=["c"],"VarArg"},_) | TAbstract({a_path = ["c"],"ConstPointer"}, [TAbstract({a_path=[],"hx_char"},_)])) when (match follow e.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
+			Expr.mk_static_call_2 gen.gcon.hxc.c_string "raw" [e] e.epos
 		| TMeta(m,e1),t ->
 			{ e with eexpr = TMeta(m,check gen e1 t)}
 		| TParenthesis(e1),t ->

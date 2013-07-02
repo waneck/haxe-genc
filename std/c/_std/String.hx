@@ -76,6 +76,7 @@ import c.CString.memcmp;
 	@:keep private static function equals(s0:String,s1:String) : Bool {
 		return compare(s0,s1) == 0;
 	}
+	
 	@:keep private static function concat(s0:String,s1:String) : String {
 		if (s0.length == 0)
 			return s1;
@@ -96,9 +97,7 @@ import c.CString.memcmp;
 		var len = c.CString.strlen(cast p);
 		return ofPointerCopy(len,p); // keep 0x00 for C-compat TODO: do we want that?
 	}
-	/*
-	 *
-	 */
+
 	@:keep private static function ofPointerCopy<T>(len:Int, p:Pointer<Char>):String
 	{
 		var ret = new String(null);
@@ -113,6 +112,10 @@ import c.CString.memcmp;
 		s.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Char>()));
 		s.length = len;
 		return s;
+	}
+	
+	@:keep static private function raw(s:String):ConstPointer<Char> {
+		return cast s.__a;
 	}
 	
 	public function new(string:String) {

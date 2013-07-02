@@ -70,3 +70,5 @@ abstract ConstPointer<T>(Pointer<T>) {
 	}
 }
 
+@:coreType
+abstract VarArg from Dynamic to Dynamic { }
