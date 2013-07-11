@@ -32,7 +32,7 @@ type hxc = {
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
 	t_int64 : t -> t;
-	
+
 	t_jmp_buf : t;
 
 	c_lib : tclass;
@@ -379,7 +379,7 @@ module Filters = struct
 			| Method MethDynamic ->
 				(* create implementation field *)
 				let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
-				if stat then begin 
+				if stat then begin
 					c.cl_ordered_statics <- cf2 :: c.cl_ordered_statics;
 					c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics
 				end else begin
@@ -431,7 +431,7 @@ module Filters = struct
 		let gen = mk_gen_context con in
 		List.iter (fun md -> match md with
 			| TClassDecl c ->
-				gen.mtype <- Some md;			
+				gen.mtype <- Some md;
 				initialize_class con c;
 				Option.may (run_filters_field gen) c.cl_constructor;
 				List.iter (run_filters_field gen) c.cl_ordered_fields;
@@ -874,7 +874,7 @@ module TypeChecker = struct
 			| _, [] ->
 				(* not sure about this one *)
 				assert false
-		in	
+		in
 		List.rev (loop [] el tl)
 
 	let filter gen = function e ->
@@ -895,7 +895,7 @@ module TypeChecker = struct
 				| TFun(args,_) ->
 					{e with eexpr = TNew(c,tl,check_call_params gen el args)}
 				| _ -> Type.map_expr gen.map e
-			end			
+			end
 		| TArrayDecl el ->
 			begin match follow e.etype with
 				| TInst({cl_path=[],"Array"},[t]) -> {e with eexpr = TArrayDecl(List.map (fun e -> check gen (gen.map e) t) el)}
@@ -922,7 +922,7 @@ module TypeChecker = struct
 				{e with eexpr = TCast(check gen (gen.map e1) t,None)}
 			else
 				{e with eexpr = TCast(gen.map e1,None)}
-		| TThrow e1 -> 
+		| TThrow e1 ->
 			{ e with eexpr = TThrow (check gen e1 e1.etype) }
 		| _ ->
 			Type.map_expr gen.map e
@@ -1168,8 +1168,8 @@ let rec s_type ctx t =
 		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TAbstract({a_path = [],"Bool"},[]) -> "int"
     | TAbstract( a, tps ) when Meta.has (Meta.Custom ":int") a.a_meta ->
-        let (meta,el,epos) = Meta.get (Meta.Custom ":int") a.a_meta in 
-        (match el with 
+        let (meta,el,epos) = Meta.get (Meta.Custom ":int") a.a_meta in
+        (match el with
          | [(EConst (String s),_)] -> ( match s with
             | "int64" -> "hx_int64"
             | "int32" -> "hx_int32"
@@ -1180,7 +1180,7 @@ let rec s_type ctx t =
             | "uint16" -> "hx_uint16"
             | "uint8" -> "hx_uint8"
             | _ -> s)
-        | _ -> assert false; 
+        | _ -> assert false;
         )
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
@@ -1470,11 +1470,11 @@ and generate_expr ctx e = match e.eexpr with
 		newline ctx;
 		spr ctx "}";
 	| TBinop((OpEq | OpNotEq) as op,e1,e2) when (match follow e1.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
-		generate_expr ctx 
-			(Expr.mk_binop	op 
+		generate_expr ctx
+			(Expr.mk_binop	op
 							(Expr.mk_static_call_2 ctx.con.hxc.c_string "equals" [e1;e2] e1.epos)
-							(Expr.mk_int ctx 1 e1.epos) 
-							e.etype 
+							(Expr.mk_int ctx 1 e1.epos)
+							e.etype
 							e1.epos)
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
@@ -1738,7 +1738,7 @@ let generate_class ctx c =
 			match follow cf.cf_type, cf.cf_expr with
 			| TFun(args,_), Some e ->
 				let einit = if is_value_type ctx t_class then
-					None
+          Some (Expr.mk_ccode ctx ("{0}; //semicolon"))
 				else
 					let p = cf.cf_pos in
 					(* TODO: get rid of this *)
@@ -2122,7 +2122,7 @@ let generate com =
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				(fun t -> TAbstract(a,[t]))
 			| _ -> assert false);
-		
+
 		t_jmp_buf = get_type com ([],"jmp_buf");
 		c_lib = c_lib;
 		c_boot = (match get_type com ([],"hxc") with
@@ -2133,7 +2133,7 @@ let generate com =
 			| _ -> assert false);
 		c_string = (match get_type com ([],"String") with
 			| TInst(c,_) -> c
-			| _ -> assert false);		
+			| _ -> assert false);
 		c_cstring = (match get_type com (["c"],"CString") with
 			| TInst(c,_) -> c
 			| _ -> assert false);
