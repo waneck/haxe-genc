@@ -121,7 +121,7 @@ class Bytes {
 		return new Bytes(len, newarr);
 		#elseif c
 		var b2 = new Bytes(len, new c.FixedArray(len));
-		c.CString.memcpy(c.Lib.getAddress(b2.b.array), c.Lib.getAddress(b.array) + pos, len);
+		c.CString.memcpy(b2.b.array, b.array + pos, len);
 		return b2;
 		#else
 		return new Bytes(len,b.slice(pos,pos+len));
@@ -256,7 +256,7 @@ class Bytes {
 		return s.toString();
 	}
 	#end
-	
+
 	public inline function getData() : BytesData {
 		return b;
 	}
