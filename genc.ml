@@ -922,6 +922,9 @@ module TypeChecker = struct
 				{e with eexpr = TCast(check gen (gen.map e1) t,None)}
 			else
 				{e with eexpr = TCast(gen.map e1,None)}
+		| TSwitch(e1,cases,def) ->
+			let cases = List.map (fun (el,e) -> List.map (fun e -> check gen (gen.map e) e1.etype) el,e) cases in
+			{ e with eexpr = TSwitch(e1,cases,def)}
 		| TThrow e1 ->
 			{ e with eexpr = TThrow (check gen e1 e1.etype) }
 		| _ ->
@@ -1434,6 +1437,15 @@ and generate_expr ctx e = match e.eexpr with
 		(match e3 with None -> () | Some e3 ->
 			spr ctx " else ";
 			generate_expr ctx (mk_block e3))
+	| TSwitch(e1,cases,def) when (match follow e1.etype with TInst({cl_path=[],"String"},_) -> true | _ -> false) ->
+		let mk_eq e1 e2 = mk (TBinop(OpEq,e1,e2)) ctx.con.com.basic.tbool (punion e1.epos e2.epos) in
+		let mk_or e1 e2 = mk (TBinop(OpOr,e1,e2)) ctx.con.com.basic.tbool (punion e1.epos e2.epos) in
+		let mk_if ((el : texpr list),e) eo =
+			let eif = List.fold_left (fun eacc e -> mk_or eacc (mk_eq e1 e)) (mk_eq e1 (List.hd el)) (List.tl el) in
+			mk (TIf(Codegen.mk_parent eif,e,eo)) e.etype e.epos
+		in
+		let ifs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def cases with Some e -> e | None -> assert false in
+		generate_expr ctx ifs
 	| TSwitch(e1,cases,edef) ->
 		spr ctx "switch";
 		generate_expr ctx e1;
