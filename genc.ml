@@ -63,6 +63,7 @@ type context = {
 	mutable init_modules : path list;
 	mutable generated_types : type_context list;
 	mutable filters : filter list;
+	mutable closure_args : (int,(tvar * tconstant option) list) PMap.t;
 }
 
 and type_context = {
@@ -218,6 +219,8 @@ module Expr = struct
 	let mk_binop op e1 e2 et p =
         { eexpr=TBinop(op,e1,e2); etype=et; epos=p }
 end
+
+let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
 
 module Filters = struct
 
@@ -808,6 +811,27 @@ let sort_anon_fields fields =
 
 let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 
+let mk_closure_field con tf p =
+	let id = con.num_temp_funcs in
+	con.num_temp_funcs <- con.num_temp_funcs + 1;
+	let name = "_hx_func_" ^ (string_of_int id) in
+	let locals = ref PMap.empty in
+	List.iter (fun (v,_) -> locals := PMap.add v.v_id (v,true) !locals) tf.tf_args;
+	let rec loop e = match e.eexpr with
+		| TVars vl ->
+			List.iter (fun (v,_) -> locals := PMap.add v.v_id (v,true) !locals) vl;
+		| TLocal v ->
+			if not (PMap.mem v.v_id !locals) then locals := PMap.add v.v_id (v,false) !locals
+		| _ ->
+			Type.iter loop e
+	in
+	loop tf.tf_expr;
+	let args = PMap.fold (fun (v,b) acc -> if not b then (v,None) :: acc else acc) !locals [] in
+	con.closure_args <- PMap.add id args con.closure_args;
+	let all_args = args @ tf.tf_args in
+	let t = TFun(List.map (fun (v,_) -> v.v_name,false,v.v_type) all_args,tf.tf_type) in
+	name,t,id
+
 (*
 	This filter handles unification cases where AST transformation may be required.
 	These occur in the following nodes:
@@ -848,7 +872,6 @@ module TypeChecker = struct
 			{ e with eexpr = TMeta(m,check gen e1 t)}
 		| TParenthesis(e1),t ->
 			{ e with eexpr = TParenthesis(check gen e1 t)}
-
 		| _ ->
 			e
 
@@ -882,7 +905,28 @@ module TypeChecker = struct
 		| TBinop(OpAssign,e1,e2) ->
 			{e with eexpr = TBinop(OpAssign,gen.map e1,check gen (gen.map e2) e1.etype)}
 		| TVars vl ->
-			{e with eexpr = TVars(List.map (fun (v,eo) -> v,match eo with None -> None | Some e -> Some (check gen (gen.map e) v.v_type)) vl)}
+			let vl = ExtList.List.filter_map (fun (v,eo) ->
+				match eo with
+				| None -> Some(v,None)
+				| Some ({eexpr = TFunction tf} as e) ->
+					(* TODO: We shamelessly abuse tvar here: the ID is made negative to indicate that we have a closure,
+						and the full field name is encoded in the variable name. This is NOT robust and has to be
+						changed at some point. *)
+					let name,t,id = mk_closure_field gen.gcon tf e.epos in
+					begin match gen.mtype with
+					| Some (TClassDecl c) ->
+						v.v_name <- (path_to_name c.cl_path) ^ "_" ^ name;
+						v.v_id <- -id;
+						let cf = Expr.mk_class_field name t true e.epos (Method MethNormal) [] in
+						cf.cf_expr <- Some e;
+						c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
+					| _ -> assert false
+					end;
+					None
+				| Some e ->
+					Some (v,Some (check gen (gen.map e) v.v_type))
+			) vl in
+			{ e with eexpr = TVars(vl)}
 		| TCall(e1,el) ->
 			begin match follow e1.etype with
 				| TFun(args,_) ->
@@ -986,7 +1030,6 @@ let mk_type_context con path =
 		dependencies = PMap.empty;
 	}
 
-let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
 let path_to_file_path (pack,name) = match pack with [] -> name | _ -> String.concat "/" pack ^ "/" ^ name
 
 let get_relative_path source target =
@@ -1288,6 +1331,15 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		spr ctx ")"
 	| TField(_,FEnum(en,ef)),el ->
 		print ctx "new_%s(" (full_enum_field_name en ef);
+		concat ctx "," (generate_expr ctx) el;
+		spr ctx ")"
+	| TLocal v,_ when PMap.mem v.v_id ctx.con.closure_args ->
+		(* closure *)
+		generate_expr ctx e1;
+		spr ctx "(";
+		let args = List.map (fun (v,_) -> v.v_name) (PMap.find v.v_id ctx.con.closure_args) in
+		concat ctx "," (spr ctx) args;
+		spr ctx ",";
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")"
 	| _ ->
@@ -2177,6 +2229,7 @@ let generate com =
 		init_modules = [];
 		generated_types = [];
 		filters = [];
+		closure_args = PMap.empty;
 	} in
 	add_filters con;
 	let gen = Filters.run_filters_types con in
