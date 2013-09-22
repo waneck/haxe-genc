@@ -900,6 +900,8 @@ module TypeChecker = struct
 		in
 		List.rev (loop [] el tl)
 
+	let fstack = ref []
+
 	let filter gen = function e ->
 		match e.eexpr with
 		| TBinop(OpAssign,e1,e2) ->
@@ -918,7 +920,7 @@ module TypeChecker = struct
 						v.v_name <- (path_to_name c.cl_path) ^ "_" ^ name;
 						v.v_id <- -id;
 						let cf = Expr.mk_class_field name t true e.epos (Method MethNormal) [] in
-						cf.cf_expr <- Some e;
+						cf.cf_expr <- Some (gen.map e);
 						c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
 					| _ -> assert false
 					end;
@@ -956,9 +958,10 @@ module TypeChecker = struct
 				| _ -> Type.map_expr gen.map e
 			end
 		| TReturn (Some e1) ->
-			begin match follow gen.gfield.cf_type with
-				| TFun(_,tr) -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tr))}
-				| _ -> assert false
+			begin match !fstack,follow gen.gfield.cf_type with
+				| tf :: _,_ -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tf.tf_type))}
+				| [],TFun(_,tr) -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tr))}
+				| _,t -> assert false
 			end
 		| TCast (e1,None) ->
 			let t = follow e.etype in
@@ -969,6 +972,11 @@ module TypeChecker = struct
 		| TSwitch(e1,cases,def) ->
 			let cases = List.map (fun (el,e) -> List.map (fun e -> check gen (gen.map e) e1.etype) el,e) cases in
 			{ e with eexpr = TSwitch(e1,cases,def)}
+		| TFunction tf ->
+			fstack := tf :: !fstack;
+			let e1 = gen.map tf.tf_expr in
+			fstack := List.tl !fstack;
+			{e with eexpr = TFunction({tf with tf_expr = e1})}
 		| TThrow e1 ->
 			{ e with eexpr = TThrow (check gen e1 e1.etype) }
 		| _ ->
