@@ -1104,6 +1104,17 @@ let close_type_context ctx =
 		write_if_changed (ctx.file_path_no_ext ^ ".c") (Buffer.contents buf);
 	end
 
+let anon_signature ctx fields =
+	let fields = pmap_to_list fields in
+	let fields = sort_anon_fields fields in
+	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
+	try fst (PMap.find id ctx.con.anon_types)
+	with Not_found ->
+		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
+		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
+		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
+		s
+
 (* Dependency handling *)
 
 let add_dependency ctx dept path =
@@ -1153,8 +1164,8 @@ let add_type_dependency ctx t = match follow t with
 		add_class_dependency ctx c
 	| TEnum(en,_) ->
 		add_enum_dependency ctx en
-	| TAnon _ ->
-		add_dependency ctx DFull (["c"],"AnonTypes");
+	| TAnon an ->
+		add_dependency ctx DFull (["c"],anon_signature ctx an.a_fields);
 	| TAbstract(a,_) ->
 		add_abstract_dependency ctx a
 	| TDynamic _ ->
@@ -1195,17 +1206,6 @@ let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
 (* Type signature *)
-
-let anon_signature ctx fields =
-	let fields = pmap_to_list fields in
-	let fields = sort_anon_fields fields in
-	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
-	try fst (PMap.find id ctx.con.anon_types)
-	with Not_found ->
-		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
-		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
-		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
-		s
 
 let rec s_type ctx t =
 	match follow t with
@@ -1254,8 +1254,9 @@ let rec s_type ctx t =
 		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
 		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
 		| _ ->
-			add_dependency ctx DFull (["c"],"AnonTypes");
-			(anon_signature ctx a.a_fields) ^ "*"
+			let signature = anon_signature ctx a.a_fields in
+			add_dependency ctx DFull (["c"],signature);
+			signature ^ "*"
 		end
 	| _ -> "void*"
 
@@ -2047,58 +2048,54 @@ let generate_type con mt = match mt with
 	| _ ->
 		()
 
-let generate_anon_file con =
-	let ctx = mk_type_context con (["c"],"AnonTypes") in
+let generate_anon con name fields =
+	let ctx = mk_type_context con (["c"],name) in
 
 	spr ctx "// forward declarations";
-	PMap.iter (fun _ (s,_) ->
-		newline ctx;
-		print ctx "typedef struct %s %s" s s;
-	) con.anon_types;
+	newline ctx;
+	print ctx "typedef struct %s %s" name name;
 	newline ctx;
 
 	spr ctx "// structures";
-	PMap.iter (fun _ (s,cfl) ->
+
+	newline ctx;
+	print ctx "typedef struct %s {" name;
+	let b = open_block ctx in
+	List.iter (fun cf ->
 		newline ctx;
-		print ctx "typedef struct %s {" s;
-		let b = open_block ctx in
-		List.iter (fun cf ->
-			newline ctx;
-			spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
-		) cfl;
-		b();
-		newline ctx;
-		print ctx "} %s" s;
-	) con.anon_types;
+		spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
+	) fields;
+	b();
+	newline ctx;
+	print ctx "} %s" name;
 	newline ctx;
 
 	spr ctx "// constructor forward declarations";
-	PMap.iter (fun _ (s,cfl) ->
-		newline ctx;
-		print ctx "%s* new_%s(%s)" s s (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) cfl));
-	) con.anon_types;
+	newline ctx;
+	print ctx "%s* new_%s(%s)" name name (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) fields));
 	newline ctx;
 
 	ctx.buf <- ctx.buf_c;
 
 	spr ctx "// constructor definitions";
-	PMap.iter (fun _ (s,cfl) ->
+	newline ctx;
+	print ctx "%s* new_%s(%s) {" name name (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) fields));
+	let b = open_block ctx in
+	newline ctx;
+	print ctx "%s* this = (%s*) malloc(sizeof(%s))" name name name;
+	List.iter (fun cf ->
 		newline ctx;
-		print ctx "%s* new_%s(%s) {" s s (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) cfl));
-		let b = open_block ctx in
-		newline ctx;
-		print ctx "%s* this = (%s*) malloc(sizeof(%s))" s s s;
-		List.iter (fun cf ->
-			newline ctx;
-			print ctx "this->%s = %s" cf.cf_name cf.cf_name;
-		) cfl;
-		newline ctx;
-		spr ctx "return this";
-		b();
-		newline ctx;
-		spr ctx "}"
-	) con.anon_types;
+		print ctx "this->%s = %s" cf.cf_name cf.cf_name;
+	) fields;
+	newline ctx;
+	spr ctx "return this";
+	b();
+	newline ctx;
+	spr ctx "}";
 	close_type_context ctx
+
+let generate_anon_file con =
+	PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) con.anon_types
 
 let generate_init_file con =
 	let ctx = mk_type_context con (["c"],"Init") in
