@@ -1281,10 +1281,6 @@ let get_type_id ctx t =
 let rec generate_call ctx e e1 el = match e1.eexpr,el with
 	| TLocal({v_name = "__c"}),[{eexpr = TConst(TString code)}] ->
 		spr ctx code;
-	| TLocal({v_name = "__call"}),{eexpr = TConst(TString name)} :: el ->
-		print ctx "%s(" name;
-		concat ctx "," (generate_expr ctx) el;
-		spr ctx ")";
 	| TField(_,FStatic({cl_path = ["c"],"Lib"}, cf)),(e1 :: el) ->
 		begin match cf.cf_name with
 		| "getAddress" ->
@@ -1544,11 +1540,11 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx "}";
 	| TBinop((OpEq | OpNotEq) as op,e1,e2) when (match follow e1.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
 		generate_expr ctx
-			(Expr.mk_binop	op
-							(Expr.mk_static_call_2 ctx.con.hxc.c_string "equals" [e1;e2] e1.epos)
-							(Expr.mk_int ctx 1 e1.epos)
-							e.etype
-							e1.epos)
+			(Expr.mk_binop op
+				(Expr.mk_static_call_2 ctx.con.hxc.c_string "equals" [e1;e2] e1.epos)
+				(Expr.mk_int ctx 1 e1.epos)
+				e.etype
+				e1.epos)
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
 		print ctx " %s " (s_binop op);
@@ -1811,7 +1807,7 @@ let generate_class ctx c =
 			match follow cf.cf_type, cf.cf_expr with
 			| TFun(args,_), Some e ->
 				let einit = if is_value_type ctx t_class then
-          Some (Expr.mk_ccode ctx ("{0}; //semicolon"))
+					Some (Expr.mk_ccode ctx ("{0}; //semicolon"))
 				else
 					let p = cf.cf_pos in
 					(* TODO: get rid of this *)
@@ -2191,7 +2187,6 @@ let generate com =
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				(fun t -> TAbstract(a,[t]))
 			| _ -> assert false);
-
 		t_jmp_buf = get_type com ([],"jmp_buf");
 		c_lib = c_lib;
 		c_boot = (match get_type com ([],"hxc") with

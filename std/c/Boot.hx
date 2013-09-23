@@ -33,7 +33,7 @@ typedef long long hx_int64;
 	@:plain static public function main(argc:Int, argv:Pointer<Pointer<Char>>):Int {
 		Boot.argc = argc;
 		Boot.argv = argv;
-		Lib.cCode("_hx_init()");
+		c.Init._hx_init();
 		try {
 			mainFunc();
 			return 0;
