@@ -35,6 +35,8 @@ class BytesBuffer {
 	var b : cs.system.io.MemoryStream;
 	#elseif java
 	var b : java.io.ByteArrayOutputStream;
+	#elseif c
+	var b : Array<c.Types.UInt8>;
 	#else
 	var b : Array<Int>;
 	#end
@@ -151,7 +153,7 @@ class BytesBuffer {
 		var buf = b.toByteArray();
 		var bytes = new Bytes(buf.length, buf);
 		#else
-		var bytes = new Bytes(b.length,b);
+		var bytes = new Bytes(b.length,b.__a);
 		#end
 		b = null;
 		return bytes;
