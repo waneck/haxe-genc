@@ -29,14 +29,14 @@ import c.CMath;
 class Math {
 	static public var PI(default,null) : Float = 3.141592654;
 
-	//static public var NEGATIVE_INFINITY(get, null):Float;
-	//static function get_NEGATIVE_INFINITY() return -CMath.INFINITY;
-		//
-	//static public var POSITIVE_INFINITY(get,null):Float;
-	//static public function get_POSITIVE_INFINITY() return CMath.INFINITY;
-	//
-	//static public var NaN(get, null):Float;
-	//static public function get_NaN() return CMath.NAN;
+	static public var NEGATIVE_INFINITY(get, null):Float;
+	static function get_NEGATIVE_INFINITY() return #if C99 -CMath.INFINITY #else CMath.log(0)#end;
+		
+	static public var POSITIVE_INFINITY(get,null):Float;
+	static public function get_POSITIVE_INFINITY() return #if C99 return CMath.INFINITY #else return -CMath.log(0)#end;
+	
+	static public var NaN(get, null):Float;
+	static public function get_NaN() return #if C99 CMath.NAN #else CMath.sqrt(-1)#end;
 	
 	static public inline function abs(v:Float):Float {
 		return CMath.abs(v);
@@ -127,7 +127,7 @@ class Math {
 		return false;
 	}
 
-	static public inline function isNaN( f : Float ) : Bool {
+	static public function isNaN( f : Float ) : Bool {
 		return f != f;
 	}
 }
