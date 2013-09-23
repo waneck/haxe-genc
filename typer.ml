@@ -4033,6 +4033,65 @@ let rec create com =
 	ctx
 
 ;;
+let explode_expressions ctx e =
+	let block_stack = ref [] in
+	let push_top e =
+		match !block_stack with
+		| el :: _ ->
+			el := e :: !el
+		| [] ->
+			error "empty" e.epos;
+	in
+	let declare_temp t eo p =
+		let v = Typecore.gen_local ctx t in
+		let e = mk (TVars [v,eo]) ctx.com.basic.tvoid p in
+		push_top e;
+		mk (TLocal v) t p
+	in
+	let push_block () =
+		let el = ref [] in
+		block_stack := el :: !block_stack;
+		(fun e -> el := e :: !el),
+		fun () ->
+			block_stack := List.tl !block_stack;
+			List.rev !el
+	in
+	let opt f o = match o with None -> None | Some v -> Some (f v) in
+	let rec loop e = match e.eexpr with
+		| TBlock el ->
+			let push,close = push_block() in
+			List.iter (fun e ->
+				push (loop e)
+			) el;
+			{ e with eexpr = TBlock (close())}
+		| TWhile(e1,e2,DoWhile) ->
+			let e1 = simplify e1 in
+			{ e with eexpr = TWhile(e1,loop e2,DoWhile)}
+		| TIf(e1,e2,e3) ->
+			let e1 = simplify e1 in
+			{e with eexpr = TIf(e1,loop e2,opt loop e3)}
+		| TCall(e1,el) ->
+			{e with eexpr = TCall(loop e1,List.map simplify el)}
+		| TNew(c,tp,el) ->
+			{e with eexpr = TNew(c,tp,List.map simplify el)}
+		| TBinop(OpAssign,e1,e2) ->
+			{e with eexpr = TBinop(OpAssign,e1,simplify e2)}
+		| TBinop(op,e1,e2) ->
+			{e with eexpr = TBinop(op, simplify e1, simplify e2)}
+		| _ ->
+			Type.map_expr loop e
+	and simplify e = match e.eexpr with
+		| TIf _ | TBlock _ | TSwitch _ ->
+			declare_temp e.etype (Some (loop e)) e.epos
+		| TBinop(op,e1,e2) ->
+			{e with eexpr = TBinop(op, simplify e1, simplify e2)}
+		| TParenthesis e1 ->
+			{e with eexpr = TParenthesis(simplify e1)}
+		| _ ->
+			e
+	in
+	loop e
+;;
 unify_min_ref := unify_min;
 make_call_ref := make_call;
 get_constructor_ref := get_constructor;
