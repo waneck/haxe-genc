@@ -1500,7 +1500,7 @@ and generate_expr ctx e = match e.eexpr with
 				e1.epos)
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
-		print ctx " %s " (s_binop op);
+		print ctx " %s " (match op with OpUShr -> ">>" | _ -> s_binop op);
 		generate_expr ctx e2;
 	| TUnop(op,Prefix,e1) ->
 		spr ctx (s_unop op);
