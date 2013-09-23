@@ -2118,6 +2118,7 @@ let generate_make_file con =
 	output_string ch "ifndef MSVC\n";
 	output_string ch ("\tOUTFLAG := -o \n");
 	output_string ch ("\tOBJEXT := o \n");
+	output_string ch ("\tLDFLAGS += -lm \n");
 	output_string ch ("else\n");
 	output_string ch ("\tOUTFLAG := /Fo\n");
 	output_string ch ("\tOBJEXT := obj\n");
