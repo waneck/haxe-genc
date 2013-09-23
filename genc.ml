@@ -85,14 +85,8 @@ and gen_context = {
 	mutable mtype : module_type option;
 	(* call this function instead of Type.map_expr () *)
 	mutable map : texpr -> texpr;
-	(* tvar_decl -> is_temp -> unit; declares a variable on the current block *)
-	mutable declare_var : (tvar * texpr option) -> bool -> unit;
-	(* requests a new temporary variable *)
-	mutable get_temp : Type.t -> tvar;
-	(* frees the temporary variable, making it available for further use *)
-	mutable free_temp : tvar -> unit;
-	(* forces a var to be available as a temporary *)
-	mutable force_temp : tvar -> unit;
+	(* tvar_decl -> unit; declares a variable on the current block *)
+	mutable declare_var : (tvar * texpr option) -> unit;
 	(* delays to run after all filters are done *)
 	mutable delays : (unit -> unit) list;
 }
@@ -230,63 +224,17 @@ module Filters = struct
 	let run_filters gen e =
 		(* local vars / temp vars handling *)
 		let declared_vars = ref [] in
-		let temps = ref (PMap.empty) in
-		let temps_in_scope = ref (PMap.empty) in
-		let used_temps = ref (PMap.empty) in
 
 		(* temporary var handling *)
 		let old_declare = gen.declare_var in
-		let old_get = gen.get_temp in
-		let old_free = gen.free_temp in
-		let old_force = gen.force_temp in
-		gen.declare_var <- (fun (tvar,eopt) is_temp ->
+		gen.declare_var <- (fun (tvar,eopt) ->
 			declared_vars := (tvar,eopt) :: !declared_vars;
-			if is_temp then gen.force_temp tvar
 		);
-		gen.get_temp <- (fun t ->
-			let path = Expr.t_path t in
-			let full_temps = ref [] in
-			let temp_num = ref 0 in
-			let var = try
-				let tn = PMap.find path !temps in
-				temp_num := tn;
-				let temp = PMap.find path !temps_in_scope in
-				full_temps := temp;
-				let rec loop = function
-					| [] -> raise Not_found
-					| tvar :: acc when not (PMap.find tvar.v_id !used_temps) -> (* won't throw as all temporaries are added to used_temps *)
-						tvar
-					| _ :: acc -> loop acc
-				in
-				loop temp
-			with | Not_found ->
-				let ret = alloc_var (Printf.sprintf "%s_%s_tmp_%d" (String.concat "_" (fst path)) (snd path) !temp_num) t in
-				declared_vars := (ret,None) :: !declared_vars;
-				ret
-			in
-			temps_in_scope := PMap.add path (var :: !full_temps) !temps_in_scope;
-			used_temps := PMap.add var.v_id true !used_temps;
-			temps := PMap.add path (!temp_num + 1) !temps;
-			var
-		);
-		gen.free_temp <- (fun v ->
-			used_temps := PMap.add v.v_id false !used_temps
-		);
-		gen.force_temp <- (fun v ->
-			used_temps := PMap.add v.v_id false !used_temps;
-			let path = Expr.t_path v.v_type in
-			try
-				temps_in_scope := PMap.add path (v :: PMap.find path !temps_in_scope) !temps_in_scope;
-			with | Not_found ->
-				temps_in_scope := PMap.add path [v] !temps_in_scope
-		);
-
 
 		let ret = List.fold_left (fun e f ->
 			let run = f gen in
 			let process_next_block = ref true in
 			(* set all temps as used, as we cannot guarantee for now the availability of a var *)
-			used_temps := PMap.map (fun _ -> true) !used_temps;
 			let rec map e = match e.eexpr with
 				| TMeta( (Meta.Comma,_,_), { eexpr = TBlock(el) } ) ->
 					process_next_block := false;
@@ -316,7 +264,7 @@ module Filters = struct
 							{ eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el
 					in
 					(* ensure no uninitialized type parameter *)
-					let rec loop el acc = match el with
+					(*let rec loop el acc = match el with
 						| { eexpr = TVars [] } :: el ->
 							loop el acc
 						| { eexpr = TVars vdecl } :: el ->
@@ -329,7 +277,7 @@ module Filters = struct
 							) (vdecl)) } :: acc)
 						| _ -> (List.rev acc) @ el
 					in
-					let el = loop el [] in
+					let el = loop el [] in*)
 					let ret = { e with eexpr = TBlock(el) } in
 					temps_in_scope := old_scope;
 					declared_vars := old_declared;
@@ -347,9 +295,6 @@ module Filters = struct
 			ret
 		) e gen.gcon.filters in
 		gen.declare_var <- old_declare;
-		gen.get_temp <- old_get;
-		gen.free_temp <- old_free;
-		gen.force_temp <- old_force;
 		ret
 
 	let mk_gen_context con =
@@ -360,9 +305,6 @@ module Filters = struct
 			mtype = None;
 			map = (function _ -> assert false);
 			declare_var = (fun _ _ -> assert false);
-			get_temp = (fun _ -> assert false);
-			free_temp = (fun _ -> assert false);
-			force_temp = (fun _ -> assert false);
 			delays = [];
 		}
 
@@ -462,6 +404,7 @@ end
 		This filter will perform significant changes on the callsite of each function. For this reason,
 		it's best to run at min_dep, so it's the last filter running. So all filters before it will run without the
 		callsite changes
+    Any filter ran after it should not create temporary type parameter variables, as they will not be handled properly
 **)
 module TypeParams = struct
 
@@ -613,6 +556,10 @@ module TypeParams = struct
 			| TNew(c,tl,el) when tl <> [] && c.cl_path <> ([],"typeref") ->
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
+      (*
+        FIXME: calls with type parameters are only handled on static / member functions;
+        we still need to decide what to do with function pointers
+      *)
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
 			when not (Meta.has Meta.Plain cf.cf_meta) && (function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"]) ->
 				let temps = ref [] in
@@ -621,6 +568,8 @@ module TypeParams = struct
 				(* if return type is a type param, add new element to call params *)
 				let _, applied_ret = get_fun e1.etype in
 				let args, el_last = if is_type_param gen.gcon ret then begin
+          (* TODO: when central temp var handling is (re)done, get_temp here *)
+          let v = mk_
 					let v = gen.get_temp applied_ret in
 					temps := v :: !temps;
 					if is_type_param gen.gcon applied_ret then
@@ -740,7 +689,7 @@ module VarDeclarations = struct
 			{ e with eexpr = TBlock(el) }
 		| TVars tvars ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
-				gen.declare_var (v,None) false;
+				gen.declare_var (v,None);
 				match eo with
 				| None -> None
 				| Some e -> Some { eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, gen.map e); etype = e.etype; epos = e.epos }
@@ -761,14 +710,14 @@ module VarDeclarations = struct
 				| DTBind(bl,dt) ->
 					List.iter (fun ((v,_),_) ->
 						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-						gen.declare_var (v,None) false;
+						gen.declare_var (v,None);
 					) bl;
 					dtl dt
 			in
 			Array.iter dtl dt.dt_dt_lookup;
 			List.iter (fun (v,_) ->
 				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-				gen.declare_var (v,None) false
+				gen.declare_var (v,None)
 			) dt.dt_var_init;
 			Type.map_expr gen.map e
 		| _ -> Type.map_expr gen.map e
