@@ -242,7 +242,6 @@ module Filters = struct
 					process_next_block := true;
 					ret
 				| TBlock(el) when !process_next_block ->
-					let old_scope = !temps_in_scope in
 					let old_declared = !declared_vars in
 					declared_vars := [];
 					(* run loop *)
@@ -254,13 +253,13 @@ module Filters = struct
 					let el = match !declared_vars with
 						| [] -> el
 						| vars ->
-							let vars = List.map (function
-								| (v,None) -> (match follow v.v_type with
-									| TInst({ cl_kind = KTypeParameter _ },_) ->
-										v, Some(Expr.mk_stack_tp_init gen.gcon v.v_type e.epos)
-									| _ -> v,None)
-								| var -> var
-							) vars in
+							(* let vars = List.map (function *)
+							(* 	| (v,None) -> (match follow v.v_type with *)
+							(* 		| TInst({ cl_kind = KTypeParameter _ },_) -> *)
+							(* 			v, Some(Expr.mk_stack_tp_init gen.gcon v.v_type e.epos) *)
+							(* 		| _ -> v,None) *)
+							(* 	| var -> var *)
+							(* ) vars in *)
 							{ eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el
 					in
 					(* ensure no uninitialized type parameter *)
@@ -279,7 +278,6 @@ module Filters = struct
 					in
 					let el = loop el [] in*)
 					let ret = { e with eexpr = TBlock(el) } in
-					temps_in_scope := old_scope;
 					declared_vars := old_declared;
 					ret
 				| TBlock _ ->
@@ -304,7 +302,7 @@ module Filters = struct
 			gfield = null_field;
 			mtype = None;
 			map = (function _ -> assert false);
-			declare_var = (fun _ _ -> assert false);
+			declare_var = (fun _ -> assert false);
 			delays = [];
 		}
 
@@ -550,9 +548,36 @@ module TypeParams = struct
 			cls_parameter_vars gen c
 		| _ -> ());
 		let out_var = change_parameter_function gen cf in
+		let temp_num = ref 0 in
+		let get_temp t pos =
+			let init = match follow t with
+				| TInst({ cl_kind = KTypeParameter _ },_) ->
+					Some(Expr.mk_stack_tp_init gen.gcon t pos)
+				| _ ->
+					None
+			in
+			let path = Expr.t_path t in
+			incr temp_num;
+			let v = alloc_var (Printf.sprintf "%s_%s_tmp_%d" (String.concat "_" (fst path)) (snd path) !temp_num) t in
+			gen.declare_var (v,init);
+			v
+		in
 
 		(* needed vars for this filter *)
 		function e -> match e.eexpr with
+			| TFunction _ ->
+				temp_num := 0;
+				Type.map_expr gen.map e
+			| TVars vdecl ->
+				(* ensure no uninitialized type parameter *)
+				{ e with eexpr = TVars( List.map (function
+					| v,None -> (match follow v.v_type with
+						| TInst({ cl_kind = KTypeParameter _ }, _) ->
+							v, Some(Expr.mk_stack_tp_init gen.gcon v.v_type e.epos)
+						| _ -> v, None)
+					| v, Some e ->
+						v, Some (gen.map e)
+				) vdecl ) }
 			| TNew(c,tl,el) when tl <> [] && c.cl_path <> ([],"typeref") ->
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
@@ -562,16 +587,13 @@ module TypeParams = struct
       *)
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
 			when not (Meta.has Meta.Plain cf.cf_meta) && (function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"]) ->
-				let temps = ref [] in
 				let ef = gen.map ef in
 				let args, ret = get_fun cf.cf_type in
 				(* if return type is a type param, add new element to call params *)
 				let _, applied_ret = get_fun e1.etype in
 				let args, el_last = if is_type_param gen.gcon ret then begin
           (* TODO: when central temp var handling is (re)done, get_temp here *)
-          let v = mk_
-					let v = gen.get_temp applied_ret in
-					temps := v :: !temps;
+					let v = get_temp applied_ret e.epos in
 					if is_type_param gen.gcon applied_ret then
 						args, [Expr.mk_local v e.epos] (* already a reference var *)
 					else
@@ -587,12 +609,10 @@ module TypeParams = struct
 					| TLocal _ ->
 						Expr.mk_ref gen.gcon e.epos (gen.map e)
 					| _ ->
-						let v = gen.get_temp e.etype in
-						temps := v :: !temps;
+						let v = get_temp e.etype e.epos in
 						gen.map (Expr.mk_assign_ref gen.gcon e.epos (Expr.mk_local v e.epos) e)
 				) el args
 				in
-				List.iter (gen.free_temp) !temps;
 				let el = get_param_args gen e cf e1 ef @ el in
 				let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 				(* if type parameter is being cast into a concrete one, we need to dereference it *)
@@ -620,12 +640,10 @@ module TypeParams = struct
 			| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), e1, e2 ) when is_field_type_param gen.gcon e1 || is_field_type_param gen.gcon e2 ->
 				if is_field_type_param gen.gcon e1 && is_field_type_param gen.gcon e2 then begin
 					if op <> Ast.OpAssign then assert false; (* FIXME: AssignOp should become two operations; should be very rare though *)
-					let temps = ref [] in
 					let local, wrap = match e1.eexpr with
 						| TLocal _ -> e1, (fun e -> e)
 						| _ ->
-							let v = gen.get_temp t_dynamic in
-							temps := v :: !temps;
+							let v = get_temp t_dynamic e.epos in
 							Expr.mk_local v e1.epos, (fun e -> { e with eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, e) })
 					in
 					let ret = Expr.mk_comma_block gen.gcon e.epos [
@@ -633,7 +651,6 @@ module TypeParams = struct
 						local
 					] in
 
-					List.iter (gen.free_temp) !temps;
 					ret
 				end else if is_field_type_param gen.gcon e1 then
 					{ e with eexpr = TBinop(op, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.hxc.t_pointer e2.etype) (gen.map e1)), gen.map e2) }
