@@ -253,30 +253,8 @@ module Filters = struct
 					let el = match !declared_vars with
 						| [] -> el
 						| vars ->
-							(* let vars = List.map (function *)
-							(* 	| (v,None) -> (match follow v.v_type with *)
-							(* 		| TInst({ cl_kind = KTypeParameter _ },_) -> *)
-							(* 			v, Some(Expr.mk_stack_tp_init gen.gcon v.v_type e.epos) *)
-							(* 		| _ -> v,None) *)
-							(* 	| var -> var *)
-							(* ) vars in *)
 							{ eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el
 					in
-					(* ensure no uninitialized type parameter *)
-					(*let rec loop el acc = match el with
-						| { eexpr = TVars [] } :: el ->
-							loop el acc
-						| { eexpr = TVars vdecl } :: el ->
-							loop el ({ e with eexpr = TVars(List.map (function
-								| (v,None) -> (match follow v.v_type with
-									| TInst({ cl_kind = KTypeParameter _ },_) ->
-										v, Some(Expr.mk_stack_tp_init gen.gcon v.v_type e.epos)
-									| _ -> v,None)
-								| var -> var
-							) (vdecl)) } :: acc)
-						| _ -> (List.rev acc) @ el
-					in
-					let el = loop el [] in*)
 					let ret = { e with eexpr = TBlock(el) } in
 					declared_vars := old_declared;
 					ret
@@ -520,11 +498,20 @@ module TypeParams = struct
 						[]
 					in
 
-					let bl = { eexpr = TBlock added_exprs; etype = gen.gcom.basic.tvoid; epos = cf.cf_pos } in
+          let rec loop acc el = match el with
+            | [] -> (List.rev acc) @ added_exprs
+            | ({ eexpr = TVars _ } as e) :: el -> loop (e :: acc) el
+            | _ -> (List.rev acc) @ added_exprs @ el
+          in
+          let bl = match mk_block tf.tf_expr with
+            | { eexpr = TBlock(bl) } -> bl
+            | _ -> assert false
+          in
+
 					cf.cf_expr <- Some { e with
 						eexpr = TFunction({ tf with
 							tf_args = tf_args @ tf.tf_args @ end_arg;
-							tf_expr = Codegen.concat bl tf.tf_expr;
+              tf_expr = { tf.tf_expr with eexpr = TBlock (loop [] bl) };
 						});
 						etype = t;
 					}
