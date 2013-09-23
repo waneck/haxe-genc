@@ -2000,33 +2000,39 @@ let generate_type con mt = match mt with
 let generate_anon con name fields =
 	let ctx = mk_type_context con (["c"],name) in
 
-	spr ctx "// forward declarations";
-	newline ctx;
-	print ctx "typedef struct %s %s" name name;
-	newline ctx;
-
-	spr ctx "// structures";
-
-	newline ctx;
-	print ctx "typedef struct %s {" name;
-	let b = open_block ctx in
-	List.iter (fun cf ->
+	begin match fields with
+	| [] ->
+		print ctx "typedef int %s" name;
+		newline ctx
+	| fields ->
+		spr ctx "// forward declaration";
 		newline ctx;
-		spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
-	) fields;
-	b();
-	newline ctx;
-	print ctx "} %s" name;
-	newline ctx;
+		print ctx "typedef struct %s %s" name name;
+		newline ctx;
 
-	spr ctx "// constructor forward declarations";
+		spr ctx "// structure";
+
+		newline ctx;
+		print ctx "typedef struct %s {" name;
+		let b = open_block ctx in
+		List.iter (fun cf ->
+			newline ctx;
+			spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
+		) fields;
+		b();
+		newline ctx;
+		print ctx "} %s" name;
+		newline ctx;
+	end;
+
+	spr ctx "// constructor forward declaration";
 	newline ctx;
 	print ctx "%s* new_%s(%s)" name name (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) fields));
 	newline ctx;
 
 	ctx.buf <- ctx.buf_c;
 
-	spr ctx "// constructor definitions";
+	spr ctx "// constructor definition";
 	newline ctx;
 	print ctx "%s* new_%s(%s) {" name name (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) fields));
 	let b = open_block ctx in
