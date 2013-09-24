@@ -302,15 +302,15 @@ module Filters = struct
 				let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
 				if stat then begin
 					c.cl_ordered_statics <- cf2 :: c.cl_ordered_statics;
-					c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics
+					c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
+					let ef1 = Expr.mk_static_field c cf cf.cf_pos in
+					add_init (Codegen.binop OpAssign ef1 (Expr.mk_static_field c cf2 cf2.cf_pos) ef1.etype ef1.epos);
 				end else begin
 					c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
 					c.cl_fields <- PMap.add cf2.cf_name cf2 c.cl_fields
 				end;
 				cf.cf_expr <- None;
 				cf.cf_type <- con.hxc.t_pointer cf.cf_type;
-				let ef1 = Expr.mk_static_field c cf cf.cf_pos in
-				add_init (Codegen.binop OpAssign ef1 (Expr.mk_static_field c cf2 cf2.cf_pos) ef1.etype ef1.epos);
 			| _ ->
 				()
 		in
@@ -1277,7 +1277,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	| TField(e1,FInstance(c,cf)),el ->
+	| TField(e1,FInstance(c,cf)),el when (match cf.cf_kind with Method MethDynamic _ | Var _ -> false | _ -> true) ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
 		spr ctx "(";
@@ -1742,7 +1742,7 @@ let generate_class ctx c =
 
 	(* split fields into member vars, static vars and functions *)
 	List.iter (fun cf -> match cf.cf_kind with
-		| Var _ -> DynArray.add vars cf
+		| Var _ | Method MethDynamic -> DynArray.add vars cf
 		| Method m ->  DynArray.add methods (cf,false)
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with

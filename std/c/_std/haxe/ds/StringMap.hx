@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2013 Haxe Foundation
+ * Copyright (C)2005-2012 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,32 +22,62 @@
 
 package haxe.ds;
 
-/**
-	EnumValueMap allows mapping of enum value keys to arbitrary values.
+@:generic
+class StringMap<T> implements Map.IMap<String,T> {
+
+	var tree:haxe.ds.BalancedTree<String, T>;
 	
-	Keys are compared by value and recursively over their parameters. If any
-	parameter is not an enum value, `Reflect.compare` is used to compare them.
-**/
-class EnumValueMap<K:EnumValue, V> extends haxe.ds.BalancedTree<K, V> implements Map.IMap<K,V> {
-	
-	//override function compare(k1:EnumValue, k2:EnumValue) {
-		//var d = k1.getIndex() - k2.getIndex();
-		//if (d != 0) return d;
-		//var p1 = k1.getParameters();
-		//var p2 = k2.getParameters();
-		//if (p1.length == 0 && p2.length == 0) return 0;
-		//return compareArgs(p1, p2);
-	//}
-	
-	function compareArgs(a1:Array<Dynamic>, a2:Array<Dynamic>) {
-		var ld = a1.length - a2.length;
-		if (ld != 0) return ld;
-		for (i in 0...a1.length) {
-			var v1:Dynamic = a1[i], v2:Dynamic = a2[i];
-			var d = if (Reflect.isEnumValue(v1) && Reflect.isEnumValue(v2)) compare(v1, v2);
-			else Reflect.compare(v1, v2);
-			if (d != 0) return d;
-		}
-		return 0;
+	public inline function new() {
+		tree = new haxe.ds.BalancedTree<String, T>(untyped String.compare);
 	}
+
+	/**
+		See `Map.set`
+	**/
+	public inline function set( key : String, value : T ) {
+		tree.set(key, value);
+	}
+
+	/**
+		See `Map.get`
+	**/
+	public inline function get( key : String ) {
+		return tree.get(key);
+	}
+
+	/**
+		See `Map.exists`
+	**/
+	public inline function exists( key : String ) {
+		return tree.exists(key);
+	}
+
+	/**
+		See `Map.remove`
+	**/
+	public inline function remove( key : String ) {
+		return tree.remove(key);
+	}
+
+	/**
+		See `Map.keys`
+	**/
+	public inline function keys() {
+		return tree.keys();
+	}
+
+	/**
+		See `Map.iterator`
+	**/
+	public inline function iterator() {
+		return tree.iterator();
+	}
+
+	/**
+		See `Map.toString`
+	**/
+	public inline function toString() {
+		return tree.toString();
+	}
+
 }

@@ -79,7 +79,7 @@ abstract Map<K,V>(IMap<K,V> ) {
 		1. the map has no mapping for `key`
 		2. the map has a mapping with a value of `null`
 		
-		If it is important to distinguish these cases, `exists()` should be 
+		If it is important to distinguish these cases, `exists()` should be
 		used.
 		
 		If `key` is null, the result is unspecified.
@@ -142,7 +142,7 @@ abstract Map<K,V>(IMap<K,V> ) {
 	}
 	
 	@:to static inline function toEnumValueMapMap<K:EnumValue>(t:IMap<K,V>):EnumValueMap<K,V> {
-		return new EnumValueMap<K, V>();
+		return new EnumValueMap<K, V>(null);
 	}
 
 	@:to static inline function toObjectMap<K:{ }>(t:IMap<K,V>):ObjectMap<K,V> {
