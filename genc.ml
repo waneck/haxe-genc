@@ -87,6 +87,7 @@ and gen_context = {
 	mutable map : texpr -> texpr;
 	(* tvar_decl -> unit; declares a variable on the current block *)
 	mutable declare_var : (tvar * texpr option) -> unit;
+	mutable declare_temp : t -> texpr option -> tvar;
 	(* delays to run after all filters are done *)
 	mutable delays : (unit -> unit) list;
 }
@@ -224,11 +225,18 @@ module Filters = struct
 	let run_filters gen e =
 		(* local vars / temp vars handling *)
 		let declared_vars = ref [] in
+		let temp_var_counter = ref (-1) in
 
 		(* temporary var handling *)
 		let old_declare = gen.declare_var in
 		gen.declare_var <- (fun (tvar,eopt) ->
 			declared_vars := (tvar,eopt) :: !declared_vars;
+		);
+		gen.declare_temp <- (fun t eopt ->
+			incr temp_var_counter;
+			let v = alloc_var ("_tmp" ^ (string_of_int !temp_var_counter)) t in
+			gen.declare_var (v,eopt);
+			v
 		);
 
 		let ret = List.fold_left (fun e f ->
@@ -281,6 +289,7 @@ module Filters = struct
 			mtype = None;
 			map = (function _ -> assert false);
 			declare_var = (fun _ -> assert false);
+			declare_temp = (fun _ _ -> assert false);
 			delays = [];
 		}
 
