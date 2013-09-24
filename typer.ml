@@ -4040,7 +4040,8 @@ let explode_expressions ctx e =
 		| el :: _ ->
 			el := e :: !el
 		| [] ->
-			error "empty" e.epos;
+			let el = ref [e] in
+			block_stack := el :: !block_stack;
 	in
 	let declare_temp t eo p =
 		let v = Typecore.gen_local ctx t in
@@ -4090,7 +4091,11 @@ let explode_expressions ctx e =
 		| _ ->
 			e
 	in
-	loop e
+	let e = loop e in
+	match !block_stack with
+	| [] -> e
+	| el :: [] -> mk (TBlock (!el @ [e])) e.etype e.epos
+	| _ -> assert false
 ;;
 unify_min_ref := unify_min;
 make_call_ref := make_call;

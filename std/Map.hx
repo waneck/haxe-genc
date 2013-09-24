@@ -142,7 +142,7 @@ abstract Map<K,V>(IMap<K,V> ) {
 	}
 	
 	@:to static inline function toEnumValueMapMap<K:EnumValue>(t:IMap<K,V>):EnumValueMap<K,V> {
-		return new EnumValueMap<K, V>(null);
+		return new EnumValueMap<K, V>(#if c null #end);
 	}
 
 	@:to static inline function toObjectMap<K:{ }>(t:IMap<K,V>):ObjectMap<K,V> {
