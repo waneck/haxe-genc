@@ -937,6 +937,27 @@ module TypeChecker = struct
 
 end
 
+module StringHandler = struct
+	let is_string t = match follow t with
+		| TInst({cl_path = [],"String"},_) -> true
+		| _ -> false
+
+	let filter gen e =
+		match e.eexpr with
+		| TBinop(OpAdd,e1,e2) when is_string e1.etype ->
+			Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [e1;e2] e1.epos
+		| TBinop(OpAssignOp(OpAdd),e1,e2) when is_string e1.etype ->
+			(* TODO: we have to cache e1 in a temp var and handle the assignment correctly *)
+			Expr.mk_binop
+				OpAssign
+				e1
+				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [e1;e2] e1.epos)
+				e1.etype
+				e.epos
+		| _ ->
+			Type.map_expr gen.map e
+end
+
 (* Output and context *)
 
 let spr ctx s = Buffer.add_string ctx.buf s
@@ -2118,6 +2139,7 @@ let add_filters con =
 	Filters.add_filter con TypeParams.filter;
 	Filters.add_filter con VarDeclarations.filter;
 	Filters.add_filter con TypeChecker.filter;
+	Filters.add_filter con StringHandler.filter;
 	Filters.add_filter con DefaultValues.filter
 
 let generate com =
