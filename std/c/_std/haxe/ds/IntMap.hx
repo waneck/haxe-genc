@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2013 Haxe Foundation
+ * Copyright (C)2005-2012 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -19,31 +19,46 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+
 package haxe.ds;
 
 @:generic
-abstract HashMap<K:{ function hashCode():Int; }, V >({keys:IntMap<K>, values:IntMap<V>}) {
-	public function new() {
-		this = { keys:new IntMap<K>(), values: new IntMap<V>() };
+class IntMap<T> implements Map.IMap<Int,T> {
+
+	var tree:haxe.ds.BalancedTree<Int, T>;
+	
+	static function compare(i1:Int, i2:Int) return i1 - i2;
+	
+	public inline function new() {
+		tree = new haxe.ds.BalancedTree<Int, T>(compare);
 	}
-	public inline function set(k:K, v:V) {
-		this.keys.set(k.hashCode(), k);
-		this.values.set(k.hashCode(), v);
+
+	public inline function set( key : Int, value : T ) {
+		tree.set(key, value);
 	}
-	public inline function get(k:K) {
-		return this.values.get(k.hashCode());
+
+	public inline function get( key : Int ) {
+		return tree.get(key);
 	}
-	public inline function exists(k:K) {
-		return this.values.exists(k.hashCode());
+
+	public inline function exists( key : Int ) {
+		return tree.exists(key);
 	}
-	public inline function remove(k:K) {
-		this.values.remove(k.hashCode());
-		return this.keys.remove(k.hashCode());
+	
+	public inline function remove( key : Int ) {
+		return tree.remove(key);
 	}
+
 	public inline function keys() {
-		return this.keys.iterator();
+		return tree.keys();
 	}
+
 	public inline function iterator() {
-		return this.values.iterator();
+		return tree.iterator();
 	}
+
+	public inline function toString() {
+		return tree.toString();
+	}
+
 }
