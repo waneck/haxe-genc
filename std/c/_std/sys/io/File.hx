@@ -28,15 +28,14 @@ class File {
 
 	public static function getContent(path:String):String {
 		var file = fopen(path, "r");
-		//var buf = new StringBuf();
+		var buf = new StringBuf();
 		while(true) {
 			var rc = getc(file);
 			if (rc == EOF) break;
-			//buf.addChar(rc);
+			buf.addChar(rc);
 		}
 		fclose(file);
-		//return buf.toString();
-		return null; // TODO: need StringBuf
+		return buf.toString();
 	}
 
 	public static function getBytes(path:String):haxe.io.Bytes {
