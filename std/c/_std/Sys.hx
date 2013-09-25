@@ -47,8 +47,9 @@ class Sys {
 		return 0;
 	}
 
+	@:access(String.ofPointerCopyNT)
 	public static function args() : Array<String> {
-		return [for (i in 0...c.Boot.argc) cast c.Boot.argv[i]];
+		return [for (i in 0...c.Boot.argc) String.ofPointerCopyNT(c.Boot.argv[i])];
 	}
 
 	public static function getEnv( s : String ):String {
