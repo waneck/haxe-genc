@@ -27,7 +27,7 @@ import c.Boot;
 	}
 
 	public static function string( s : Dynamic ) : String {
-		return s;
+		return s == null ? "null" : s;
 	}
 
 	public static function int( x : Float ) : Int {
