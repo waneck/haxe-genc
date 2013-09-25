@@ -822,11 +822,8 @@ module TypeChecker = struct
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
 		(* literal String assigned to const char* = pass through *)
-		| TConst (TString s),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TDynamic _ | TAbstract({a_path=["c"],"VarArg"},_)) ->
+		| TCall({eexpr = TField(_,FStatic({cl_path = [],"String"}, {cf_name = "ofPointerCopyNT"}))},[{eexpr = TConst (TString _)} as e]),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TAbstract({a_path=["c"],"VarArg"},_)) ->
 			e
-		(* literal String in other place = wrap *)
-		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])),_ ->
-			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
 		(* String assigned to const char* or VarArg = unwrap *)
 		| _,(TAbstract({a_path=["c"],"VarArg"},_) | TAbstract({a_path = ["c"],"ConstPointer"}, [TAbstract({a_path=[],"hx_char"},_)])) when (match follow e.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "raw" [e] e.epos
@@ -953,14 +950,17 @@ module StringHandler = struct
 
 	let filter gen e =
 		match e.eexpr with
+		(* always wrap String literal *)
+		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
+			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
 		| TBinop(OpAdd,e1,e2) when is_string e1.etype ->
-			Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [e1;e2] e1.epos
+			Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [gen.map e1; gen.map e2] e1.epos
 		| TBinop(OpAssignOp(OpAdd),e1,e2) when is_string e1.etype ->
 			(* TODO: we have to cache e1 in a temp var and handle the assignment correctly *)
 			Expr.mk_binop
 				OpAssign
 				e1
-				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [e1;e2] e1.epos)
+				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [gen.map e1; gen.map e2] e1.epos)
 				e1.etype
 				e.epos
 		| _ ->
