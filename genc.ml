@@ -192,8 +192,8 @@ module Expr = struct
 	let mk_ccode ctx s =
 		mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
 
-	let mk_int ctx i p =
-		mk (TConst (TInt (Int32.of_int i))) ctx.con.com.basic.tint p
+	let mk_int com i p =
+		mk (TConst (TInt (Int32.of_int i))) com.basic.tint p
 
 	let debug ctx e =
 		Printf.sprintf "%s: %s" ctx.fctx.field.cf_name (s_expr (s_type (print_context())) e)
@@ -216,6 +216,15 @@ module Expr = struct
 end
 
 let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
+
+let get_type_id con t =
+	let id = Type.s_type (print_context()) (follow t) in
+	try
+		PMap.find id con.type_ids
+	with Not_found ->
+		con.num_identified_types <- con.num_identified_types + 1;
+		con.type_ids <- PMap.add id con.num_identified_types con.type_ids;
+		con.num_identified_types
 
 module Filters = struct
 
@@ -967,6 +976,52 @@ module StringHandler = struct
 			Type.map_expr gen.map e
 end
 
+module ExprTransformation = struct
+	let filter gen e =
+		match e.eexpr with
+		| TTry (e1,cl) ->
+			let p = e.epos in
+			let hxc = gen.gcon.hxc in
+			let epush = Expr.mk_static_call_2 hxc.c_exception "push" [] p in
+			let esubj = Codegen.mk_parent (Expr.mk_static_call_2 hxc.c_csetjmp "setjmp" [Expr.mk_deref gen.gcon p epush] p) in
+			let epop = Expr.mk_static_call_2 hxc.c_exception "pop" [] p in
+			let loc = alloc_var "_hx_jmp_buf" (hxc.t_pointer hxc.t_jmp_buf) in
+			let epopassign = mk (TVars [loc,Some epop]) gen.gcon.com.basic.tvoid p in
+			let c1 = [Expr.mk_int gen.gcom 0 e.epos],(Codegen.concat (gen.map e1) epop) in
+			let def = ref None in
+			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
+				let eassign = Codegen.binop OpAssign (mk (TVars [v,None]) gen.gcon.com.basic.tvoid p) (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p) v.v_type p in
+				let e = Codegen.concat eassign (Codegen.concat epopassign (gen.map e)) in
+				let e = mk (TBlock [e]) e.etype e.epos in
+				if v.v_type == t_dynamic then begin
+					def := Some e;
+					None;
+				end else
+					Some ([Expr.mk_int gen.gcom (get_type_id gen.gcon v.v_type) e.epos],e)
+			) cl) in
+			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
+		| TThrow e1 ->
+			let p = e.epos in
+			let eassign = Codegen.binop OpAssign (Expr.mk_static_field_2 gen.gcon.hxc.c_exception "thrownObject" p) e1 e1.etype e1.epos in
+			let epeek = Expr.mk_static_call_2 gen.gcon.hxc.c_exception "peek" [] p in
+			let el = [Expr.mk_deref gen.gcon p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
+			let ejmp = Codegen.mk_parent (Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p) in
+			Expr.mk_comma_block gen.gcon p [eassign;ejmp]
+		| TFor(v,e1,e2) ->
+			let e1 = gen.map e1 in
+			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) gen.gcon.com.basic.tbool e1.epos in
+			let enext = mk (TField(e1,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
+			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
+			let ebody = Codegen.concat enext e2 in
+			mk (TBlock [
+				mk (TVars [v,None]) gen.gcom.basic.tvoid e1.epos;
+				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
+			]) gen.gcom.basic.tvoid e.epos
+		| _ ->
+			Type.map_expr gen.map e
+
+end
+
 (* Output and context *)
 
 let spr ctx s = Buffer.add_string ctx.buf s
@@ -1250,15 +1305,6 @@ let s_type_with_name ctx t n =
 	| _ ->
 		(s_type ctx t) ^ " " ^ n
 
-let get_type_id ctx t =
-	let id = Type.s_type (print_context()) (follow t) in
-	try
-		PMap.find id ctx.con.type_ids
-	with Not_found ->
-		ctx.con.num_identified_types <- ctx.con.num_identified_types + 1;
-		ctx.con.type_ids <- PMap.add id ctx.con.num_identified_types ctx.con.type_ids;
-		ctx.con.num_identified_types
-
 (* Expr generation *)
 
 let rec generate_call ctx e e1 el = match e1.eexpr,el with
@@ -1525,7 +1571,7 @@ and generate_expr ctx e = match e.eexpr with
 		generate_expr ctx
 			(Expr.mk_binop op
 				(Expr.mk_static_call_2 ctx.con.hxc.c_string "equals" [e1;e2] e1.epos)
-				(Expr.mk_int ctx 1 e1.epos)
+				(Expr.mk_int ctx.con.com 1 e1.epos)
 				e.etype
 				e1.epos)
 	| TBinop(op,e1,e2) ->
@@ -1683,44 +1729,6 @@ let init_field ctx cf =
 			mk (TNew(c,[t],[Expr.mk_type_param ctx.con e.epos t])) ctx.con.com.basic.tvoid e.epos
 		| TArrayDecl el ->
 			mk_array_decl ctx (List.map loop el) e.etype e.epos
-		| TTry (e1,cl) ->
-			let p = e.epos in
-			let hxc = ctx.con.hxc in
-			let epush = Expr.mk_static_call_2 hxc.c_exception "push" [] p in
-			let esubj = Codegen.mk_parent (Expr.mk_static_call_2 hxc.c_csetjmp "setjmp" [Expr.mk_deref ctx.con p epush] p) in
-			let epop = Expr.mk_static_call_2 hxc.c_exception "pop" [] p in
-			let loc = alloc_var "_hx_jmp_buf" (hxc.t_pointer hxc.t_jmp_buf) in
-			let epopassign = mk (TVars [loc,Some epop]) ctx.con.com.basic.tvoid p in
-			let c1 = [Expr.mk_int ctx 0 e.epos],(Codegen.concat (loop e1) epop) in
-			let def = ref None in
-			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
-				let eassign = Codegen.binop OpAssign (mk (TVars [v,None]) ctx.con.com.basic.tvoid p) (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p) v.v_type p in
-				let e = Codegen.concat eassign (Codegen.concat epopassign (loop e)) in
-				let e = mk (TBlock [e]) e.etype e.epos in
-				if v.v_type == t_dynamic then begin
-					def := Some e;
-					None;
-				end else
-					Some ([Expr.mk_int ctx (get_type_id ctx v.v_type) e.epos],e)
-			) cl) in
-			mk (TSwitch(esubj,cl,!def)) e.etype e.epos
-		| TThrow e1 ->
-			let p = e.epos in
-			let eassign = Codegen.binop OpAssign (Expr.mk_static_field_2 ctx.con.hxc.c_exception "thrownObject" p) e1 e1.etype e1.epos in
-			let epeek = Expr.mk_static_call_2 ctx.con.hxc.c_exception "peek" [] p in
-			let el = [Expr.mk_deref ctx.con p epeek;Expr.mk_int ctx (get_type_id ctx e1.etype) p] in
-			let ejmp = Codegen.mk_parent (Expr.mk_static_call_2 ctx.con.hxc.c_csetjmp "longjmp" el p) in
-			Expr.mk_comma_block ctx.con p [eassign;ejmp]
-		| TFor(v,e1,e2) ->
-			let e1 = loop e1 in
-			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
-			let enext = mk (TField(e1,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
-			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
-			let ebody = Codegen.concat enext e2 in
-			mk (TBlock [
-				mk (TVars [v,None]) ctx.con.com.basic.tvoid e1.epos;
-				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) ctx.con.com.basic.tvoid e1.epos;
-			]) ctx.con.com.basic.tvoid e.epos
 		| _ -> Type.map_expr loop e
 	in
 	match cf.cf_expr with
@@ -1796,7 +1804,7 @@ let generate_class ctx c =
 					let p = cf.cf_pos in
 					(* TODO: get rid of this *)
 					let esize = Expr.mk_ccode ctx (Printf.sprintf "sizeof(%s)" path) in
-					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx 1 p;esize] p)
+					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx.con.com 1 p;esize] p)
 				in
 				let loc = alloc_var "this" t_class in
 				let einit = mk (TVars [loc,einit]) ctx.con.com.basic.tvoid cf.cf_pos in
@@ -2146,12 +2154,12 @@ with | Not_found ->
 
 let add_filters con =
 	(* ascending priority *)
+	Filters.add_filter con ExprTransformation.filter;
 	Filters.add_filter con TypeParams.filter;
 	Filters.add_filter con VarDeclarations.filter;
 	Filters.add_filter con TypeChecker.filter;
 	Filters.add_filter con StringHandler.filter;
 	Filters.add_filter con DefaultValues.filter
-
 let generate com =
 	let c_lib = match follow (get_type com (["c"],"Lib")) with
 		| TInst(c,_) -> c
