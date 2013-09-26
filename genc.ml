@@ -976,6 +976,11 @@ module StringHandler = struct
 			Type.map_expr gen.map e
 end
 
+(*
+	- TTry is replaced with a TSwitch and uses setjmp
+	- TThrow is replaced with a call to longjmp
+	- TFor is replaced with TWhile
+*)
 module ExprTransformation = struct
 	let filter gen e =
 		match e.eexpr with
@@ -1009,12 +1014,15 @@ module ExprTransformation = struct
 			Expr.mk_comma_block gen.gcon p [eassign;ejmp]
 		| TFor(v,e1,e2) ->
 			let e1 = gen.map e1 in
-			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) gen.gcon.com.basic.tbool e1.epos in
-			let enext = mk (TField(e1,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
+			let vtemp = gen.declare_temp e1.etype None in
+			gen.declare_var (v,None);
+			let ev = Expr.mk_local vtemp e1.epos in
+			let ehasnext = mk (TField(ev,quick_field e1.etype "hasNext")) gen.gcon.com.basic.tbool e1.epos in
+			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
 			let ebody = Codegen.concat enext e2 in
 			mk (TBlock [
-				mk (TVars [v,None]) gen.gcom.basic.tvoid e1.epos;
+				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
 			]) gen.gcom.basic.tvoid e.epos
 		| _ ->
@@ -1428,7 +1436,6 @@ and generate_expr ctx e = match e.eexpr with
 		b();
 		newline ctx;
 		spr ctx "}";
-		newline ctx;
 	| TCall(e1,el) ->
 		generate_call ctx e e1 el
 	| TTypeExpr (TClassDecl c) ->
@@ -1714,9 +1721,6 @@ let mk_array_decl ctx el t p =
 	This function applies some general transformations.
 
 	- TArrayDecl introduces an init function which is TCalled
-	- TTry is replaced with a TSwitch and uses setjmp
-	- TThrow is replaced with a call to longjmp
-	- TFor is replaced with TWhile
 *)
 let init_field ctx cf =
 	let rec loop e = match e.eexpr with
