@@ -96,7 +96,7 @@ class Log {
 			#end
 		#elseif c
 			var s = Std.string(v);
-			c.CStdio.printf("%s:%i: %s\\n", [infos.fileName, infos.lineNumber, s]);
+			c.CStdio.printf("%s:%i: %.*s\\n", [infos.fileName, infos.lineNumber, s.length, s]);
 		#end
 	}
 
