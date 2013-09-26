@@ -1774,9 +1774,11 @@ let generate_method ctx c cf stat =
 		loop_stack = []
 	};
 	generate_function_header ctx c cf stat;
-	match e with
-	| None -> newline ctx
-	| Some e -> generate_expr ctx e
+	begin match e with
+		| None -> ()
+		| Some e -> generate_expr ctx e
+	end;
+	newline ctx
 
 let generate_class ctx c =
 	let vars = DynArray.create () in
