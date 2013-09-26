@@ -21,6 +21,7 @@
  */
 
 //@:coreApi
+@:header("extern char** environ;")
 class Sys {
 
 	public static function print( v : Dynamic ) : Void {
@@ -100,7 +101,14 @@ class Sys {
 		return null;
 	}
 
-	//public static function environment() : haxe.ds.StringMap<String> {
-		//return null;
-	//}
+	@:access(String.ofPointerCopyNT)
+	public static function environment() : haxe.ds.StringMap<String> {
+		var map = new haxe.ds.StringMap<String>();
+		var current = untyped environ;
+		do {
+			var split = String.ofPointerCopyNT(c.Lib.dereference(current)).split("=");
+			map.set(split[0], split[1]);
+		} while(c.Lib.dereference(++current) != null);
+		return map;
+	}
 }
