@@ -1714,11 +1714,12 @@ let init_field ctx cf =
 		| TFor(v,e1,e2) ->
 			let e1 = loop e1 in
 			let ehasnext = mk (TField(e1,quick_field e1.etype "hasNext")) ctx.con.com.basic.tbool e1.epos in
-			let enext = mk (TField(e1,quick_field e1.etype "next")) v.v_type e1.epos in
+			let enext = mk (TField(e1,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
+			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
 			let ebody = Codegen.concat enext e2 in
 			mk (TBlock [
 				mk (TVars [v,None]) ctx.con.com.basic.tvoid e1.epos;
-				mk (TWhile(ehasnext,ebody,NormalWhile)) ctx.con.com.basic.tvoid e1.epos;
+				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) ctx.con.com.basic.tvoid e1.epos;
 			]) ctx.con.com.basic.tvoid e.epos
 		| _ -> Type.map_expr loop e
 	in
