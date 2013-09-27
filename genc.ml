@@ -1361,7 +1361,8 @@ let rec s_type ctx t =
 let s_type_with_name ctx t n =
 	match follow t with
 	| TFun(args,ret) ->
-		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
+		(* Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args)) *)
+		"hx_closure* " ^ n
 	| _ ->
 		(s_type ctx t) ^ " " ^ n
 
@@ -1413,14 +1414,33 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	| TLocal v,el ->
-		print ctx "(%s->_func)(%s->_this" v.v_name v.v_name;
+	| TLocal v,el when v.v_name.[0] <> '_' ->
+		let r = match follow v.v_type with | TFun(_,r) -> r | _ -> assert false in
+		print ctx "(%s)((%s->_func)(%s->_this" (s_type ctx r) v.v_name v.v_name;
+		List.iter (fun e ->
+			spr ctx ",";
+			generate_expr ctx e
+		) el;
+		spr ctx "))"
+	| TField(e2,FInstance(c,cf)),el when (match cf.cf_kind with Method MethDynamic _ | Var _ -> true | _ -> false) ->
+		add_class_dependency ctx c;
+		generate_expr ctx e1;
+		spr ctx "->_func(";
+		generate_expr ctx e2;
 		List.iter (fun e ->
 			spr ctx ",";
 			generate_expr ctx e
 		) el;
 		spr ctx ")"
-	| TField(e1,FInstance(c,cf)),el when (match cf.cf_kind with Method MethDynamic _ | Var _ -> false | _ -> true) ->
+	| TField(e2,FStatic(c,cf)),el when (match cf.cf_kind with Var _ -> true | _ -> false) ->
+		generate_expr ctx e1;
+		spr ctx "->_func(";
+		List.iter (fun e ->
+			(* spr ctx ","; *)
+			generate_expr ctx e
+		) el;
+		spr ctx ")"
+	| TField(e1,FInstance(c,cf)),el ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
 		spr ctx "(";
