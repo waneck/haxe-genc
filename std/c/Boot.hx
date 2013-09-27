@@ -5,6 +5,7 @@ import c.TypeReference;
 import c.Types;
 import c.NInt;
 import String;
+import c.Closure;
 
 @:headerCode('
 #ifndef _MSC_VER
