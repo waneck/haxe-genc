@@ -32,7 +32,7 @@ type hxc = {
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
 	t_int64 : t -> t;
-
+	t_closure : t -> t -> t;
 	t_jmp_buf : t;
 
 	c_lib : tclass;
@@ -884,6 +884,8 @@ module TypeChecker = struct
 					Some (v,Some (check gen (gen.map e) v.v_type))
 			) vl in
 			{ e with eexpr = TVars(vl)}
+		| TLocal v ->
+			{ e with etype = v.v_type }
 		| TCall(e1,el) ->
 			begin match follow e1.etype with
 				| TFun(args,_) ->
@@ -974,6 +976,26 @@ module StringHandler = struct
 				e.epos
 		| _ ->
 			Type.map_expr gen.map e
+end
+
+module ClosureHandler = struct
+	let map_closure_type gen t =
+		match follow t with
+			| TFun _ as t ->
+				gen.gcon.hxc.t_closure t t_dynamic
+			| _ -> t
+
+	let filter gen e =
+		match e.eexpr with
+		| TFunction tf ->
+			let args,tr = match follow gen.gfield.cf_type with TFun(args,tr) -> args,tr | _ -> assert false in
+			let t = List.map (fun (n,o,t) -> n,o,map_closure_type gen t) args in
+			List.iter (fun (v,_) -> v.v_type <- map_closure_type gen v.v_type) tf.tf_args;
+			gen.gfield.cf_type <- TFun(t,tr);
+			{ e with etype = gen.gfield.cf_type }
+		| _ ->
+			print_endline (s_expr_pretty "" (s_type (print_context())) e);
+			e
 end
 
 (*
@@ -1304,6 +1326,8 @@ let rec s_type ctx t =
 			add_dependency ctx DFull (["c"],signature);
 			signature ^ "*"
 		end
+	| TAbstract({a_path = ["c"],"Closure"} as a,tl) ->
+		s_type ctx (Codegen.Abstract.get_underlying_type a tl)
 	| _ -> "void*"
 
 let s_type_with_name ctx t n =
@@ -1361,6 +1385,13 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
+	| TLocal ({v_type = TAbstract({a_path = ["c"],"Closure"},[tfun;tthis])} as v),el ->
+		print ctx "(%s->_func)(%s->_this" v.v_name v.v_name;
+		List.iter (fun e ->
+			spr ctx ",";
+			generate_expr ctx e
+		) el;
+		spr ctx ")"
 	| TField(e1,FInstance(c,cf)),el when (match cf.cf_kind with Method MethDynamic _ | Var _ -> false | _ -> true) ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
@@ -2155,7 +2186,9 @@ let add_filters con =
 	Filters.add_filter con VarDeclarations.filter;
 	Filters.add_filter con TypeChecker.filter;
 	Filters.add_filter con StringHandler.filter;
+	Filters.add_filter con ClosureHandler.filter;
 	Filters.add_filter con DefaultValues.filter
+
 let generate com =
 	let c_lib = match follow (get_type com (["c"],"Lib")) with
 		| TInst(c,_) -> c
@@ -2182,6 +2215,11 @@ let generate com =
 				(* HACK: Pointer is actually a @:coreType *)
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				(fun t -> TAbstract(a,[t]))
+			| _ -> assert false);
+		t_closure = (match get_type com (["c"],"Closure") with
+			| TAbstract(a,_) ->
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				(fun tthis tfun -> TAbstract(a, [tthis;tfun]))
 			| _ -> assert false);
 		t_jmp_buf = get_type com ([],"jmp_buf");
 		c_lib = c_lib;
