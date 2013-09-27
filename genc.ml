@@ -805,7 +805,7 @@ let alloc_temp_func con =
 		- TArrayDecl
 		- TObjectDecl
 		- TReturn
-		- TODO: TIf and TSwitch may be missing
+		- TODO: TIf may be missing
 
 	It may perform the following transformations:
 		- pad TObjectDecl with null for optional arguments
@@ -934,6 +934,10 @@ module TypeChecker = struct
 
 end
 
+(*
+	- wraps String literals in String
+	- translates String OpAdd to String.concat
+*)
 module StringHandler = struct
 	let is_string t = match follow t with
 		| TInst({cl_path = [],"String"},_) -> true
@@ -959,7 +963,10 @@ module StringHandler = struct
 end
 
 (*
-	This filter rewrites the type of all function variables to Closure<T>
+	This filter turns all non-top TFunction nodes into class fields and creates a hx_closure expression
+	in their place.
+
+	It also handles call to closures, i.e. local variables and Var class fields.
 *)
 module ClosureHandler = struct
 	let map_closure_type gen t = t
