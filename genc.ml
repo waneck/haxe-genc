@@ -1354,7 +1354,7 @@ let rec s_type ctx t =
 		| _ ->
 			let signature = anon_signature ctx a.a_fields in
 			add_dependency ctx DFull (["c"],signature);
-			signature ^ "*"
+			"c_" ^ signature ^ "*"
 		end
 	| _ -> "void*"
 
@@ -1514,7 +1514,7 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx v.v_name;
 	| TObjectDecl fl ->
 		let s = match follow e.etype with TAnon an -> anon_signature ctx an.a_fields | _ -> assert false in
-		print ctx "new_%s(" s;
+		print ctx "new_c_%s(" s;
 		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
 		spr ctx ")";
 	| TNew({cl_path = [],"typeref"},[p],[]) -> (match follow p with
@@ -2093,7 +2093,7 @@ let generate_type con mt = match mt with
 
 let generate_anon con name fields =
 	let ctx = mk_type_context con (["c"],name) in
-
+	let name = "c_" ^ name in
 	begin match fields with
 	| [] ->
 		print ctx "typedef int %s" name;
