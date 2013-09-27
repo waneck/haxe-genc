@@ -833,7 +833,6 @@ module TypeChecker = struct
 		| TParenthesis(e1),t ->
 			{ e with eexpr = TParenthesis(check gen e1 t)}
 		| TField(e1,FStatic(c,cf)),TFun _ when cf.cf_name = "compare" ->
-			gen.gcom.warning "here" e.epos;
 			let e_field = Expr.mk_static_field c cf e.epos in
 			Expr.mk_obj_decl ["_this",mk (TConst TNull) (mk_mono()) e.epos;"_func",e_field] e.epos
 		| _ ->
@@ -1021,6 +1020,16 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
+		| TCall({eexpr = TLocal _ | TField(_,FInstance(_,{cf_kind = Var _})) } as ev,el) ->
+			let args,r = match follow ev.etype with TFun(args,r) -> args,r | _ -> assert false in
+			let efunc = mk (TField(ev,FDynamic "_func")) (TFun(args,r)) e.epos in
+			let ethis = mk (TField(ev,FDynamic "_this")) t_dynamic e.epos in
+			let eif = Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos in
+			let ethen = mk (TCall({efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)},ethis :: el)) e.etype e.epos in
+			let eelse = mk (TCall(efunc,el)) e.etype e.epos in
+			let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
+			let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
+			mk (TCast(ternary_hack,None)) r e.epos
 		| _ ->
 			Type.map_expr gen.map e
 end
@@ -1413,24 +1422,6 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	| TLocal v,el ->
-		let r = match follow v.v_type with | TFun(_,r) -> r | _ -> assert false in
-		print ctx "(%s)((%s->_func)(%s->_this" (s_type ctx r) v.v_name v.v_name;
-		List.iter (fun e ->
-			spr ctx ",";
-			generate_expr ctx e
-		) el;
-		spr ctx "))"
-	| TField(e2,FInstance(c,cf)),el when (match cf.cf_kind with Method MethDynamic _ | Var _ -> true | _ -> false) ->
-		add_class_dependency ctx c;
-		generate_expr ctx e1;
-		spr ctx "->_func(";
-		generate_expr ctx e2;
-		List.iter (fun e ->
-			spr ctx ",";
-			generate_expr ctx e
-		) el;
-		spr ctx ")"
 	| TField(e1,FInstance(c,cf)),el ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
