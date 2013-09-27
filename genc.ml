@@ -1515,7 +1515,13 @@ and generate_expr ctx e = match e.eexpr with
 	| TLocal v ->
 		spr ctx v.v_name;
 	| TObjectDecl fl ->
-		let s = match follow e.etype with TAnon an -> anon_signature ctx an.a_fields | _ -> assert false in
+		let s = match follow e.etype with
+			| TAnon an ->
+				let signature = anon_signature ctx an.a_fields in
+				add_dependency ctx DFull (["c"],signature);
+				signature
+			| _ -> assert false
+		in
 		print ctx "new_c_%s(" s;
 		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
 		spr ctx ")";
