@@ -1372,6 +1372,7 @@ let rec s_type ctx t =
 			add_dependency ctx DFull (["c"],signature);
 			"c_" ^ signature ^ "*"
 		end
+	| TFun(args,ret) -> Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| _ -> "void*"
 
 let s_type_with_name ctx t n =
