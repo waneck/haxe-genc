@@ -46,3 +46,4 @@
 
 /haxe.sublime*
 build.bat
+version.ml
