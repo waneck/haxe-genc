@@ -21,7 +21,7 @@
  */
 
 //@:coreApi
-@:header("extern char** environ;")
+@:headerCode("extern char** environ;")
 class Sys {
 
 	public static function print( v : Dynamic ) : Void {
