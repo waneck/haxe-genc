@@ -1680,9 +1680,9 @@ and generate_expr ctx e = match e.eexpr with
 		| TAbstract({a_path = ["c"],"Pointer"},[t]) when ((s_type ctx e.etype) = "int") -> generate_expr ctx e1;
 		| TAbstract( a, tps ) when Meta.has (Meta.Custom ":int") a.a_meta -> generate_expr ctx e1;
 		| _ ->
-			print ctx "((%s) " (s_type ctx e.etype);
+			print ctx "((%s) (" (s_type ctx e.etype);
 			generate_expr ctx e1;
-			spr ctx ")"
+			spr ctx "))"
 		end
 	| TEnumParameter (e1,ef,i) ->
 		generate_expr ctx e1;
