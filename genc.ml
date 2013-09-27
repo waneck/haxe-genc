@@ -832,9 +832,10 @@ module TypeChecker = struct
 			{ e with eexpr = TMeta(m,check gen e1 t)}
 		| TParenthesis(e1),t ->
 			{ e with eexpr = TParenthesis(check gen e1 t)}
-(* 		| TLocal v,t ->
-			v.v_type <- t;
-			e *)
+		| TField(e1,FStatic(c,cf)),TFun _ when cf.cf_name = "compare" ->
+			gen.gcom.warning "here" e.epos;
+			let e_field = Expr.mk_static_field c cf e.epos in
+			Expr.mk_obj_decl ["_this",mk (TConst TNull) (mk_mono()) e.epos;"_func",e_field] e.epos
 		| _ ->
 			e
 
@@ -1014,16 +1015,12 @@ module ClosureHandler = struct
 					c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
 					let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type e.epos in
 					let e_ctx = Expr.mk_obj_decl ["_this",e_init;"_func",e_field] e.epos in
-					print_endline (s_type (print_context()) e_ctx.etype);
 					e_ctx
 				| _ ->
 					assert false
 			in
 			fstack := List.tl !fstack;
 			e1
-(* 		| TVars vl ->
-			List.iter (fun (v,_) -> v.v_type <- map_closure_type gen v.v_type) vl;
-			Type.map_expr gen.map e *)
 		| _ ->
 			Type.map_expr gen.map e
 end
@@ -1361,8 +1358,10 @@ let rec s_type ctx t =
 let s_type_with_name ctx t n =
 	match follow t with
 	| TFun(args,ret) ->
-		(* Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args)) *)
-		"hx_closure* " ^ n
+		if n = "hxc_mainFunc" then
+			Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
+		else
+			"hx_closure* " ^ n
 	| _ ->
 		(s_type ctx t) ^ " " ^ n
 
@@ -1429,14 +1428,6 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		generate_expr ctx e2;
 		List.iter (fun e ->
 			spr ctx ",";
-			generate_expr ctx e
-		) el;
-		spr ctx ")"
-	| TField(e2,FStatic(c,cf)),el when (match cf.cf_kind with Var _ -> true | _ -> false) ->
-		generate_expr ctx e1;
-		spr ctx "->_func(";
-		List.iter (fun e ->
-			(* spr ctx ","; *)
 			generate_expr ctx e
 		) el;
 		spr ctx ")"
