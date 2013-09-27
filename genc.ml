@@ -1413,7 +1413,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	| TLocal v,el when v.v_name.[0] <> '_' ->
+	| TLocal v,el ->
 		let r = match follow v.v_type with | TFun(_,r) -> r | _ -> assert false in
 		print ctx "(%s)((%s->_func)(%s->_this" (s_type ctx r) v.v_name v.v_name;
 		List.iter (fun e ->
@@ -1771,9 +1771,8 @@ let mk_array_decl ctx el t p =
 	newline ctx;
 	spr ctx "}";
 	newline ctx;
-	let v = alloc_var name (ctx.con.com.basic.tarray t) in
-	let ev = mk (TLocal v) v.v_type p in
-	mk (TCall(ev,el)) t p
+	let ef = Expr.mk_ccode ctx name in
+	mk (TCall(ef,el)) t p
 
 (* Type generation *)
 
