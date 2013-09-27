@@ -920,8 +920,8 @@ module TypeChecker = struct
 			else
 				{e with eexpr = TCast(gen.map e1,None)}
 		| TSwitch(e1,cases,def) ->
-			let cases = List.map (fun (el,e) -> List.map (fun e -> check gen (gen.map e) e1.etype) el,e) cases in
-			{ e with eexpr = TSwitch(e1,cases,def)}
+			let cases = List.map (fun (el,e) -> List.map (fun e -> check gen (gen.map e) e1.etype) el,gen.map e) cases in
+			{ e with eexpr = TSwitch(e1,cases,match def with None -> None | Some e -> Some (gen.map e))}
 		| TFunction tf ->
 			fstack := tf :: !fstack;
 			let etf = {e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})} in
