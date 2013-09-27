@@ -1001,6 +1001,16 @@ module ClosureHandler = struct
 
 	let fstack = ref []
 
+	let rec is_closure_expr e =
+		match e.eexpr with
+			| TLocal _
+			| TField(_,FInstance(_,{cf_kind = Var _})) ->
+				true
+			| TMeta(_,e1) | TParenthesis(e1) ->
+				is_closure_expr e1
+			| _ ->
+				false
+
 	let filter gen e =
 		match e.eexpr with
 		| TFunction tf ->
@@ -1020,7 +1030,7 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
-		| TCall({eexpr = TLocal _ | TField(_,FInstance(_,{cf_kind = Var _})) } as ev,el) ->
+		| TCall(ev,el) when is_closure_expr ev ->
 			let args,r = match follow ev.etype with TFun(args,r) -> args,r | _ -> assert false in
 			let efunc = mk (TField(ev,FDynamic "_func")) (TFun(args,r)) e.epos in
 			let ethis = mk (TField(ev,FDynamic "_this")) t_dynamic e.epos in
