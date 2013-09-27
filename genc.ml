@@ -32,7 +32,6 @@ type hxc = {
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
 	t_int64 : t -> t;
-	t_closure : t -> t -> t;
 	t_jmp_buf : t;
 
 	c_lib : tclass;
@@ -833,6 +832,9 @@ module TypeChecker = struct
 			{ e with eexpr = TMeta(m,check gen e1 t)}
 		| TParenthesis(e1),t ->
 			{ e with eexpr = TParenthesis(check gen e1 t)}
+(* 		| TLocal v,t ->
+			v.v_type <- t;
+			e *)
 		| _ ->
 			e
 
@@ -960,11 +962,7 @@ end
 	This filter rewrites the type of all function variables to Closure<T>
 *)
 module ClosureHandler = struct
-	let map_closure_type gen t =
-		match follow t with
-			| TFun _ as t ->
-				gen.gcon.hxc.t_closure t t_dynamic
-			| _ -> t
+	let map_closure_type gen t = t
 
 	let mk_closure_field gen tf p =
 		let name,id = alloc_temp_func gen.gcon in
@@ -996,7 +994,7 @@ module ClosureHandler = struct
 		let ctx_fields = PMap.fold (fun (v,b) acc -> if not b then PMap.add v.v_name v acc else acc) !locals PMap.empty in
 		let fields = PMap.fold (fun v acc -> (v.v_name,mk (TLocal v) v.v_type p) :: acc) ctx_fields [] in
 		let eobj = Expr.mk_obj_decl fields p in
-		let t = TFun((ctx_name,false,eobj.etype) :: List.map (fun (v,_) -> v.v_name,false,map_closure_type gen v.v_type) tf.tf_args,map_closure_type gen tf.tf_type) in
+		let t = TFun((ctx_name,false,eobj.etype) :: List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args,tf.tf_type) in
 		let cf = Expr.mk_class_field name t true p (Method MethNormal) [] in
 		cf.cf_expr <- Some e;
 		cf,eobj
@@ -1009,10 +1007,6 @@ module ClosureHandler = struct
 			fstack := tf :: !fstack;
 			let e1 = match !fstack,gen.mtype with
 				| _ :: [],_ ->
-					let args,tr = match follow gen.gfield.cf_type with TFun(args,tr) -> args,tr | _ -> assert false in
-					let t = List.map (fun (n,o,t) -> n,o,map_closure_type gen t) args in
-					List.iter (fun (v,_) -> v.v_type <- map_closure_type gen v.v_type) tf.tf_args;
-					gen.gfield.cf_type <- TFun(t,map_closure_type gen tr);
 					{e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})}
 				| _,Some (TClassDecl c) ->
 					let cf,e_init = mk_closure_field gen tf e.epos in
@@ -1020,15 +1014,16 @@ module ClosureHandler = struct
 					c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
 					let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type e.epos in
 					let e_ctx = Expr.mk_obj_decl ["_this",e_init;"_func",e_field] e.epos in
+					print_endline (s_type (print_context()) e_ctx.etype);
 					e_ctx
 				| _ ->
 					assert false
 			in
 			fstack := List.tl !fstack;
 			e1
-		| TVars vl ->
+(* 		| TVars vl ->
 			List.iter (fun (v,_) -> v.v_type <- map_closure_type gen v.v_type) vl;
-			Type.map_expr gen.map e
+			Type.map_expr gen.map e *)
 		| _ ->
 			Type.map_expr gen.map e
 end
@@ -1361,8 +1356,6 @@ let rec s_type ctx t =
 			add_dependency ctx DFull (["c"],signature);
 			signature ^ "*"
 		end
-	| TAbstract({a_path = ["c"],"Closure"} as a,tl) ->
-		s_type ctx (Codegen.Abstract.get_underlying_type a tl)
 	| _ -> "void*"
 
 let s_type_with_name ctx t n =
@@ -1420,7 +1413,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
-	| TLocal ({v_type = TAbstract({a_path = ["c"],"Closure"},[tfun;tthis])} as v),el ->
+	| TLocal v,el ->
 		print ctx "(%s->_func)(%s->_this" v.v_name v.v_name;
 		List.iter (fun e ->
 			spr ctx ",";
@@ -2250,11 +2243,6 @@ let generate com =
 				(* HACK: Pointer is actually a @:coreType *)
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				(fun t -> TAbstract(a,[t]))
-			| _ -> assert false);
-		t_closure = (match get_type com (["c"],"Closure") with
-			| TAbstract(a,_) ->
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
-				(fun tthis tfun -> TAbstract(a, [tthis;tfun]))
 			| _ -> assert false);
 		t_jmp_buf = get_type com ([],"jmp_buf");
 		c_lib = c_lib;
