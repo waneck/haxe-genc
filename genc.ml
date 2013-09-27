@@ -1085,8 +1085,11 @@ module ExprTransformation = struct
 			let vtemp = gen.declare_temp e1.etype None in
 			gen.declare_var (v,None);
 			let ev = Expr.mk_local vtemp e1.epos in
-			let ehasnext = mk (TField(ev,quick_field e1.etype "hasNext")) gen.gcon.com.basic.tbool e1.epos in
+			let ehasnext = mk (TField(ev,quick_field e1.etype "hasNext")) (tfun [] gen.gcon.com.basic.tbool) e1.epos in
+			let ehasnext = mk (TCast(ehasnext,None)) ehasnext.etype ehasnext.epos in
+			let ehasnext = mk (TCall(ehasnext,[])) ehasnext.etype ehasnext.epos in
 			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
+			let enext = mk (TCast(enext,None)) enext.etype enext.epos in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
 			let ebody = Codegen.concat enext e2 in
 			mk (TBlock [
