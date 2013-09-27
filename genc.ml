@@ -1584,6 +1584,14 @@ and generate_expr ctx e = match e.eexpr with
 				assert false
 		in
 		print ctx "goto %s" label;
+	| TMeta((Meta.Custom ":ternary",_,_),{eexpr = TIf(e1,e2,Some e3)}) ->
+		spr ctx "(";
+		generate_expr ctx e1;
+		spr ctx " ? ";
+		generate_expr ctx e2;
+		spr ctx " : ";
+		generate_expr ctx e3;
+		spr ctx ")"
 	| TIf(e1,e2,e3) ->
 		spr ctx "if";
 		generate_expr ctx e1;
