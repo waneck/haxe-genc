@@ -211,7 +211,16 @@ module Expr = struct
 			cf_overloads = [];
 		}
 	let mk_binop op e1 e2 et p =
-        { eexpr=TBinop(op,e1,e2); etype=et; epos=p }
+		{ eexpr=TBinop(op,e1,e2); etype=et; epos=p }
+
+    let mk_obj_decl fields p =
+    	let fields = List.sort compare fields in
+    	let t_fields = List.fold_left (fun acc (n,e) ->
+    		let cf = mk_class_field n e.etype true e.epos (Var {v_read = AccNormal; v_write = AccNormal}) [] in
+    		PMap.add n cf acc
+    	) PMap.empty fields in
+    	let t = TAnon {a_fields = t_fields; a_status = ref Closed} in
+    	mk (TObjectDecl fields) t p
 end
 
 let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
@@ -787,24 +796,6 @@ let alloc_temp_func con =
 	let name = "_hx_func_" ^ (string_of_int id) in
 	name, id
 
-let mk_closure_field con tf p =
-	let name,id = alloc_temp_func con in
-	let locals = ref PMap.empty in
-	List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) tf.tf_args;
-	let rec loop e = match e.eexpr with
-		| TVars vl ->
-			List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) vl;
-		| TLocal v ->
-			if not (PMap.mem v.v_name !locals) then locals := PMap.add v.v_name (v,false) !locals
-		| _ ->
-			Type.iter loop e
-	in
-	loop tf.tf_expr;
-	let args = PMap.fold (fun (v,b) acc -> if not b then (v,None) :: acc else acc) !locals [] in
-	let all_args = args @ tf.tf_args in
-	let t = TFun(List.map (fun (v,_) -> v.v_name,false,v.v_type) all_args,tf.tf_type) in
-	name,t,id
-
 (*
 	This filter handles unification cases where AST transformation may be required.
 	These occur in the following nodes:
@@ -932,21 +923,8 @@ module TypeChecker = struct
 		| TFunction tf ->
 			fstack := tf :: !fstack;
 			let etf = {e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})} in
-			let e1 = match !fstack,gen.mtype with
-				| _ :: [],_ ->
-					etf
-				| _,Some (TClassDecl c) ->
-					let name,t,id = mk_closure_field gen.gcon tf e.epos in
-					let cf = Expr.mk_class_field name t true e.epos (Method MethNormal) [] in
-					cf.cf_expr <- Some (etf);
-					c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
-					c.cl_statics <- PMap.add name cf c.cl_statics;
-					Expr.mk_static_field_2 c name e.epos
-				| _ ->
-					assert false
-			in
 			fstack := List.tl !fstack;
-			e1
+			etf
 		| TThrow e1 ->
 			{ e with eexpr = TThrow (check gen e1 e1.etype) }
 		| _ ->
@@ -978,6 +956,9 @@ module StringHandler = struct
 			Type.map_expr gen.map e
 end
 
+(*
+	This filter rewrites the type of all function variables to Closure<T>
+*)
 module ClosureHandler = struct
 	let map_closure_type gen t =
 		match follow t with
@@ -985,17 +966,71 @@ module ClosureHandler = struct
 				gen.gcon.hxc.t_closure t t_dynamic
 			| _ -> t
 
+	let mk_closure_field gen tf p =
+		let name,id = alloc_temp_func gen.gcon in
+		let locals = ref PMap.empty in
+		List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) tf.tf_args;
+		let ctx_name = "_ctx" in
+		let v_ctx = alloc_var ctx_name t_dynamic in
+		let e_ctx = mk (TLocal v_ctx) v_ctx.v_type p in
+		let mk_ctx_field v =
+			mk (TField(e_ctx,FDynamic v.v_name)) v.v_type p
+		in
+		let rec loop e = match e.eexpr with
+			| TVars vl ->
+				List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) vl;
+				e
+			| TLocal v ->
+				begin try
+					let (_,b) = PMap.find v.v_name !locals in
+					if not b then mk_ctx_field v
+					else e;
+				with Not_found ->
+					locals := PMap.add v.v_name (v,false) !locals;
+					mk_ctx_field v
+				end
+			| _ ->
+				Type.map_expr loop e
+		in
+		let e = loop tf.tf_expr in
+		let ctx_fields = PMap.fold (fun (v,b) acc -> if not b then PMap.add v.v_name v acc else acc) !locals PMap.empty in
+		let fields = PMap.fold (fun v acc -> (v.v_name,mk (TLocal v) v.v_type p) :: acc) ctx_fields [] in
+		let eobj = Expr.mk_obj_decl fields p in
+		let t = TFun((ctx_name,false,eobj.etype) :: List.map (fun (v,_) -> v.v_name,false,map_closure_type gen v.v_type) tf.tf_args,map_closure_type gen tf.tf_type) in
+		let cf = Expr.mk_class_field name t true p (Method MethNormal) [] in
+		cf.cf_expr <- Some e;
+		cf,eobj
+
+	let fstack = ref []
+
 	let filter gen e =
 		match e.eexpr with
 		| TFunction tf ->
-			let args,tr = match follow gen.gfield.cf_type with TFun(args,tr) -> args,tr | _ -> assert false in
-			let t = List.map (fun (n,o,t) -> n,o,map_closure_type gen t) args in
-			List.iter (fun (v,_) -> v.v_type <- map_closure_type gen v.v_type) tf.tf_args;
-			gen.gfield.cf_type <- TFun(t,tr);
-			{ e with etype = gen.gfield.cf_type }
+			fstack := tf :: !fstack;
+			let e1 = match !fstack,gen.mtype with
+				| _ :: [],_ ->
+					let args,tr = match follow gen.gfield.cf_type with TFun(args,tr) -> args,tr | _ -> assert false in
+					let t = List.map (fun (n,o,t) -> n,o,map_closure_type gen t) args in
+					List.iter (fun (v,_) -> v.v_type <- map_closure_type gen v.v_type) tf.tf_args;
+					gen.gfield.cf_type <- TFun(t,map_closure_type gen tr);
+					{e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})}
+				| _,Some (TClassDecl c) ->
+					let cf,e_init = mk_closure_field gen tf e.epos in
+					c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
+					c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
+					let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type e.epos in
+					let e_ctx = Expr.mk_obj_decl ["_this",e_init;"_func",e_field] e.epos in
+					e_ctx
+				| _ ->
+					assert false
+			in
+			fstack := List.tl !fstack;
+			e1
+		| TVars vl ->
+			List.iter (fun (v,_) -> v.v_type <- map_closure_type gen v.v_type) vl;
+			Type.map_expr gen.map e
 		| _ ->
-			print_endline (s_expr_pretty "" (s_type (print_context())) e);
-			e
+			Type.map_expr gen.map e
 end
 
 (*
