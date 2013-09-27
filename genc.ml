@@ -971,20 +971,20 @@ end
 module ClosureHandler = struct
 	let map_closure_type gen t = t
 
-	let mk_closure_field gen tf p =
+	let mk_closure_field gen tf ethis p =
 		let name,id = alloc_temp_func gen.gcon in
 		let locals = ref PMap.empty in
 		List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) tf.tf_args;
 		let ctx_name = "_ctx" in
 		let v_ctx = alloc_var ctx_name t_dynamic in
 		let e_ctx = mk (TLocal v_ctx) v_ctx.v_type p in
+		let v_this = alloc_var "this" t_dynamic in
 		let mk_ctx_field v =
 			mk (TField(e_ctx,FDynamic v.v_name)) v.v_type p
 		in
 		let rec loop e = match e.eexpr with
 			| TVars vl ->
-				List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) vl;
-				e
+				{e with eexpr = TVars (List.map (fun (v,eo) -> locals := PMap.add v.v_name (v,true) !locals; v,match eo with None -> None | Some e -> Some (loop e)) vl)};
 			| TLocal v ->
 				begin try
 					let (_,b) = PMap.find v.v_name !locals in
@@ -994,12 +994,21 @@ module ClosureHandler = struct
 					locals := PMap.add v.v_name (v,false) !locals;
 					mk_ctx_field v
 				end
+			| TConst TThis ->
+				if not (PMap.mem v_this.v_name !locals) then locals := PMap.add v_this.v_name (v_this,false) !locals;
+				mk_ctx_field v_this
 			| _ ->
 				Type.map_expr loop e
 		in
 		let e = loop tf.tf_expr in
 		let ctx_fields = PMap.fold (fun (v,b) acc -> if not b then PMap.add v.v_name v acc else acc) !locals PMap.empty in
-		let fields = PMap.fold (fun v acc -> (v.v_name,mk (TLocal v) v.v_type p) :: acc) ctx_fields [] in
+		let fields = PMap.fold (fun v acc ->
+			let e = match v.v_name,ethis with
+				| "this",Some e -> e
+				| _ -> mk (TLocal v) v.v_type p
+			in
+			(v.v_name,e) :: acc
+		) ctx_fields [] in
 		let eobj = Expr.mk_obj_decl fields p in
 		let t = TFun((ctx_name,false,eobj.etype) :: List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args,tf.tf_type) in
 		let cf = Expr.mk_class_field name t true p (Method MethNormal) [] in
@@ -1018,6 +1027,14 @@ module ClosureHandler = struct
 			| _ ->
 				false
 
+	let add_closure_field gen c tf ethis p =
+		let cf,e_init = mk_closure_field gen tf ethis p in
+		c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
+		c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
+		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
+		let e_ctx = Expr.mk_obj_decl ["_this",e_init;"_func",e_field] p in
+		e_ctx
+
 	let filter gen e =
 		match e.eexpr with
 		| TFunction tf ->
@@ -1026,12 +1043,7 @@ module ClosureHandler = struct
 				| _ :: [],_ ->
 					{e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})}
 				| _,Some (TClassDecl c) ->
-					let cf,e_init = mk_closure_field gen tf e.epos in
-					c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
-					c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
-					let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type e.epos in
-					let e_ctx = Expr.mk_obj_decl ["_this",e_init;"_func",e_field] e.epos in
-					e_ctx
+					add_closure_field gen c tf None e.epos
 				| _ ->
 					assert false
 			in
@@ -1047,6 +1059,8 @@ module ClosureHandler = struct
 			let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
 			let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
 			mk (TCast(ternary_hack,None)) r e.epos
+		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
+			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
 			Type.map_expr gen.map e
 end
@@ -2167,13 +2181,13 @@ let generate_anon con name fields =
 	print ctx "%s* new_%s(%s) {" name name (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) fields));
 	let b = open_block ctx in
 	newline ctx;
-	print ctx "%s* this = (%s*) malloc(sizeof(%s))" name name name;
+	print ctx "%s* _hx_this = (%s*) malloc(sizeof(%s))" name name name;
 	List.iter (fun cf ->
 		newline ctx;
-		print ctx "this->%s = %s" cf.cf_name cf.cf_name;
+		print ctx "_hx_this->%s = %s" cf.cf_name cf.cf_name;
 	) fields;
 	newline ctx;
-	spr ctx "return this";
+	spr ctx "return _hx_this";
 	b();
 	newline ctx;
 	spr ctx "}";
