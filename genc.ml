@@ -781,10 +781,14 @@ let sort_anon_fields fields =
 
 let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 
-let mk_closure_field con tf p =
+let alloc_temp_func con =
 	let id = con.num_temp_funcs in
 	con.num_temp_funcs <- con.num_temp_funcs + 1;
 	let name = "_hx_func_" ^ (string_of_int id) in
+	name, id
+
+let mk_closure_field con tf p =
+	let name,id = alloc_temp_func con in
 	let locals = ref PMap.empty in
 	List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) tf.tf_args;
 	let rec loop e = match e.eexpr with
@@ -1679,10 +1683,9 @@ let mk_array_decl ctx el t p =
 		| TInst(_,[t]) -> s_type ctx t, Expr.mk_type_param ctx.con p t
 		| _ -> assert false
 	in
-	let name = "_hx_func_" ^ (string_of_int ctx.con.num_temp_funcs) in
+	let name,_ = alloc_temp_func ctx.con in
 	let arity = List.length el in
 	print ctx "Array* %s(%s) {" name (String.concat "," (ExtList.List.mapi (fun i e -> Printf.sprintf "%s v%i" (s_type ctx e.etype) i) el));
-	ctx.con.num_temp_funcs <- ctx.con.num_temp_funcs + 1;
 	let bl = open_block ctx in
 	newline ctx;
 	print ctx "%s arr[%i]" ts arity;
