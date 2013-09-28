@@ -1040,6 +1040,7 @@ module ClosureHandler = struct
 		wrap_function e_init e_field
 
 	let is_call_expr = ref false
+	let is_extern = ref false
 
 	let filter gen e =
 		match e.eexpr with
@@ -1056,12 +1057,13 @@ module ClosureHandler = struct
 			fstack := List.tl !fstack;
 			e1
 		| TCall(e1,el) ->
-			let old = !is_call_expr in
+			let old = !is_call_expr,!is_extern in
 			is_call_expr := true;
+			is_extern := (match e1.eexpr with TField(_,FStatic({cl_extern = true},_)) -> true | _ -> false);
 			let e1 = gen.map e1 in
-			is_call_expr := old;
+			is_call_expr := fst old;
 			let el = List.map gen.map el in
-			if is_closure_expr e1 then begin
+			let e = if not !is_extern && is_closure_expr e1 then begin
 				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
 				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
 				let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic e.epos in
@@ -1073,7 +1075,10 @@ module ClosureHandler = struct
 				mk (TCast(ternary_hack,None)) r e.epos
 			end else
 				{e with eexpr = TCall(e1,el)}
-		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not (m = MethDynamic) ->
+			in
+			is_extern := snd old;
+			e
+		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not (m = MethDynamic) && not !is_extern ->
 			wrap_static_function (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
