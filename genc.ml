@@ -2297,15 +2297,6 @@ let generate_hxc_files con =
 	generate_init_file con;
 	generate_make_file con
 
-let get_type com path = try
-	match List.find (fun md -> Type.t_path md = path) com.types with
-	| TClassDecl c -> TInst(c, List.map snd c.cl_types)
-	| TEnumDecl e -> TEnum(e, List.map snd e.e_types)
-	| TTypeDecl t -> TType(t, List.map snd t.t_types)
-	| TAbstractDecl a -> TAbstract(a, List.map snd a.a_types)
-with | Not_found ->
-	failwith("The type " ^ Ast.s_type_path path ^ " is required and was not found")
-
 let add_filters con =
 	(* ascending priority *)
 	Filters.add_filter con ExprTransformation.filter;
@@ -2317,59 +2308,78 @@ let add_filters con =
 	Filters.add_filter con DefaultValues.filter
 
 let generate com =
-	let c_lib = match follow (get_type com (["c"],"Lib")) with
-		| TInst(c,_) -> c
-		| _ -> assert false
+	let rec find_class path mtl = match mtl with
+		| TClassDecl c :: _ when c.cl_path = path -> c
+		| _ :: mtl -> find_class path mtl
+		| [] -> assert false
 	in
-	let hxc = {
-		t_typeref = (match follow (get_type com ([],"typeref")) with
-			| TInst(c,_) -> fun t -> TInst(c,[t])
-			| _ -> assert false);
-		t_pointer = (match get_type com (["c"],"Pointer") with
-			| TAbstract(a,_) ->
-				(* HACK: Pointer is actually a @:coreType *)
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
-				(fun t -> TAbstract(a,[t]))
-			| _ -> assert false);
-		t_const_pointer = (match get_type com (["c"],"ConstPointer") with
-			| TAbstract(a,_) ->
-				(* HACK: Pointer is actually a @:coreType *)
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
-				(fun t -> TAbstract(a,[t]))
-			| _ -> assert false);
-		t_int64 = (match get_type com (["c"],"Int64") with
-			| TAbstract(a,_) ->
-				(* HACK: Pointer is actually a @:coreType *)
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
-				(fun t -> TAbstract(a,[t]))
-			| _ -> assert false);
-		t_jmp_buf = get_type com ([],"jmp_buf");
-		c_lib = c_lib;
-		c_boot = (match get_type com ([],"hxc") with
-			| TInst(c,_) -> c
-			| _ -> assert false);
-		c_exception = (match get_type com (["c"],"Exception") with
-			| TInst(c,_) -> c
-			| _ -> assert false);
-		c_string = (match get_type com ([],"String") with
-			| TInst(c,_) -> c
-			| _ -> assert false);
-		c_cstring = (match get_type com (["c"],"CString") with
-			| TInst(c,_) -> c
-			| _ -> assert false);
-		c_cstdlib = (match get_type com (["c"],"CStdlib") with
-			| TInst(c,_) -> c
-			| _ -> assert false);
-		c_csetjmp = (match get_type com (["c"],"CSetjmp") with
-			| TInst(c,_) -> c
-			| _ -> assert false);
-		c_bool = (match get_type com ([],"Bool") with
-            | TAbstract(a,_) -> a
-            | _ -> assert false);
-		cf_addressof = PMap.find "getAddress" c_lib.cl_statics;
-		cf_deref = PMap.find "dereference" c_lib.cl_statics;
-		cf_sizeof = PMap.find "sizeof" c_lib.cl_statics;
+	let c_lib = find_class (["c"],"Lib") com.types in
+	let null_func _ = assert false in
+	let null_abstract = {
+		a_path = [],"";
+		a_private = false;
+		a_module = null_module;
+		a_pos = null_pos;
+		a_doc = None;
+		a_types = [];
+		a_meta = [];
+		a_from = [];
+		a_to = [];
+		a_ops = [];
+		a_unops = [];
+		a_impl = None;
+		a_array = [];
+		a_this = mk_mono();
 	} in
+	let hxc = List.fold_left (fun acc mt -> match mt with
+		| TClassDecl c ->
+			begin match c.cl_path with
+				| [],"typeref" -> {acc with t_typeref = fun t -> TInst(c,[t])}
+				| [],"jmp_buf" -> {acc with t_jmp_buf = TInst(c,[])}
+				| [],"hxc" -> {acc with c_boot = c}
+				| [],"String" -> {acc with c_string = c}
+				| ["c"],"Exception" -> {acc with c_exception = c}
+				| ["c"],"CString" -> {acc with c_cstring = c}
+				| ["c"],"CStdlib" -> {acc with c_cstdlib = c}
+				| ["c"],"CSetjmp" -> {acc with c_csetjmp = c}
+				| _ -> acc
+			end
+		| TAbstractDecl a ->
+			begin match a.a_path with
+			| ["c"],"Pointer" ->
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				{acc with t_pointer = fun t -> TAbstract(a,[t])}
+			| ["c"],"ConstPointer" ->
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				{acc with t_const_pointer = fun t -> TAbstract(a,[t])}
+			| ["c"],"Int64" ->
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				{acc with t_int64 = fun t -> TAbstract(a,[t])}
+			| [],"Bool" ->
+				{acc with c_bool = a}
+			| _ ->
+				acc
+			end
+		| _ ->
+			acc
+	) {
+		c_lib = c_lib;
+		cf_deref = PMap.find "dereference" c_lib.cl_statics;
+		cf_addressof = PMap.find "getAddress" c_lib.cl_statics;
+		cf_sizeof = PMap.find "sizeof" c_lib.cl_statics;
+		t_typeref = null_func;
+		t_pointer = null_func;
+		t_const_pointer = null_func;
+		t_int64 = null_func;
+		t_jmp_buf = t_dynamic;
+		c_boot = null_class;
+		c_exception = null_class;
+		c_string = null_class;
+		c_cstring = null_class;
+		c_csetjmp = null_class;
+		c_cstdlib = null_class;
+		c_bool = null_abstract;
+	} com.types in
 	let con = {
 		com = com;
 		hxc = hxc;
