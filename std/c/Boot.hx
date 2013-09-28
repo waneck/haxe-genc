@@ -31,7 +31,7 @@ typedef struct hx_closure {
 ')
 @:keep @:native('hxc') class Boot {
 	
-	static public var mainFunc:Void->Void;
+	static public var mainFunc:Void->Dynamic;
 	static public var argc:Int;
 	static public var argv:Pointer<Pointer<Char>>;
 	

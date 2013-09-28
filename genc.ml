@@ -832,9 +832,6 @@ module TypeChecker = struct
 			{ e with eexpr = TMeta(m,check gen e1 t)}
 		| TParenthesis(e1),t ->
 			{ e with eexpr = TParenthesis(check gen e1 t)}
-		| TField(e1,FStatic(c,cf)),TFun _ when cf.cf_name = "compare" ->
-			let e_field = Expr.mk_static_field c cf e.epos in
-			Expr.mk_obj_decl ["_this",mk (TConst TNull) (mk_mono()) e.epos;"_func",e_field] e.epos
 		| _ ->
 			e
 
@@ -1020,7 +1017,7 @@ module ClosureHandler = struct
 	let rec is_closure_expr e =
 		match e.eexpr with
 			| TLocal _
-			| TField(_,FInstance(_,{cf_kind = Var _})) ->
+			| TField(_,(FInstance(_,{cf_kind = Var _}) | FStatic(_,{cf_kind = Var _}))) ->
 				true
 			| TMeta(_,e1) | TParenthesis(e1) ->
 				is_closure_expr e1
@@ -1034,6 +1031,8 @@ module ClosureHandler = struct
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
 		let e_ctx = Expr.mk_obj_decl ["_this",e_init;"_func",e_field] p in
 		e_ctx
+
+	let is_call_expr = ref false
 
 	let filter gen e =
 		match e.eexpr with
@@ -1059,6 +1058,15 @@ module ClosureHandler = struct
 			let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
 			let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
 			mk (TCast(ternary_hack,None)) r e.epos
+		| TCall(e1,el) ->
+			let old = !is_call_expr in
+			is_call_expr := true;
+			let e1 = gen.map e1 in
+			is_call_expr := old;
+			{e with eexpr = TCall(e1,List.map gen.map el)}
+		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && m <> MethDynamic ->
+ 			let e_field = Expr.mk_static_field c cf e.epos in
+			Expr.mk_obj_decl ["_this",mk (TConst TNull) (mk_mono()) e.epos;"_func",e_field] e.epos
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
@@ -1396,16 +1404,15 @@ let rec s_type ctx t =
 			add_dependency ctx DFull (["c"],signature);
 			"c_" ^ signature ^ "*"
 		end
-	| TFun(args,ret) -> Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
+	| TFun(args,ret) ->
+		(* Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args)) *)
+		"hx_closure*";
 	| _ -> "void*"
 
 let s_type_with_name ctx t n =
 	match follow t with
 	| TFun(args,ret) ->
-		if n = "hxc_mainFunc" then
-			Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
-		else
-			"hx_closure* " ^ n
+		"hx_closure* " ^ n
 	| _ ->
 		(s_type ctx t) ^ " " ^ n
 
