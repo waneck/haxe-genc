@@ -1900,9 +1900,7 @@ and generate_expr ctx e = match e.eexpr with
 		) dt.dt_dt_lookup;
 		print ctx "%s: {}" (mk_label (Array.length dt.dt_dt_lookup));
 		newline ctx;
-	| TFunction _ ->
-		print_endline ("Not implemented yet: " ^ (Expr.debug ctx e))
-	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ ->
+	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ | TFunction _ ->
 		(* handled in field init pass *)
 		assert false
 
