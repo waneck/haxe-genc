@@ -86,6 +86,10 @@ and gen_context = {
 	(* tvar_decl -> unit; declares a variable on the current block *)
 	mutable declare_var : (tvar * texpr option) -> unit;
 	mutable declare_temp : t -> texpr option -> tvar;
+	(* runs a filter on the specified class field *)
+	mutable run_filter : tclass_field -> unit;
+	(* adds a field to the specified class *)
+	mutable add_field : tclass -> tclass_field -> bool -> unit;
 	(* delays to run after all filters are done *)
 	mutable delays : (unit -> unit) list;
 }
@@ -303,8 +307,15 @@ module Filters = struct
 		gen.declare_var <- old_declare;
 		ret
 
+	let run_filters_field gen cf =
+		gen.gfield <- cf;
+		match cf.cf_expr with
+		| None -> ()
+		| Some e ->
+			cf.cf_expr <- Some (run_filters gen e)
+
 	let mk_gen_context con =
-		{
+		let gen = {
 			gcom = con.com;
 			gcon = con;
 			gfield = null_field;
@@ -312,15 +323,16 @@ module Filters = struct
 			map = (function _ -> assert false);
 			declare_var = (fun _ -> assert false);
 			declare_temp = (fun _ _ -> assert false);
+			run_filter = (fun _ -> assert false);
+			add_field = (fun c cf stat ->
+				if stat then
+					c.cl_ordered_statics <- cf :: c.cl_ordered_statics
+				else
+					c.cl_ordered_fields <- cf :: c.cl_ordered_fields);
 			delays = [];
-		}
-
-	let run_filters_field gen cf =
-		gen.gfield <- cf;
-		match cf.cf_expr with
-		| None -> ()
-		| Some e ->
-			cf.cf_expr <- Some (run_filters gen e)
+		} in
+		gen.run_filter <- (run_filters_field gen);
+		gen
 
 	let initialize_class con c =
 		let add_init e = match c.cl_init with
@@ -387,9 +399,11 @@ module Filters = struct
 			| TClassDecl c ->
 				gen.mtype <- Some md;
 				initialize_class con c;
+				let fields = c.cl_ordered_fields in
+				let statics = c.cl_ordered_statics in
 				Option.may (run_filters_field gen) c.cl_constructor;
-				List.iter (run_filters_field gen) c.cl_ordered_fields;
-				List.iter (run_filters_field gen) c.cl_ordered_statics;
+				List.iter (run_filters_field gen) fields;
+				List.iter (run_filters_field gen) statics;
 				gen.gfield <- null_field;
 				c.cl_init <- Option.map (run_filters gen) c.cl_init
 			| _ -> ()
