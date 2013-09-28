@@ -1008,7 +1008,7 @@ end
 	It also handles call to closures, i.e. local variables and Var class fields.
 *)
 module ClosureHandler = struct
-	let map_closure_type gen t = t
+	let fstack = ref []
 
 	let mk_closure_field gen tf ethis p =
 		let name,id = alloc_temp_func gen.gcon in
@@ -1018,9 +1018,7 @@ module ClosureHandler = struct
 		let v_ctx = alloc_var ctx_name t_dynamic in
 		let e_ctx = mk (TLocal v_ctx) v_ctx.v_type p in
 		let v_this = alloc_var "this" t_dynamic in
-		let mk_ctx_field v =
-			mk (TField(e_ctx,FDynamic v.v_name)) v.v_type p
-		in
+		let mk_ctx_field v = mk (TField(e_ctx,FDynamic v.v_name)) v.v_type p in
 		let rec loop e = match e.eexpr with
 			| TVars vl ->
 				{e with eexpr = TVars (List.map (fun (v,eo) -> locals := PMap.add v.v_name (v,true) !locals; v,match eo with None -> None | Some e -> Some (loop e)) vl)};
@@ -1036,25 +1034,30 @@ module ClosureHandler = struct
 			| TConst TThis ->
 				if not (PMap.mem v_this.v_name !locals) then locals := PMap.add v_this.v_name (v_this,false) !locals;
 				mk_ctx_field v_this
+			| TFunction _ ->
+				e
 			| _ ->
 				Type.map_expr loop e
 		in
 		let e = loop tf.tf_expr in
 		let ctx_fields = PMap.fold (fun (v,b) acc -> if not b then PMap.add v.v_name v acc else acc) !locals PMap.empty in
-		let fields = PMap.fold (fun v acc ->
+		let vars,fields = PMap.fold (fun v (vars,fields) ->
 			let e = match v.v_name,ethis with
 				| "this",Some e -> e
 				| _ -> mk (TLocal v) v.v_type p
 			in
-			(v.v_name,e) :: acc
-		) ctx_fields [] in
+			(v :: vars),((v.v_name,e) :: fields)
+		) ctx_fields ([],[]) in
 		let eobj = Expr.mk_obj_decl fields p in
 		let t = TFun((ctx_name,false,eobj.etype) :: List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args,tf.tf_type) in
 		let cf = Expr.mk_class_field name t true p (Method MethNormal) [] in
-		cf.cf_expr <- Some e;
+		let tf = {
+			tf_args = List.map (fun v -> v,None) vars;
+			tf_type = tf.tf_type;
+			tf_expr = e;
+		} in
+		cf.cf_expr <- Some (mk (TFunction tf) e.etype e.epos);
 		cf,eobj
-
-	let fstack = ref []
 
 	let rec is_closure_expr e =
 		match e.eexpr with
