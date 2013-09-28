@@ -1010,49 +1010,66 @@ end
 module ClosureHandler = struct
 	let fstack = ref []
 
+	let ctx_name = "_ctx"
+
 	let mk_closure_field gen tf ethis p =
-		let name,id = alloc_temp_func gen.gcon in
 		let locals = ref PMap.empty in
-		List.iter (fun (v,_) -> locals := PMap.add v.v_name (v,true) !locals) tf.tf_args;
-		let ctx_name = "_ctx" in
-		let v_ctx = alloc_var ctx_name t_dynamic in
-		let e_ctx = mk (TLocal v_ctx) v_ctx.v_type p in
+		let unknown = ref PMap.empty in
+		let save_locals () =
+			let old = !locals in
+			fun () -> locals := old
+		in
+		let add_local v = if not (PMap.mem v.v_name !locals) then locals := PMap.add v.v_name v !locals in
+		let add_unknown v = if not (PMap.mem v.v_name !unknown) then unknown := PMap.add v.v_name v !unknown in
+		List.iter (fun (v,_) -> add_local v) tf.tf_args;
 		let v_this = alloc_var "this" t_dynamic in
-		let mk_ctx_field v = mk (TField(e_ctx,FDynamic v.v_name)) v.v_type p in
+		let t_ctx = mk_mono() in
+		let v_ctx = alloc_var ctx_name t_ctx in
+		let e_ctx = mk (TLocal v_ctx) v_ctx.v_type p in
+		let mk_ctx_field v =
+			let ef = mk (TField(e_ctx,FDynamic v.v_name)) v.v_type p in
+			mk (TCast(ef,None)) v.v_type p
+		in
 		let rec loop e = match e.eexpr with
 			| TVars vl ->
-				{e with eexpr = TVars (List.map (fun (v,eo) -> locals := PMap.add v.v_name (v,true) !locals; v,match eo with None -> None | Some e -> Some (loop e)) vl)};
+				let vl = List.map (fun (v,eo) ->
+					add_local v;
+					v,match eo with None -> None | Some e -> Some (loop e)
+				) vl in
+				{ e with eexpr = TVars vl }
 			| TLocal v ->
-				begin try
-					let (_,b) = PMap.find v.v_name !locals in
-					if not b then mk_ctx_field v
-					else e;
-				with Not_found ->
-					locals := PMap.add v.v_name (v,false) !locals;
-					mk_ctx_field v
-				end
-			| TConst TThis ->
-				if not (PMap.mem v_this.v_name !locals) then locals := PMap.add v_this.v_name (v_this,false) !locals;
-				mk_ctx_field v_this
-			| TFunction _ ->
+				if not (PMap.mem v.v_name !locals) then begin
+					add_unknown v;
+					mk_ctx_field v;
+				end else
+					e
+			| TFunction tf ->
+				let save = save_locals() in
+				List.iter (fun (v,_) -> add_local v) tf.tf_args;
+				let e = { e with eexpr = TFunction { tf with tf_expr = loop tf.tf_expr } } in
+				save();
 				e
+			| TConst TThis ->
+				if not (PMap.mem v_this.v_name !locals) then add_unknown v_this;
+				mk_ctx_field v_this
 			| _ ->
 				Type.map_expr loop e
 		in
 		let e = loop tf.tf_expr in
-		let ctx_fields = PMap.fold (fun (v,b) acc -> if not b then PMap.add v.v_name v acc else acc) !locals PMap.empty in
+		let name,id = alloc_temp_func gen.gcon in
 		let vars,fields = PMap.fold (fun v (vars,fields) ->
 			let e = match v.v_name,ethis with
 				| "this",Some e -> e
 				| _ -> mk (TLocal v) v.v_type p
 			in
 			(v :: vars),((v.v_name,e) :: fields)
-		) ctx_fields ([],[]) in
+		) !unknown ([],[]) in
 		let eobj = Expr.mk_obj_decl fields p in
+		Type.unify eobj.etype t_ctx;
 		let t = TFun((ctx_name,false,eobj.etype) :: List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args,tf.tf_type) in
 		let cf = Expr.mk_class_field name t true p (Method MethNormal) [] in
 		let tf = {
-			tf_args = List.map (fun v -> v,None) vars;
+			tf_args = (v_ctx,None) :: List.map (fun v -> v,None) vars;
 			tf_type = tf.tf_type;
 			tf_expr = e;
 		} in
