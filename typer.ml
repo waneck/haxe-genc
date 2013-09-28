@@ -4065,9 +4065,29 @@ let explode_expressions ctx e =
 				push (loop e)
 			) el;
 			{ e with eexpr = TBlock (close())}
-		| TWhile(e1,e2,DoWhile) ->
+		| TWhile(e1,e2,wt) ->
+			let _,close = push_block() in
 			let e1 = simplify e1 in
-			{ e with eexpr = TWhile(e1,loop e2,DoWhile)}
+			let e2 = loop e2 in
+			let el = close() in
+			(* move var declarations to outer scope so while condition can access it *)
+			let el = List.map (fun e ->
+				match e.eexpr with
+				| TVars vl ->
+					let vl,el = List.fold_left (fun (vl,el) (v,eo) ->
+						((v,match wt with DoWhile -> None | _ -> eo) :: vl),match eo with
+							| None -> el
+							| Some e ->
+								let ev = mk (TLocal v) v.v_type e.epos in
+								(mk (TBinop(OpAssign,ev,e)) e.etype e.epos) :: el
+					) ([],[]) vl in
+					push_top {e with eexpr = TVars vl};
+					mk (TBlock el) t_dynamic e.epos
+				| _ ->
+					e
+			) el in
+			let e2 = Codegen.concat e2 (mk (TBlock el) e2.etype e2.epos) in
+			{ e with eexpr = TWhile(e1,e2,wt)}
 		| TIf(e1,e2,e3) ->
 			let e1 = simplify e1 in
 			{e with eexpr = TIf(e1,loop e2,opt loop e3)}
