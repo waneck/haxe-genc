@@ -233,6 +233,12 @@ let get_type_id con t =
 		con.type_ids <- PMap.add id con.num_identified_types con.type_ids;
 		con.num_identified_types
 
+let wrap_function ethis efunc =
+	Expr.mk_obj_decl ["_this",ethis;"_func",efunc] efunc.epos
+
+let wrap_static_function efunc =
+	wrap_function (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
+
 module Filters = struct
 
 	let add_filter con filter =
@@ -329,13 +335,15 @@ module Filters = struct
 					c.cl_ordered_statics <- cf2 :: c.cl_ordered_statics;
 					c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
 					let ef1 = Expr.mk_static_field c cf cf.cf_pos in
-					add_init (Codegen.binop OpAssign ef1 (Expr.mk_static_field c cf2 cf2.cf_pos) ef1.etype ef1.epos);
+					let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
+					let ef2 = wrap_static_function ef2 in
+					add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
 				end else begin
 					c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
 					c.cl_fields <- PMap.add cf2.cf_name cf2 c.cl_fields
 				end;
 				cf.cf_expr <- None;
-				cf.cf_type <- con.hxc.t_pointer cf.cf_type;
+				cf.cf_kind <- Var {v_read = AccNormal; v_write = AccNormal};
 			| _ ->
 				()
 		in
@@ -1017,7 +1025,7 @@ module ClosureHandler = struct
 	let rec is_closure_expr e =
 		match e.eexpr with
 			| TLocal _
-			| TField(_,(FInstance(_,{cf_kind = Var _}) | FStatic(_,{cf_kind = Var _}))) ->
+			| TField(_,(FInstance(_,{cf_kind = Var _ | Method MethDynamic}) | FStatic(_,{cf_kind = Var _ | Method MethDynamic}))) ->
 				true
 			| TMeta(_,e1) | TParenthesis(e1) ->
 				is_closure_expr e1
@@ -1029,8 +1037,7 @@ module ClosureHandler = struct
 		c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
 		c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
-		let e_ctx = Expr.mk_obj_decl ["_this",e_init;"_func",e_field] p in
-		e_ctx
+		wrap_function e_init e_field
 
 	let is_call_expr = ref false
 
@@ -1064,9 +1071,8 @@ module ClosureHandler = struct
 			let e1 = gen.map e1 in
 			is_call_expr := old;
 			{e with eexpr = TCall(e1,List.map gen.map el)}
-		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && m <> MethDynamic ->
- 			let e_field = Expr.mk_static_field c cf e.epos in
-			Expr.mk_obj_decl ["_this",mk (TConst TNull) (mk_mono()) e.epos;"_func",e_field] e.epos
+		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not (m = MethDynamic) ->
+			wrap_static_function (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
