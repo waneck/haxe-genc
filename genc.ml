@@ -1055,22 +1055,24 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
-		| TCall(ev,el) when is_closure_expr ev ->
-			let args,r = match follow ev.etype with TFun(args,r) -> args,r | _ -> assert false in
-			let efunc = mk (TField(ev,FDynamic "_func")) (TFun(args,r)) e.epos in
-			let ethis = mk (TField(ev,FDynamic "_this")) t_dynamic e.epos in
-			let eif = Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos in
-			let ethen = mk (TCall({efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)},ethis :: el)) e.etype e.epos in
-			let eelse = mk (TCall(efunc,el)) e.etype e.epos in
-			let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
-			let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
-			mk (TCast(ternary_hack,None)) r e.epos
 		| TCall(e1,el) ->
 			let old = !is_call_expr in
 			is_call_expr := true;
 			let e1 = gen.map e1 in
 			is_call_expr := old;
-			{e with eexpr = TCall(e1,List.map gen.map el)}
+			let el = List.map gen.map el in
+			if is_closure_expr e1 then begin
+				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
+				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
+				let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic e.epos in
+				let eif = Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos in
+				let ethen = mk (TCall({efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)},ethis :: el)) e.etype e.epos in
+				let eelse = mk (TCall(efunc,el)) e.etype e.epos in
+				let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
+				let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
+				mk (TCast(ternary_hack,None)) r e.epos
+			end else
+				{e with eexpr = TCall(e1,el)}
 		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not (m = MethDynamic) ->
 			wrap_static_function (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
