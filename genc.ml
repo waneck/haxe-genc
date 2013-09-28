@@ -37,6 +37,8 @@ type hxc = {
 	c_lib : tclass;
 	c_boot : tclass;
 	c_string : tclass;
+	c_array : tclass;
+	c_fixed_array : tclass;
 	c_exception : tclass;
 	c_cstring : tclass;
 	c_csetjmp : tclass;
@@ -1124,6 +1126,40 @@ end
 	- TFor is replaced with TWhile
 *)
 module ExprTransformation = struct
+
+	let mk_array_decl gen el t p =
+		let tparam = match follow t with
+			| TInst(_,[t]) -> t
+			| _ -> assert false
+		in
+		let c_fixed_array = gen.gcon.hxc.c_fixed_array in
+		let v = alloc_var "arr" (TInst(c_fixed_array,[tparam])) in
+		let eloc = mk (TLocal v) v.v_type p in
+		let eret = mk (TReturn (Some (Expr.mk_static_call_2 gen.gcon.hxc.c_array "ofNative" [eloc] p))) t_dynamic p in
+		let (vars,einit,arity) = List.fold_left (fun (vl,el,i) e ->
+			let v = alloc_var ("v" ^ (string_of_int i)) tparam in
+			let e = Expr.mk_binop OpAssign (mk (TArray(eloc,Expr.mk_int gen.gcom i p)) tparam p) (mk (TLocal v) v.v_type p) tparam p in
+			(v :: vl,e :: el,i + 1)
+		) ([],[eret],0) el in
+		let vars = List.rev vars in
+		let enew = mk (TNew(c_fixed_array,[tparam],[Expr.mk_int gen.gcon.com arity p;mk (TConst TNull) (mk_mono()) p])) t p in
+		let evar = mk (TVars [v,Some enew]) gen.gcom.basic.tvoid p in
+		let e = mk (TBlock (evar :: einit)) t p in
+		let tf = {
+			tf_args = List.map (fun v -> v,None) vars;
+			tf_type = t;
+			tf_expr = e;
+		} in
+		let name,id = alloc_temp_func gen.gcon in
+		let tfun = TFun (List.map (fun v -> v.v_name,false,v.v_type) vars,t) in
+		let cf = Expr.mk_class_field name tfun true p (Method MethNormal) [] in
+		let efun = mk (TFunction tf) tfun p in
+		cf.cf_expr <- Some efun;
+		let c = match gen.mtype with Some (TClassDecl c) -> c | _ -> assert false in
+		gen.add_field c cf true;
+		gen.run_filter cf;
+		Expr.mk_static_call c cf el p
+
 	let filter gen e =
 		match e.eexpr with
 		| TTry (e1,cl) ->
@@ -1170,6 +1206,14 @@ module ExprTransformation = struct
 				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
 			]) gen.gcom.basic.tvoid e.epos
+		| TArrayDecl [] ->
+			let c,t = match follow (gen.gcon.com.basic.tarray (mk_mono())) with
+				| TInst(c,[t]) -> c,t
+				| _ -> assert false
+			in
+			mk (TNew(c,[t],[Expr.mk_type_param gen.gcon e.epos t])) gen.gcon.com.basic.tvoid e.epos
+		| TArrayDecl el ->
+			mk_array_decl gen el e.etype e.epos
 		| _ ->
 			Type.map_expr gen.map e
 
@@ -1840,32 +1884,6 @@ and generate_expr ctx e = match e.eexpr with
 		(* handled in field init pass *)
 		assert false
 
-let mk_array_decl ctx el t p =
-	let ts, eparam = match follow t with
-		| TInst(_,[t]) -> s_type ctx t, Expr.mk_type_param ctx.con p t
-		| _ -> assert false
-	in
-	let name,_ = alloc_temp_func ctx.con in
-	let arity = List.length el in
-	print ctx "Array* %s(%s) {" name (String.concat "," (ExtList.List.mapi (fun i e -> Printf.sprintf "%s v%i" (s_type ctx e.etype) i) el));
-	let bl = open_block ctx in
-	newline ctx;
-	print ctx "%s arr[%i]" ts arity;
-	newline ctx;
-	ExtList.List.iteri (fun i e ->
-		print ctx "arr[%i] = v%i" i i;
-		newline ctx;
-	) el;
-	spr ctx "return Array_ofPointerCopy(";
-	generate_expr ctx eparam;
-	print ctx ", %d, arr)" arity;
-	bl();
-	newline ctx;
-	spr ctx "}";
-	newline ctx;
-	let ef = Expr.mk_ccode ctx name in
-	mk (TCall(ef,el)) t p
-
 (* Type generation *)
 
 (*
@@ -1874,22 +1892,10 @@ let mk_array_decl ctx el t p =
 	- TArrayDecl introduces an init function which is TCalled
 *)
 let init_field ctx cf =
-	let rec loop e = match e.eexpr with
-		| TArrayDecl [] ->
-			let c,t = match follow (ctx.con.com.basic.tarray (mk_mono())) with
-				| TInst(c,[t]) -> c,t
-				| _ -> assert false
-			in
-			(* TODO: this should probably be done earlier to handle type parameters *)
-			mk (TNew(c,[t],[Expr.mk_type_param ctx.con e.epos t])) ctx.con.com.basic.tvoid e.epos
-		| TArrayDecl el ->
-			mk_array_decl ctx (List.map loop el) e.etype e.epos
-		| _ -> Type.map_expr loop e
-	in
 	match cf.cf_expr with
 		| None -> None
-		| Some {eexpr = TFunction tf} -> Some (loop tf.tf_expr)
-		| Some e -> Some (loop e)
+		| Some {eexpr = TFunction tf} -> Some tf.tf_expr
+		| Some e -> Some e
 
 let generate_function_header ctx c cf stat =
 	let args,ret,s = match follow cf.cf_type with
@@ -2341,6 +2347,8 @@ let generate com =
 				| [],"jmp_buf" -> {acc with t_jmp_buf = TInst(c,[])}
 				| [],"hxc" -> {acc with c_boot = c}
 				| [],"String" -> {acc with c_string = c}
+				| [],"Array" -> {acc with c_array = c}
+				| ["c"],"FixedArray" -> {acc with c_fixed_array = c}
 				| ["c"],"Exception" -> {acc with c_exception = c}
 				| ["c"],"CString" -> {acc with c_cstring = c}
 				| ["c"],"CStdlib" -> {acc with c_cstdlib = c}
@@ -2378,6 +2386,8 @@ let generate com =
 		c_boot = null_class;
 		c_exception = null_class;
 		c_string = null_class;
+		c_array = null_class;
+		c_fixed_array = null_class;
 		c_cstring = null_class;
 		c_csetjmp = null_class;
 		c_cstdlib = null_class;
