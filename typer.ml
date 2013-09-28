@@ -4071,6 +4071,9 @@ let explode_expressions ctx e =
 		| TIf(e1,e2,e3) ->
 			let e1 = simplify e1 in
 			{e with eexpr = TIf(e1,loop e2,opt loop e3)}
+		| TCall({eexpr = TCall(e2,_)} as e1,el1) ->
+			let et = declare_temp e2.etype (Some (loop e1)) e2.epos in
+			{e with eexpr = TCall(et,List.map simplify el1)}
 		| TCall(e1,el) ->
 			{e with eexpr = TCall(loop e1,List.map simplify el)}
 		| TNew(c,tp,el) ->
@@ -4082,7 +4085,7 @@ let explode_expressions ctx e =
 		| _ ->
 			Type.map_expr loop e
 	and simplify e = match e.eexpr with
-		| TIf _ | TBlock _ | TSwitch _ ->
+		| TIf _ | TBlock _ | TSwitch _ | TCall _ ->
 			declare_temp e.etype (Some (loop e)) e.epos
 		| TBinop(op,e1,e2) ->
 			{e with eexpr = TBinop(op, simplify e1, simplify e2)}
