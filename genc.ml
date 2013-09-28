@@ -488,14 +488,14 @@ module TypeParams = struct
 	let get_param_args gen e cf e1 ef = match cf.cf_params with
 		| [] -> []
 		| _ ->
-      let cft = match follow ef.etype with
-        | TInst(c,_) ->
-          apply_params c.cl_types (List.map (fun _ -> mk_mono()) c.cl_types) cf.cf_type
-        (* | TAbstract(a,_) -> apply_params a.a_types p e1.etype *)
-        (* | TEnum(e,_) -> apply_params e.e_types p e1.etype *)
-        | _ ->
-          cf.cf_type
-      in
+	let cft = match follow ef.etype with
+		| TInst(c,_) ->
+			apply_params c.cl_types (List.map (fun _ -> mk_mono()) c.cl_types) cf.cf_type
+		(* | TAbstract(a,_) -> apply_params a.a_types p e1.etype *)
+		(* | TEnum(e,_) -> apply_params e.e_types p e1.etype *)
+		| _ ->
+			cf.cf_type
+	in
 			let params = infer_params gen e.epos cft e1.etype cf.cf_params in
 			List.map (Expr.mk_type_param gen.gcon e.epos) params
 
@@ -575,15 +575,15 @@ module TypeParams = struct
 						[]
 					in
 
-          let rec loop acc el = match el with
-            | [] -> (List.rev acc) @ added_exprs
-            | ({ eexpr = TVars _ } as e) :: el -> loop (e :: acc) el
-            | _ -> (List.rev acc) @ added_exprs @ el
-          in
-          let bl = match mk_block tf.tf_expr with
-            | { eexpr = TBlock(bl) } -> bl
-            | _ -> assert false
-          in
+			let rec loop acc el = match el with
+				| [] -> (List.rev acc) @ added_exprs
+				| ({ eexpr = TVars _ } as e) :: el -> loop (e :: acc) el
+				| _ -> (List.rev acc) @ added_exprs @ el
+			in
+			let bl = match mk_block tf.tf_expr with
+				| { eexpr = TBlock(bl) } -> bl
+				| _ -> assert false
+			in
 
 					cf.cf_expr <- Some { e with
 						eexpr = TFunction({ tf with
@@ -645,10 +645,10 @@ module TypeParams = struct
 			| TNew(c,tl,el) when tl <> [] && c.cl_path <> ([],"typeref") ->
 				let el = List.map (Expr.mk_type_param gen.gcon e.epos) tl @ (List.map gen.map el) in
 				{ e with eexpr = TNew(c,tl,el) }
-      (*
-        FIXME: calls with type parameters are only handled on static / member functions;
-        we still need to decide what to do with function pointers
-      *)
+			(*
+				FIXME: calls with type parameters are only handled on static / member functions;
+				we still need to decide what to do with function pointers
+			*)
 			| TCall(({ eexpr = TField(ef, (FInstance(c,cf) | FStatic(c,cf) as fi)) } as e1), el)
 			when not (Meta.has Meta.Plain cf.cf_meta) && (function_has_type_parameter gen.gcon cf.cf_type || cf.cf_params <> [] && fst c.cl_path <> ["c";"_Pointer"]) ->
 				let ef = gen.map ef in
@@ -656,7 +656,7 @@ module TypeParams = struct
 				(* if return type is a type param, add new element to call params *)
 				let _, applied_ret = get_fun e1.etype in
 				let args, el_last = if is_type_param gen.gcon ret then begin
-          (* TODO: when central temp var handling is (re)done, get_temp here *)
+					(* TODO: when central temp var handling is (re)done, get_temp here *)
 					let v = get_temp applied_ret e.epos in
 					if is_type_param gen.gcon applied_ret then
 						args, [Expr.mk_local v e.epos] (* already a reference var *)
@@ -1494,21 +1494,21 @@ let rec s_type ctx t =
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TAbstract({a_path = [],"Bool"},[]) -> "int"
-    | TAbstract( a, tps ) when Meta.has (Meta.Custom ":int") a.a_meta ->
-        let (meta,el,epos) = Meta.get (Meta.Custom ":int") a.a_meta in
-        (match el with
-         | [(EConst (String s),_)] -> ( match s with
-            | "int64" -> "hx_int64"
-            | "int32" -> "hx_int32"
-            | "int16" -> "hx_int16"
-            | "int8"  -> "hx_int8"
-            | "uint64" -> "hx_uint64"
-            | "uint32" -> "hx_uint32"
-            | "uint16" -> "hx_uint16"
-            | "uint8" -> "hx_uint8"
-            | _ -> s)
-        | _ -> assert false;
-        )
+	| TAbstract( a, tps ) when Meta.has (Meta.Custom ":int") a.a_meta ->
+		let (meta,el,epos) = Meta.get (Meta.Custom ":int") a.a_meta in
+		(match el with
+			| [(EConst (String s),_)] -> ( match s with
+			| "int64" -> "hx_int64"
+			| "int32" -> "hx_int32"
+			| "int16" -> "hx_int16"
+			| "int8"  -> "hx_int8"
+			| "uint64" -> "hx_uint64"
+			| "uint32" -> "hx_uint32"
+			| "uint16" -> "hx_uint16"
+			| "uint8" -> "hx_uint8"
+			| _ -> s)
+			| _ -> assert false;
+	)
 	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
 	| TInst(c,_) ->
 		let ptr = if is_value_type ctx t then "" else "*" in
