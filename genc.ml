@@ -215,17 +215,27 @@ module Expr = struct
 			cf_expr = None;
 			cf_overloads = [];
 		}
+
 	let mk_binop op e1 e2 et p =
 		{ eexpr=TBinop(op,e1,e2); etype=et; epos=p }
 
-    let mk_obj_decl fields p =
-    	let fields = List.sort compare fields in
-    	let t_fields = List.fold_left (fun acc (n,e) ->
-    		let cf = mk_class_field n e.etype true e.epos (Var {v_read = AccNormal; v_write = AccNormal}) [] in
-    		PMap.add n cf acc
-    	) PMap.empty fields in
-    	let t = TAnon {a_fields = t_fields; a_status = ref Closed} in
-    	mk (TObjectDecl fields) t p
+	let mk_obj_decl fields p =
+		let fields = List.sort compare fields in
+		let t_fields = List.fold_left (fun acc (n,e) ->
+			let cf = mk_class_field n e.etype true e.epos (Var {v_read = AccNormal; v_write = AccNormal}) [] in
+			PMap.add n cf acc
+		) PMap.empty fields in
+		let t = TAnon {a_fields = t_fields; a_status = ref Closed} in
+		mk (TObjectDecl fields) t p
+
+	let insert_expr e once f =
+		let el = match e.eexpr with TBlock el -> el | _ -> [e] in
+		let el,found = List.fold_left (fun (acc,found) e ->
+			match f e with
+			| Some e1 when not once || not found -> e :: e1 :: acc,true
+			| _ -> e :: acc,found
+		) ([],false) el in
+		mk (TBlock (List.rev el)) e.etype e.epos,found
 end
 
 let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
@@ -1192,7 +1202,13 @@ module ExprTransformation = struct
 			let epop = Expr.mk_static_call_2 hxc.c_exception "pop" [] p in
 			let loc = alloc_var "_hx_jmp_buf" (hxc.t_pointer hxc.t_jmp_buf) in
 			let epopassign = mk (TVars [loc,Some epop]) gen.gcon.com.basic.tvoid p in
-			let c1 = [Expr.mk_int gen.gcom 0 e.epos],(Codegen.concat (gen.map e1) epop) in
+			let ec1,found = Expr.insert_expr (gen.map e1) true (fun e ->
+				match e.eexpr with
+				| TReturn _ | TBreak _ | TContinue -> Some epop
+				| _ -> None
+			) in
+			let ec1 = if found then ec1 else Codegen.concat ec1 epop in
+			let c1 = [Expr.mk_int gen.gcom 0 e.epos],ec1 in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
 				let eassign = Codegen.binop OpAssign (mk (TVars [v,None]) gen.gcon.com.basic.tvoid p) (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p) v.v_type p in
@@ -1631,6 +1647,9 @@ and generate_expr ctx e = match e.eexpr with
 		spr ctx ")"
 	| TBlock([]) ->
 		spr ctx "{ }"
+	| TBlock [{eexpr = TBlock _} as e1] ->
+		(* TODO: I don't really understand where these come from *)
+		generate_expr ctx e1
 	| TBlock(el) ->
 		spr ctx "{";
 		let b = open_block ctx in
