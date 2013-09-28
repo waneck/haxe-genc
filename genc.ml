@@ -238,7 +238,8 @@ let get_type_id con t =
 		con.num_identified_types
 
 let wrap_function ethis efunc =
-	Expr.mk_obj_decl ["_this",ethis;"_func",efunc] efunc.epos
+	let e = Expr.mk_obj_decl ["_this",ethis;"_func",efunc] efunc.epos in
+	mk (TMeta((Meta.Custom ":closureWrap",[],e.epos),e)) e.etype e.epos
 
 let wrap_static_function efunc =
 	wrap_function (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
@@ -1063,8 +1064,8 @@ module ClosureHandler = struct
 
 	let add_closure_field gen c tf ethis p =
 		let cf,e_init = mk_closure_field gen tf ethis p in
-		c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
-		c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
+		gen.add_field c cf true;
+		gen.run_filter cf;
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
 		wrap_function e_init e_field
 
@@ -1085,6 +1086,8 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
+		| TMeta((Meta.Custom ":closureWrap",_,_),_) ->
+			e
 		| TCall(e1,el) ->
 			let old = !is_call_expr,!is_extern in
 			is_call_expr := true;
