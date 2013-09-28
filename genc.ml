@@ -240,7 +240,9 @@ let get_type_id con t =
 		con.num_identified_types
 
 let wrap_function ethis efunc =
+	let efunc = mk (TCast(efunc,None)) t_dynamic efunc.epos in
 	let e = Expr.mk_obj_decl ["_this",ethis;"_func",efunc] efunc.epos in
+	let e = mk (TCast(e,None)) efunc.etype e.epos in
 	mk (TMeta((Meta.Custom ":closureWrap",[],e.epos),e)) e.etype e.epos
 
 let wrap_static_function efunc =
