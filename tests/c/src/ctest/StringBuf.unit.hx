@@ -1,0 +1,10 @@
+var b = new StringBuf();
+b.toString() == "";
+b.add("foo");
+b.toString() == "foo";
+b.add("bar");
+b.toString() == "foobar";
+b.addChar('z'.code);
+b.toString() == "foobarz";
+b.addSub("babaz", 2);
+b.toString() == "foobarzbaz";

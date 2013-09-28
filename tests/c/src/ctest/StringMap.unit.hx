@@ -1,0 +1,14 @@
+var b = new haxe.ds.StringMap<String>();
+b.set("foo", "bar");
+b.set("foo2", "bar2");
+b.set("foo3", "bar3");
+b.exists("foo") == true;
+b.exists("foo2") == true;
+b.exists("foo3") == true;
+b.exists("foo4") == false;
+b.get("foo") == "bar";
+b.get("foo2") == "bar2";
+b.get("foo3") == "bar3";
+b.set("foo2", "bar4");
+b.exists("foo2") == true;
+b.get("foo2") == "bar4";

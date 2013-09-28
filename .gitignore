@@ -47,3 +47,8 @@
 /haxe.sublime*
 build.bat
 version.ml
+tests/c/dump/
+tests/c/bin/
+tests/c/test.bat
+tests/c/test.hxproj
+tests/c/vcvarsall.bat
