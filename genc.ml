@@ -331,7 +331,6 @@ module Filters = struct
 					c.cl_ordered_fields <- cf :: c.cl_ordered_fields);
 			delays = [];
 		} in
-		gen.run_filter <- (run_filters_field gen);
 		gen
 
 	let initialize_class con c =
@@ -399,13 +398,29 @@ module Filters = struct
 			| TClassDecl c ->
 				gen.mtype <- Some md;
 				initialize_class con c;
+				let added = ref [] in
+				let old_run_filter = gen.run_filter in
+				gen.run_filter <- (fun cf ->
+					added := cf :: !added);
+
 				let fields = c.cl_ordered_fields in
 				let statics = c.cl_ordered_statics in
 				Option.may (run_filters_field gen) c.cl_constructor;
 				List.iter (run_filters_field gen) fields;
 				List.iter (run_filters_field gen) statics;
 				gen.gfield <- null_field;
-				c.cl_init <- Option.map (run_filters gen) c.cl_init
+				c.cl_init <- Option.map (run_filters gen) c.cl_init;
+
+				(* run all added fields *)
+				let rec loop () = match !added with
+					| [] -> ()
+					| hd :: tl ->
+						added := tl;
+						run_filters_field gen hd;
+						loop ()
+				in
+				loop();
+				gen.run_filter <- old_run_filter
 			| _ -> ()
 		) con.com.types;
 		gen
