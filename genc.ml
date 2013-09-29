@@ -1018,7 +1018,6 @@ module StringHandler = struct
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
 		| TBinop((OpEq | OpNotEq) as op,e1,e2) when is_string e1.etype ->
-			gen.gcom.warning "string" e.epos;
 			Expr.mk_binop op
 				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "equals" [gen.map e1; gen.map e2] e1.epos)
 				(Expr.mk_int gen.gcom 1 e1.epos)
@@ -1508,9 +1507,19 @@ let begin_loop ctx =
 		| _ ->
 			assert false
 
+let get_native_name meta =
+	try begin
+		match Meta.get Meta.Native meta with
+			| _,[EConst (String s),_],_ -> Some s
+			| _,_,_ -> None
+	end with Not_found ->
+		None
+
 let full_field_name c cf =
 	if Meta.has Meta.Plain cf.cf_meta then cf.cf_name
-	else (path_to_name c.cl_path) ^ "_" ^ cf.cf_name
+	else match get_native_name cf.cf_meta with
+		| Some n -> n
+		| None -> (path_to_name c.cl_path) ^ "_" ^ cf.cf_name
 
 let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
@@ -1628,6 +1637,14 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
 		ignore(check_include_meta ctx c.cl_meta);
+		print ctx "%s(" name;
+		concat ctx "," (generate_expr ctx) el;
+		spr ctx ")";
+	| TField(_,FStatic(_,cf)),el when Meta.has Meta.Native cf.cf_meta ->
+		let name = match get_native_name cf.cf_meta with
+			| Some s -> s
+			| None -> ctx.con.com.error "String argument expected for @:native" e.epos; "_"
+		in
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx) el;
 		spr ctx ")";
