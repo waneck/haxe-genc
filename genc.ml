@@ -32,6 +32,7 @@ type hxc = {
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
 	t_func_pointer : t -> t;
+	t_closure : t -> t;
 	t_int64 : t -> t;
 	t_jmp_buf : t;
 
@@ -264,7 +265,7 @@ let get_type_id con t =
 
 let wrap_function con ethis efunc =
 	let e = Expr.mk_obj_decl ["_this",ethis;"_func",Expr.mk_cast efunc (con.hxc.t_func_pointer efunc.etype)] efunc.epos in
-	mk (TMeta((Meta.Custom ":closureWrap",[],e.epos),Expr.mk_cast e efunc.etype)) e.etype e.epos
+	Expr.mk_cast e (con.hxc.t_closure efunc.etype)
 
 let wrap_static_function con efunc =
 	wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
@@ -1045,7 +1046,7 @@ module StringHandler = struct
 end
 
 (*
-	This filter turns all non-top TFunction nodes into class fields and creates a hx_closure expression
+	This filter turns all non-top TFunction nodes into class fields and creates a c.Closure object
 	in their place.
 
 	It also handles call to closures, i.e. local variables and Var class fields.
@@ -1119,16 +1120,6 @@ module ClosureHandler = struct
 		cf.cf_expr <- Some (mk (TFunction tf) e.etype e.epos);
 		cf,eobj
 
-	let rec is_closure_expr e =
-		match e.eexpr with
-			| TLocal _
-			| TField(_,(FInstance(_,{cf_kind = Var _ | Method MethDynamic}) | FStatic(_,{cf_kind = Var _ | Method MethDynamic}))) ->
-				true
-			| TMeta(_,e1) | TParenthesis(e1) ->
-				is_closure_expr e1
-			| _ ->
-				false
-
 	let add_closure_field gen c tf ethis p =
 		let cf,e_init = mk_closure_field gen tf ethis p in
 		gen.add_field c cf true;
@@ -1138,6 +1129,16 @@ module ClosureHandler = struct
 
 	let is_call_expr = ref false
 	let is_extern = ref false
+
+	let rec is_closure_expr e =
+		match e.eexpr with
+			| TLocal _
+			| TField(_,(FInstance(_,{cf_kind = Var _ | Method MethDynamic}) | FStatic(_,{cf_kind = Var _ | Method MethDynamic}))) ->
+				true
+			| TMeta(_,e1) | TParenthesis(e1) ->
+				is_closure_expr e1
+			| _ ->
+				false
 
 	let filter gen e =
 		match e.eexpr with
@@ -1153,7 +1154,8 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
-		| TMeta((Meta.Custom ":closureWrap",_,_),_) ->
+		| _ when (match follow e.etype with TInst({cl_path=["c"],"Closure"},_) -> true | _ -> false) ->
+			(* skip previously creates closures *)
 			e
 		| TCall(e1,el) ->
 			let old = !is_call_expr,!is_extern in
@@ -1535,7 +1537,8 @@ let rec s_type ctx t =
 			"char*" (* we will manipulate an array of type parameters like an array of bytes *)
 		| _ -> s_type ctx t ^ "*")
 	| TAbstract({a_path = ["c"],"ConstPointer"},[t]) -> "const " ^ (s_type ctx t) ^ "*"
-	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret)]) ->
+	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
+		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| TInst(({cl_path = [],"typeref"} as c),_) ->
 		add_class_dependency ctx c;
@@ -1579,14 +1582,19 @@ let rec s_type ctx t =
 			"c_" ^ signature ^ "*"
 		end
 	| TFun(args,ret) ->
-		"hx_closure*";
+		let t = ctx.con.hxc.t_closure t in
+		add_type_dependency ctx t;
+		s_type ctx t
 	| _ -> "void*"
 
-let s_type_with_name ctx t n =
+let rec s_type_with_name ctx t n =
 	match follow t with
 	| TFun(args,ret) ->
-		"hx_closure* " ^ n
-	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret)]) ->
+		let t = ctx.con.hxc.t_closure t in
+		add_type_dependency ctx t;
+		s_type_with_name ctx t n
+	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
+		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| _ ->
 		(s_type ctx t) ^ " " ^ n
@@ -1996,7 +2004,7 @@ let generate_typedef_declaration ctx t =
 		print ctx "const void* %s__default = NULL; //default" (path_to_name path);
 	newline ctx;
 	let nullval = Printf.sprintf "&%s__default" (path_to_name path) in
-	Printf.sprintf "const typeref %s__typeref = { \"%s\", sizeof(%s), %s }; //typeref declaration" (path_to_name path) (s_type_path path) (s_type ctx t) nullval
+	Printf.sprintf "const typeref %s__typeref = { \"%s\", %s, sizeof(%s) }; //typeref declaration" (path_to_name path) (s_type_path path) nullval (s_type ctx t)
 
 let generate_method ctx c cf stat =
 	let e = init_field ctx cf in
@@ -2426,6 +2434,7 @@ let generate com =
 				| [],"Array" -> {acc with c_array = c}
 				| ["c"],"FixedArray" -> {acc with c_fixed_array = c}
 				| ["c"],"Exception" -> {acc with c_exception = c}
+				| ["c"],"Closure" -> {acc with t_closure = fun t -> TInst(c,[t])}
 				| ["c"],"CString" -> {acc with c_cstring = c}
 				| ["c"],"CStdlib" -> {acc with c_cstdlib = c}
 				| ["c"],"CSetjmp" -> {acc with c_csetjmp = c}
@@ -2458,6 +2467,7 @@ let generate com =
 		cf_sizeof = PMap.find "sizeof" c_lib.cl_statics;
 		t_typeref = null_func;
 		t_pointer = null_func;
+		t_closure = null_func;
 		t_const_pointer = null_func;
 		t_func_pointer = null_func;
 		t_int64 = null_func;

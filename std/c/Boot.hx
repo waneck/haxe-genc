@@ -5,6 +5,7 @@ import c.TypeReference;
 import c.Types;
 import c.NInt;
 import String;
+import c.Closure;
 
 @:headerCode('
 #ifndef _MSC_VER
@@ -23,11 +24,6 @@ typedef long hx_int32;
 typedef unsigned long long hx_uint64;
 typedef long long hx_int64;
 typedef int Date;
-
-typedef struct hx_closure {
-	void* (*_func)();
-	void* _this;
-} hx_closure;
 ')
 @:keep @:native('hxc') class Boot {
 	
