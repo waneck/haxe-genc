@@ -69,9 +69,11 @@ class Printer {
 			printBinop(op)
 			+ "=";
 	}
-
+	public function printString(s:String) {
+		return '"' + s.split("\n").join("\\n").split("\t").join("\\t").split("'").join("\\'").split('"').join("\\\"") #if sys .split("\x00").join("\\x00") #end + '"';
+	}
 	public function printConstant(c:Constant) return switch(c) {
-		case CString(s): '"$s"';
+		case CString(s): printString(s);
 		case CIdent(s),
 			CInt(s),
 			CFloat(s):
@@ -185,7 +187,7 @@ class Printer {
 						+ (c.expr != null ? (opt(c.expr, printExpr)) + ";" : ""))
 				.join('\n$tabs');
 			if (edef != null)
-				s += '\n${tabs}default: ' + (edef.expr == null ? "" : printExpr(edef)) + ";";
+				s += '\n${tabs}default: ' + (edef.expr == null ? "" : printExpr(edef) + ";");
 			tabs = old;
 			s + '\n$tabs}';
 		case ETry(e1, cl):
@@ -201,7 +203,7 @@ class Printer {
 		case EDisplay(e1, _): '#DISPLAY(${printExpr(e1)})';
 		case EDisplayNew(tp): '#DISPLAY(${printTypePath(tp)})';
 		case ETernary(econd, eif, eelse): '${printExpr(econd)} ? ${printExpr(eif)} : ${printExpr(eelse)}';
-		case ECheckType(e1, ct): '#CHECK_TYPE(${printExpr(e1)}, ${printComplexType(ct)})';
+		case ECheckType(e1, ct): '(${printExpr(e1)} : ${printComplexType(ct)})';
 		case EMeta(meta, e1): printMetadata(meta) + " " +printExpr(e1);
 	}
 

@@ -455,7 +455,7 @@ class TestType extends Test {
 		l.push(ci1);
 		var lmono = new List();
 		eq(pcc.memberComplex(ci1, l), l);
-		eq(pcc.memberComplex(ci1, lmono), lmono);
+		//eq(pcc.memberComplex(ci1, lmono), lmono);
 		//typeError(pcc.memberComplex(ci1, [ci1]));
 
 		eq(pcc.memberBasic("foo", ["bar"]), "bar");
@@ -859,5 +859,13 @@ class TestType extends Test {
 	function testAbstractTypeParameterVariance() {
 		var a:Array<unit.MyAbstract.MyInt> = [1, 2, 3];
 		var b:Array<unit.MyAbstract.MyInt2> = a;
+	}
+	
+	function testExposingAbstract() {
+		#if !macro
+		var ea = new unit.MyAbstract.ExposingAbstract();
+		ea.push(12);
+		eq(12, ea.pop());
+		#end
 	}
 }

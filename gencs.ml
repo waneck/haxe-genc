@@ -722,7 +722,8 @@ let configure gen =
   in
 
   let is_dynamic t = match real_type t with
-    | TMono _ | TDynamic _ -> true
+    | TMono _ | TDynamic _
+    | TInst({ cl_kind = KTypeParameter _ }, _) -> true
     | TAnon anon ->
       (match !(anon.a_status) with
         | EnumStatics _ | Statics _ -> false
@@ -832,7 +833,8 @@ let configure gen =
       | 13 (* \r *) -> Buffer.add_string b "\\r"
       | 10 (* \n *) -> Buffer.add_string b "\\n"
       | 9 (* \t *) -> Buffer.add_string b "\\t"
-      | c when c < 32 || c >= 127 -> Buffer.add_string b (Printf.sprintf "\\u%.4x" c)
+      | c when c < 32 || (c >= 127 && c <= 0xFFFF) -> Buffer.add_string b (Printf.sprintf "\\u%.4x" c)
+      | c when c > 0xFFFF -> Buffer.add_string b (Printf.sprintf "\\U%.8x" c)
       | c -> Buffer.add_char b (Char.chr c)
   in
 
@@ -1015,7 +1017,7 @@ let configure gen =
           write w " as ";
           write w (md_s md);
           write w " )"
-        | TCall ({ eexpr = TLocal( { v_name = "__as__" } ) }, [ expr ] ) ->
+        | TCall ({ eexpr = TLocal( { v_name = "__as__" } ) }, expr :: _ ) ->
           write w "( ";
           expr_s w expr;
           write w " as ";
@@ -1118,6 +1120,8 @@ let configure gen =
             acc + 1
           ) 0 el);
           write w ")"
+        | TNew ({ cl_kind = KTypeParameter _ } as cl, params, el) ->
+          print w "default(%s) /* This code should never be reached. It was produced by the use of @:generic on a new type parameter instance: %s */" (t_s (TInst(cl,params))) (path_param_s (TClassDecl cl) cl.cl_path params)
         | TNew (cl, params, el) ->
           write w "new ";
           write w (path_param_s (TClassDecl cl) cl.cl_path params);
@@ -1674,7 +1678,7 @@ let configure gen =
           begin_block w;
           write w "public static void Main()";
           begin_block w;
-          (if Hashtbl.mem gen.gtypes (["cs"], "Boot") then write w "cs.Boot.init();"; newline w);
+          (if Hashtbl.mem gen.gtypes (["cs"], "Boot") then write w "global::cs.Boot.init();"; newline w);
           expr_s w { eexpr = TTypeExpr(TClassDecl cl); etype = t_dynamic; epos = Ast.null_pos };
           write w ".main();";
           end_block w;
@@ -1712,7 +1716,7 @@ let configure gen =
     if is_main then begin
       write w "public static void Main()";
       begin_block w;
-      (if Hashtbl.mem gen.gtypes (["cs"], "Boot") then write w "cs.Boot.init();"; newline w);
+      (if Hashtbl.mem gen.gtypes (["cs"], "Boot") then write w "global::cs.Boot.init();"; newline w);
       write w "main();";
       end_block w
     end;
@@ -1901,7 +1905,7 @@ let configure gen =
     path_param_s (TClassDecl c) c.cl_path tl ^ "." ^ fname
   in
   FixOverrides.configure ~explicit_fn_name:explicit_fn_name gen;
-  NormalizeType.configure gen;
+  Normalize.configure gen ~metas:(Hashtbl.create 0);
 
   AbstractImplementationFix.configure gen;
 

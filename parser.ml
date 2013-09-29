@@ -82,6 +82,9 @@ let is_resuming p =
 	let p2 = !resume_display in
 	p.pmax = p2.pmin && Common.unique_full_path p.pfile = p2.pfile
 
+let set_resume p =
+	resume_display := { p with pfile = Common.unique_full_path p.pfile }
+
 let is_dollar_ident e = match fst e with
 	| EConst (Ident n) when n.[0] = '$' ->
 		true
@@ -598,7 +601,7 @@ and parse_type_decl s =
 and parse_class doc meta cflags need_name s =
 	let opt_name = if need_name then type_name else (fun s -> match popt type_name s with None -> "" | Some n -> n) in
 	match s with parser
-	| [< n , p1 = parse_class_flags; name = opt_name; tl = parse_constraint_params; hl = psep Comma parse_class_herit; '(BrOpen,_); fl, p2 = parse_class_fields false p1 >] ->
+	| [< n , p1 = parse_class_flags; name = opt_name; tl = parse_constraint_params; hl = psep Comma parse_class_herit; '(BrOpen,_); fl, p2 = parse_class_fields (not need_name) p1 >] ->
 		(EClass {
 			d_name = name;
 			d_doc = doc;
@@ -621,6 +624,7 @@ and parse_import s p1 =
 			| [< '(Binop OpMult,_); '(Semicolon,p2) >] ->
 				p2, List.rev acc, IAll
 			| [< '(Binop OpOr,_) when do_resume() >] ->
+				set_resume p;
 				raise (TypePath (List.rev (List.map fst acc),None))
 			| [< >] ->
 				serror());
@@ -800,6 +804,7 @@ and parse_type_path1 pack = parser
 					else match s with parser
 						| [< '(Const (Ident name),_) when not (is_lower_ident name) >] -> Some name
 						| [< '(Binop OpOr,_) when do_resume() >] ->
+							set_resume p;
 							raise (TypePath (List.rev pack,Some (name,false)))
 						| [< >] -> serror())
 				| [< >] -> None
@@ -903,7 +908,7 @@ and parse_class_field s =
 	match s with parser
 	| [< meta = parse_meta; al = parse_cf_rights true []; s >] ->
 		let name, pos, k = (match s with parser
-		| [< '(Kwd Var,p1); name, _ = ident; s >] ->
+		| [< '(Kwd Var,p1); name, _ = dollar_ident; s >] ->
 			(match s with parser
 			| [< '(POpen,_); i1 = property_ident; '(Comma,_); i2 = property_ident; '(PClose,_) >] ->
 				let t = (match s with parser
@@ -961,7 +966,7 @@ and parse_cf_rights allow_static l = parser
 	| [< >] -> l
 
 and parse_fun_name = parser
-	| [< '(Const (Ident name),_) >] -> name
+	| [< name,_ = dollar_ident >] -> name
 	| [< '(Kwd New,_) >] -> "new"
 
 and parse_fun_param = parser
@@ -1004,7 +1009,7 @@ and parse_class_herit = parser
 	| [< '(Kwd Implements,_); t = parse_type_path >] -> HImplements t
 
 and block1 = parser
-	| [< '(Const (Ident name),p); s >] -> block2 name (Ident name) p s
+	| [< name,p = dollar_ident; s >] -> block2 name (Ident name) p s
 	| [< '(Const (String name),p); s >] -> block2 (quote_ident name) (String name) p s
 	| [< b = block [] >] -> EBlock b
 
@@ -1200,7 +1205,9 @@ and expr_next e1 = parser
 		| [< '(Kwd New,p2) when p.pmax = p2.pmin; s >] -> expr_next (EField (e1,"new") , punion (pos e1) p2) s
 		| [< '(Const (Ident f),p2) when p.pmax = p2.pmin; s >] -> expr_next (EField (e1,f) , punion (pos e1) p2) s
 		| [< '(Dollar v,p2); s >] -> expr_next (EField (e1,"$"^v) , punion (pos e1) p2) s
-		| [< '(Binop OpOr,p2) when do_resume() >] -> display (EDisplay (e1,false),p) (* help for debug display mode *)
+		| [< '(Binop OpOr,p2) when do_resume() >] ->
+			set_resume p;
+			display (EDisplay (e1,false),p) (* help for debug display mode *)
 		| [< >] ->
 			(* turn an integer followed by a dot into a float *)
 			match e1 with
@@ -1209,7 +1216,9 @@ and expr_next e1 = parser
 	| [< '(POpen,p1); s >] ->
 		if is_resuming p1 then display (EDisplay (e1,true),p1);
 		(match s with parser
-		| [< '(Binop OpOr,p2) when do_resume() >] -> display (EDisplay (e1,true),p1) (* help for debug display mode *)
+		| [< '(Binop OpOr,p2) when do_resume() >] ->
+			set_resume p1;
+			display (EDisplay (e1,true),p1) (* help for debug display mode *)
 		| [< params = parse_call_params e1; '(PClose,p2); s >] -> expr_next (ECall (e1,params) , punion (pos e1) p2) s
 		| [< >] -> serror())
 	| [< '(BkOpen,_); e2 = expr; '(BkClose,p2); s >] ->
@@ -1263,7 +1272,7 @@ and parse_switch_cases eswitch cases = parser
 		List.rev cases , None
 
 and parse_catch etry = parser
-	| [< '(Kwd Catch,p); '(POpen,_); name, _ = ident; s >] ->
+	| [< '(Kwd Catch,p); '(POpen,_); name, _ = dollar_ident; s >] ->
 		match s with parser
 		| [< '(DblDot,_); t = parse_complex_type; '(PClose,_); s >] ->
 			(try

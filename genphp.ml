@@ -1158,7 +1158,7 @@ and gen_expr ctx e =
 			let se1 = s_expr_name e1 in
 			let se2 = s_expr_name e2 in
 			if
-				e1.eexpr = TConst (TNull)
+				   e1.eexpr = TConst (TNull)
 				|| e2.eexpr = TConst (TNull)
 			then begin
 				(match e1.eexpr with
@@ -1179,8 +1179,8 @@ and gen_expr ctx e =
 				| _ ->
 					gen_field_op ctx e2);
 			end else if
-					((se1 = "Int" || se1 = "Null<Int>") && (se2 = "Int" || se2 = "Null<Int>"))
-					|| ((se1 = "Float" || se1 = "Null<Float>") && (se2 = "Float" || se2 = "Null<Float>"))
+				   ((se1 = "Int" || se1 = "Null<Int>") && (se2 = "Int" || se2 = "Null<Int>"))
+				|| ((se1 = "Float" || se1 = "Null<Float>") && (se2 = "Float" || se2 = "Null<Float>"))
 			then begin
 				gen_field_op ctx e1;
 				spr ctx s_phop;
@@ -1217,9 +1217,14 @@ and gen_expr ctx e =
 				spr ctx s_phop;
 				gen_field_op ctx e2;
 			end else begin
+				let tmp = define_local ctx "_t" in
+				print ctx "(is_object($%s = " tmp;
 				gen_field_op ctx e1;
-				spr ctx s_op;
+				print ctx ") && !($%s instanceof Enum) ? $%s%s" tmp tmp s_phop;
 				gen_field_op ctx e2;
+				print ctx " : $%s%s" tmp s_op;
+				gen_field_op ctx e2;
+				spr ctx ")";
 			end
 		| _ ->
 			leftside e1;
@@ -1244,7 +1249,7 @@ and gen_expr ctx e =
 			spr ctx ")"
 		);
 	| TMeta (_,e) ->
-		gen_value ctx e
+		gen_expr ctx e
 	| TReturn eo ->
 		(match eo with
 		| None ->
@@ -1725,7 +1730,6 @@ and gen_value ctx e =
 	| TEnumParameter _
 	| TField _
 	| TParenthesis _
-	| TMeta _
 	| TObjectDecl _
 	| TArrayDecl _
 	| TCall _
@@ -1733,6 +1737,8 @@ and gen_value ctx e =
 	| TNew _
 	| TFunction _ ->
 		gen_expr ctx e
+	| TMeta (_,e1) ->
+		gen_value ctx e1
 	| TBlock [] ->
 		()
 	| TCast (e, _)

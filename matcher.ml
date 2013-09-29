@@ -94,6 +94,7 @@ type pattern_ctx = {
 	mutable pc_locals : (string, pvar) PMap.t;
 	mutable pc_sub_vars : (string, pvar) PMap.t option;
 	mutable pc_reify : bool;
+	mutable pc_is_complex : bool;
 }
 
 type matcher = {
@@ -105,6 +106,7 @@ type matcher = {
 	mutable outcomes : (pat list,out) PMap.t;
 	mutable toplevel_or : bool;
 	mutable used_paths : (int,bool) Hashtbl.t;
+	mutable has_extractor : bool;
 }
 
 exception Not_exhaustive of pat * st
@@ -325,7 +327,7 @@ let to_pattern ctx e t =
 			let e = type_expr ctx e (WithType t) in
 			let e = match Optimizer.make_constant_expression ctx ~concat_strings:true e with Some e -> e | None -> e in
 			(match e.eexpr with
-			| TConst c -> mk_con_pat (CConst c) [] t p
+			| TConst c | TCast({eexpr = TConst c},None) -> mk_con_pat (CConst c) [] t p
 			| TTypeExpr mt -> mk_con_pat (CType mt) [] t p
 			| TField(_, FStatic(_,cf)) when is_value_type cf.cf_type ->
 				mk_con_pat (CExpr e) [] cf.cf_type p
@@ -369,6 +371,7 @@ let to_pattern ctx e t =
 				in
 				let el = loop2 0 el tl in
 				List.iter2 (fun m (_,t) -> match follow m with TMono _ -> Type.unify m t | _ -> ()) monos ef.ef_params;
+				pctx.pc_is_complex <- true;
 				mk_con_pat (CEnum(en,ef)) el r p
 			| _ -> perror p)
 		| EConst(Ident "_") ->
@@ -403,6 +406,14 @@ let to_pattern ctx e t =
 							| _ -> ());
 						let et = mk (TTypeExpr (TEnumDecl en)) (TAnon { a_fields = PMap.empty; a_status = ref (EnumStatics en) }) p in
 						mk (TField (et,FEnum (en,ef))) (apply_params en.e_types pl ef.ef_type) p
+					| TAbstract({a_impl = Some c} as a,_) when Meta.has Meta.FakeEnum a.a_meta ->
+						let cf = PMap.find s c.cl_statics in
+						ignore(follow cf.cf_type);
+						let e = begin match cf.cf_expr with
+						| Some ({eexpr = TConst c | TCast({eexpr = TConst c},None)} as e) -> e
+						| _ -> raise Not_found
+						end in
+						e
 					| _ ->
 						let old = ctx.untyped in
 						ctx.untyped <- true;
@@ -420,7 +431,7 @@ let to_pattern ctx e t =
 							error (error_msg (Unify l)) p
 						end;
 						mk_con_pat (CEnum(en,ef)) [] t p
-                    | TConst c ->
+                    | TConst c | TCast({eexpr = TConst c},None) ->
                     	begin try unify_raise ctx ec.etype t ec.epos with Error (Unify _,_) -> raise Not_found end;
                         unify ctx ec.etype t p;
                         mk_con_pat (CConst c) [] t p
@@ -431,27 +442,33 @@ let to_pattern ctx e t =
 					| _ ->
 						raise Not_found);
 			with Not_found ->
-				if not (is_lower_ident s) && s.[0] <> '`' then error "Capture variables must be lower-case" p;
 				begin match get_tuple_types t with
-					| Some _ ->
-						error "Cannot bind tuple" p
+					| Some tl ->
+						let s = String.concat "," (List.map (fun (_,_,t) -> s_type t) tl) in
+						error ("Pattern should be tuple [" ^ s ^ "]") p
 					| None ->
+						if not (is_lower_ident s) && s.[0] <> '`' then error "Capture variables must be lower-case" p;
 						let v = mk_var pctx s t p in
 						mk_pat (PVar (v,p)) v.v_type p
 				end
 			end
 		| (EObjectDecl fl) ->
 			let is_matchable cf = match cf.cf_kind with Method _ | Var {v_read = AccCall} -> false | _ -> true in
-			let is_valid_field_name fields n p =
+			let is_valid_field_name fields co n p =
 				try
 					let cf = PMap.find n fields in
 					if not (is_matchable cf) then error ("Cannot match against method or property with getter " ^ n) p;
+					begin match co with
+					| Some c when not (Typer.can_access ctx c cf false) -> error ("Cannot match against private field " ^ n) p
+					| _ -> ()
+					end
 				with Not_found ->
-					error (unify_error_msg (print_context()) (has_extra_field t n)) p
+					error ((s_type t) ^ " has no field " ^ n ^ " that can be matched against") p;
 			in
+			pctx.pc_is_complex <- true;
 			begin match follow t with
 			| TAnon {a_fields = fields} ->
-				List.iter (fun (n,(_,p)) -> is_valid_field_name fields n p) fl;
+				List.iter (fun (n,(_,p)) -> is_valid_field_name fields None n p) fl;
 				let sl,pl,i = PMap.foldi (fun n cf (sl,pl,i) ->
 					if not (is_matchable cf) then
 						sl,pl,i
@@ -467,7 +484,7 @@ let to_pattern ctx e t =
 				) fields ([],[],0) in
 				mk_con_pat (CFields(i,sl)) pl t p
 			| TInst(c,tl) ->
-				List.iter (fun (n,(_,p)) -> is_valid_field_name c.cl_fields n p) fl;
+				List.iter (fun (n,(_,p)) -> is_valid_field_name c.cl_fields (Some c) n p) fl;
 				let sl,pl,i = PMap.foldi (fun n cf (sl,pl,i) ->
 					if not (is_matchable cf) then
 						sl,pl,i
@@ -483,6 +500,7 @@ let to_pattern ctx e t =
 		| EArrayDecl [] ->
 			mk_con_pat (CArray 0) [] t p
 		| EArrayDecl el ->
+			pctx.pc_is_complex <- true;
 			begin match follow t with
 				| TInst({cl_path=[],"Array"},[t2]) ->
 					let pl = ExtList.List.mapi (fun i e ->
@@ -528,8 +546,10 @@ let to_pattern ctx e t =
 						pc_sub_vars = Some pctx.pc_locals;
 						pc_locals = old;
 						pc_reify = pctx.pc_reify;
+						pc_is_complex = pctx.pc_is_complex;
 					} in
 					let pat2 = loop pctx2 e2 t2 in
+					pctx.pc_is_complex <- pctx2.pc_is_complex;
 					PMap.iter (fun s (_,p) -> if not (PMap.mem s pctx2.pc_locals) then verror s p) pctx.pc_locals;
 					mk_pat (POr(pat1,pat2)) pat2.p_type (punion pat1.p_pos pat2.p_pos);
 			end
@@ -540,13 +560,15 @@ let to_pattern ctx e t =
 		pc_locals = PMap.empty;
 		pc_sub_vars = None;
 		pc_reify = false;
+		pc_is_complex = false;
 	} in
-	loop pctx e t, pctx.pc_locals
+	let x = loop pctx e t in
+	x, pctx.pc_locals, pctx.pc_is_complex
 
 let get_pattern_locals ctx e t =
 	try
-		let _,locals = to_pattern ctx e t in
-		PMap.foldi (fun n (v,_) acc -> PMap.add n v acc) locals PMap.empty
+		let _,locals,_ = to_pattern ctx e t in
+		PMap.foldi (fun n v acc -> PMap.add n v acc) locals PMap.empty
 	with Unrecognized_pattern _ ->
 		PMap.empty
 
@@ -731,6 +753,14 @@ let rec all_ctors mctx t =
 	| TAbstract({a_path = [],"Bool"},_) ->
 		h := PMap.add (CConst(TBool true)) Ast.null_pos !h;
 		h := PMap.add (CConst(TBool false)) Ast.null_pos !h;
+		h,false
+	| TAbstract({a_impl = Some c} as a,pl) when Meta.has Meta.FakeEnum a.a_meta ->
+		List.iter (fun cf ->
+			ignore(follow cf.cf_type);
+			if not (Meta.has Meta.Impl cf.cf_meta) then match cf.cf_expr with
+				| Some {eexpr = TConst c | TCast ({eexpr = TConst c},None)} -> h := PMap.add (CConst c) cf.cf_pos !h
+				| _ -> ()
+		) c.cl_ordered_statics;
 		h,false
 	| TAbstract(a,pl) -> all_ctors mctx (Codegen.Abstract.get_underlying_type a pl)
 	| TInst({cl_path=[],"String"},_)
@@ -919,6 +949,10 @@ let convert_switch ctx st cases loop =
 		mk_index_call ()
 	| TInst({cl_path = [],"Array"},_) as t ->
 		mk (TField (e_st,quick_field t "length")) ctx.t.tint p
+	| TAbstract(a,_) when Meta.has Meta.FakeEnum a.a_meta ->
+		mk (TMeta((Meta.Exhaustive,[],p), e_st)) e_st.etype e_st.epos
+	| TAbstract({a_path = [],"Bool"},_) ->
+		mk (TMeta((Meta.Exhaustive,[],p), e_st)) e_st.etype e_st.epos
 	| _ ->
 		e_st
 	in
@@ -946,6 +980,51 @@ let convert_switch ctx st cases loop =
 		DTGuard(econd,dt_null,Some dt)
 
 (* Decision tree compilation *)
+
+let transform_extractors mctx stl cases =
+	let rec loop cl = match cl with
+		| (epat,eg,e) :: cl ->
+			let ex = ref [] in
+			let exc = ref 0 in
+			let rec find_ex e = match fst e with
+				| EBinop(OpArrow, e1, e2) ->
+					let p = pos e in
+					let ec = EConst (Ident ("__ex" ^ string_of_int (!exc))),snd e in
+					let ecall = match fst e1 with
+						| EConst(Ident s) -> ECall((EField(ec,s),p),[]),p
+						| _ -> ECall(e1,[ec]),p
+					in
+					ex := (ecall,e2) :: !ex;
+					incr exc;
+					ec
+				| _ ->
+					Ast.map_expr find_ex e
+			in
+			let p = pos epat in
+			let epat = find_ex epat in
+			if !exc = 0 then (epat,eg,e) :: loop cl else begin
+				mctx.has_extractor <- true;
+				let esubjects = EArrayDecl (List.map fst !ex),p in
+				let case1 = [EArrayDecl (List.map snd !ex),p],eg,e in
+				let cases = match cl with
+					| [] -> [case1]
+					| [(EConst (Ident "_"),_),_,e] -> case1 :: [[(EConst (Ident "_"),p)],None,e]
+					| _ ->
+						let cl2 = List.map (fun (epat,eg,e) -> [epat],eg,e) (loop cl) in
+						let st = match stl with st :: stl -> st | _ -> error "Unsupported" p in
+						let subj = convert_st mctx.ctx st in
+						let e_subj = Interp.make_ast subj in
+						case1 :: [[(EConst (Ident "_"),p)],None,Some (ESwitch(e_subj,cl2,None),p)]
+				in
+				let eswitch = (ESwitch(esubjects,cases,None)),p in
+				(epat,None,Some eswitch) :: loop cl
+			end
+		| [] ->
+			[]
+	in
+	loop cases
+
+let extractor_depth = ref 0
 
 let match_expr ctx e cases def with_type p =
 	let need_val,with_type,tmono = match with_type with
@@ -989,8 +1068,6 @@ let match_expr ctx e cases def with_type p =
 	(* turn subjects to subterms and handle variable initialization where necessary *)
 	let stl = ExtList.List.mapi (fun i e ->
 		let rec loop e = match e.eexpr with
-			| TField (ef,s) when (match s with FEnum _ -> false | _ -> true) ->
-				mk_st (SField(loop ef,field_name s)) e.etype e.epos
 			| TParenthesis e | TMeta(_,e) ->
 				loop e
 			| TLocal v ->
@@ -1014,14 +1091,19 @@ let match_expr ctx e cases def with_type p =
 		dt_cache = Hashtbl.create 0;
 		dt_lut = DynArray.create ();
 		dt_count = 0;
+		has_extractor = false;
 	} in
 	(* flatten cases *)
 	let cases = List.map (fun (el,eg,e) ->
 		List.iter (fun e -> match fst e with EBinop(OpOr,_,_) -> mctx.toplevel_or <- true; | _ -> ()) el;
 		collapse_case el,eg,e
 	) cases in
-	let add_pattern_locals (pat,locals) =
+	let is_complex = ref false in
+	let cases = transform_extractors mctx stl cases in
+	if mctx.has_extractor then incr extractor_depth;
+	let add_pattern_locals (pat,locals,complex) =
 		PMap.iter (fun n (v,p) -> ctx.locals <- PMap.add n v ctx.locals) locals;
+		if complex then is_complex := true;
 		pat
 	in
 	(* evaluate patterns *)
@@ -1086,7 +1168,7 @@ let match_expr ctx e cases def with_type p =
 	let check_unused () =
 		let unused p =
 			display_error ctx "This pattern is unused" p;
-			let old_error = ctx.on_error in
+ 			let old_error = ctx.on_error in
 			ctx.on_error <- (fun ctx s p -> ctx.on_error <- old_error; raise Exit);
 	 		let check_expr e p =
 				try begin match fst e with
@@ -1145,7 +1227,8 @@ let match_expr ctx e cases def with_type p =
 		error ("Unmatched patterns: " ^ (s_st_r true false st (s_pat pat))) st.st_pos
 	in
 	(* check for unused patterns *)
-	check_unused();
+	if !extractor_depth = 0 then check_unused();
+	if mctx.has_extractor then decr extractor_depth;
 	(* determine type of switch statement *)
 	let t = if not need_val then
 		mk_mono()
@@ -1203,6 +1286,7 @@ let match_expr ctx e cases def with_type p =
 		dt_dt_lookup = DynArray.to_array lut;
 		dt_type = t;
 		dt_var_init = List.rev !var_inits;
+		dt_is_complex = !is_complex;
 	}
 ;;
 match_expr_ref := match_expr;

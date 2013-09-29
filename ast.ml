@@ -33,6 +33,7 @@ module Meta = struct
 		| Allow
 		| Annotation
 		| ArrayAccess
+		| Ast
 		| AutoBuild
 		| Bind
 		| Bitmap
@@ -47,6 +48,7 @@ module Meta = struct
 		| CoreType
 		| CppFileCode
 		| CppNamespaceCode
+		| Dce
 		| Debug
 		| Decl
 		| DefParam
@@ -61,6 +63,7 @@ module Meta = struct
 		| FakeEnum
 		| File
 		| Final
+		| FlatEnum
 		| Font
 		| From
 		| FunctionCode
@@ -121,6 +124,7 @@ module Meta = struct
 		| Sound
 		| Struct
 		| SuppressWarnings
+		| This
 		| Throws
 		| To
 		| ToString

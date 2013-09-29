@@ -271,17 +271,6 @@ let generic_substitute_expr gctx e =
 	in
 	build_expr e
 
-let is_generic_parameter ctx c =
-	(* first check field parameters, then class parameters *)
-	try
-		ignore (List.assoc (snd c.cl_path) ctx.curfield.cf_params);
-		Meta.has Meta.Generic ctx.curfield.cf_meta
-	with Not_found -> try
-		ignore(List.assoc (snd c.cl_path) ctx.type_params);
-		(match ctx.curclass.cl_kind with | KGeneric -> true | _ -> false);
-	with Not_found ->
-		false
-
 let has_ctor_constraint c = match c.cl_kind with
 	| KTypeParameter tl ->
 		List.exists (fun t -> match follow t with
@@ -298,7 +287,7 @@ let rec build_generic ctx c p tl =
 		| TInst (c2,tl) ->
 			(match c2.cl_kind with
 			| KTypeParameter tl ->
-				if not (is_generic_parameter ctx c2) && has_ctor_constraint c2 then
+				if not (Typeload.is_generic_parameter ctx c2) && has_ctor_constraint c2 then
 					error "Type parameters with a constructor cannot be used non-generically" p;
 				recurse := true
 			| _ -> ());
@@ -373,19 +362,41 @@ let rec build_generic ctx c p tl =
 		cg.cl_super <- (match c.cl_super with
 			| None -> None
 			| Some (cs,pl) ->
-				(match apply_params c.cl_types tl (TInst (cs,pl)) with
-				| TInst (cs,pl) when cs.cl_kind = KGeneric ->
+				let find_class subst =
+					let rec loop subst = match subst with
+						| (TInst(c,[]),t) :: subst when c == cs -> t
+						| _ :: subst -> loop subst
+						| [] -> raise Not_found
+					in
+					try
+						if pl <> [] then raise Not_found;
+						let t = loop subst in
+						(* extended type parameter: concrete type must have a constructor, but generic base class must not have one *)
+ 						begin match follow t,c.cl_constructor with
+							| TInst({cl_constructor = None} as cs,_),None -> error ("Cannot use " ^ (s_type_path cs.cl_path) ^ " as type parameter because it is extended and has no constructor") p
+							| _,Some cf -> error "Generics extending type parameters cannot have constructors" cf.cf_pos
+							| _ -> ()
+						end;
+						t
+					with Not_found ->
+						apply_params c.cl_types tl (TInst(cs,pl))
+				in
+				let ts = follow (find_class gctx.subst) in
+				let cs,pl = Typeload.check_extends ctx c ts p in
+				match cs.cl_kind with
+				| KGeneric ->
 					(match build_generic ctx cs p pl with
 					| TInst (cs,pl) -> Some (cs,pl)
 					| _ -> assert false)
-				| TInst (cs,pl) -> Some (cs,pl)
-				| _ -> assert false)
+				| _ -> Some(cs,pl)
 		);
+		Typeload.add_constructor ctx cg p;
 		cg.cl_kind <- KGenericInstance (c,tl);
 		cg.cl_interface <- c.cl_interface;
-		cg.cl_constructor <- (match c.cl_constructor, c.cl_super with
-			| None, None -> None
-			| Some c, _ -> Some (build_field c)
+		cg.cl_constructor <- (match cg.cl_constructor, c.cl_constructor, c.cl_super with
+			| Some ctor, _, _ -> Some ctor
+			| None, None, None -> None
+			| None, Some c, _ -> Some (build_field c)
 			| _ -> error "Please define a constructor for this class in order to use it as generic" c.cl_pos
 		);
 		cg.cl_implements <- List.map (fun (i,tl) ->
@@ -612,8 +623,11 @@ let check_private_path ctx t = match t with
 		()
 
 (* Removes generic base classes *)
+
+let is_removable_class c = c.cl_kind = KGeneric && (has_ctor_constraint c || Meta.has Meta.Remove c.cl_meta)
+
 let remove_generic_base ctx t = match t with
-	| TClassDecl c when c.cl_kind = KGeneric && has_ctor_constraint c ->
+	| TClassDecl c when is_removable_class c ->
 		c.cl_extern <- true
 	| _ ->
 		()
@@ -663,23 +677,24 @@ let add_rtti ctx t =
 		()
 
 (* Removes extern and macro fields, also checks for Void fields *)
+
+let is_removable_field ctx f =
+	Meta.has Meta.Extern f.cf_meta || Meta.has Meta.Generic f.cf_meta
+	|| (match f.cf_kind with
+		| Var {v_read = AccRequire (s,_)} -> true
+		| Method MethMacro -> not ctx.in_macro
+		| _ -> false)
+
 let remove_extern_fields ctx t = match t with
 	| TClassDecl c ->
-		let do_remove f =
-			Meta.has Meta.Extern f.cf_meta || Meta.has Meta.Generic f.cf_meta
-			|| (match f.cf_kind with
-				| Var {v_read = AccRequire (s,_)} -> true
-				| Method MethMacro -> not ctx.in_macro
-				| _ -> false)
-		in
 		if not (Common.defined ctx.com Define.DocGen) then begin
 			c.cl_ordered_fields <- List.filter (fun f ->
-				let b = do_remove f in
+				let b = is_removable_field ctx f in
 				if b then c.cl_fields <- PMap.remove f.cf_name c.cl_fields;
 				not b
 			) c.cl_ordered_fields;
 			c.cl_ordered_statics <- List.filter (fun f ->
-				let b = do_remove f in
+				let b = is_removable_field ctx f in
 				if b then c.cl_statics <- PMap.remove f.cf_name c.cl_statics;
 				not b
 			) c.cl_ordered_statics;
@@ -842,6 +857,8 @@ let promote_complex_rhs ctx e =
 			{ e with eexpr = TMeta(m,loop f e1)}
 		| TReturn _ | TThrow _ ->
 			find e
+		| TCast(e1,None) when ctx.config.pf_ignore_unsafe_cast ->
+			loop f e1
 		| _ ->
 			f (find e)
 	and block el =
@@ -1456,7 +1473,7 @@ module Abstract = struct
 		let ef = mk (TField (ethis,(FStatic (c,cf)))) (map cf.cf_type) p in
 		make_call ctx ef args (map t) p
 
-	let rec check_cast ctx tleft eright p =
+	let rec do_check_cast ctx tleft eright p =
 		let tright = follow eright.etype in
 		let tleft = follow tleft in
 		if tleft == tright then eright else
@@ -1484,13 +1501,13 @@ module Abstract = struct
 					| Some cf ->
 						recurse cf (fun () -> make_static_call ctx c cf a pl [eright] tleft p)
 				end
-			| TDynamic _,_ | _,TDynamic _ ->
+			| TDynamic _,_ | _,TDynamic _ | _, TMono _ | TMono _, _ ->
 				eright
 			| TAbstract({a_impl = Some c} as a,pl),t2 when not (Meta.has Meta.MultiType a.a_meta) ->
 				begin match find_to a pl t2 with
 					| tcf,None ->
 						let tcf = apply_params a.a_types pl tcf in
-						if type_iseq tcf tleft then eright else check_cast ctx tcf eright p
+						if type_iseq tcf tleft then eright else do_check_cast ctx tcf eright p
 					| _,Some cf ->
 						recurse cf (fun () -> make_static_call ctx c cf a pl [eright] tleft p)
 				end
@@ -1498,7 +1515,7 @@ module Abstract = struct
 				begin match find_from a pl t1 t2 with
 					| tcf,None ->
 						let tcf = apply_params a.a_types pl tcf in
-						if type_iseq tcf tleft then eright else check_cast ctx tcf eright p
+						if type_iseq tcf tleft then eright else do_check_cast ctx tcf eright p
 					| _,Some cf ->
 						recurse cf (fun () -> make_static_call ctx c cf a pl [eright] tleft p)
 				end
@@ -1507,30 +1524,33 @@ module Abstract = struct
 		with Not_found ->
 			eright
 
+	let check_cast ctx tleft eright p =
+		if ctx.com.display then eright else do_check_cast ctx tleft eright p
+
+	let find_multitype_specialization a pl p =
+		let m = mk_mono() in
+		let at = apply_params a.a_types pl a.a_this in
+		let _,cfo =
+			try find_to a pl m
+			with Not_found ->
+				let st = s_type (print_context()) at in
+				if has_mono at then
+					error ("Type parameters of multi type abstracts must be known (for " ^ st ^ ")") p
+				else
+					error ("Abstract " ^ (s_type_path a.a_path) ^ " has no @:to function that accepts " ^ st) p;
+		in
+		match cfo with
+			| None -> assert false
+			| Some cf -> cf, follow m
+
 	let handle_abstract_casts ctx e =
 		let rec loop ctx e = match e.eexpr with
 			| TNew({cl_kind = KAbstractImpl a} as c,pl,el) ->
-				(* a TNew of an abstract implementation is only generated if it is a generic abstract *)
-				let at = apply_params a.a_types pl a.a_this in
-				let m = mk_mono() in
-				let _,cfo =
-					try find_to a pl m
-					with Not_found ->
-						let st = s_type (print_context()) at in
-						if has_mono at then
-							error ("Type parameters of multi type abstracts must be known (for " ^ st ^ ")") e.epos
-						else
-							error ("Abstract " ^ (s_type_path a.a_path) ^ " has no @:to function that accepts " ^ st) e.epos;
-				in
-				begin match cfo with
-				| None -> assert false
-				| Some cf ->
-					let m = follow m in
-					let e = make_static_call ctx c cf a pl ((mk (TConst TNull) (TAbstract(a,pl)) e.epos) :: el) m e.epos in
-					{e with etype = m}
-				end
+				(* a TNew of an abstract implementation is only generated if it is a multi type abstract *)
+				let cf,m = find_multitype_specialization a pl e.epos in
+				let e = make_static_call ctx c cf a pl ((mk (TConst TNull) (TAbstract(a,pl)) e.epos) :: el) m e.epos in
+				{e with etype = m}
 			| TCall(e1, el) ->
-				let e1 = loop ctx e1 in
 				begin try
 					begin match e1.eexpr with
 						| TField(e2,fa) ->
@@ -1624,6 +1644,8 @@ module PatternMatchConversion = struct
 		| DTGuard(e,dt1,dt2) ->
 			let ethen = convert_dt cctx dt1 in
 			mk (TIf(e,ethen,match dt2 with None -> None | Some dt -> Some (convert_dt cctx dt))) ethen.etype (punion e.epos ethen.epos)
+		| DTSwitch({eexpr = TMeta((Meta.Exhaustive,_,_),_)},[_,dt],None) ->
+			convert_dt cctx dt
 		| DTSwitch(e_st,cl,dto) ->
 			let def = match dto with None -> None | Some dt -> Some (convert_dt cctx dt) in
 			let cases = group_cases cl in
@@ -1684,20 +1706,21 @@ let detect_usage com =
 
 let pp_counter = ref 1
 
-let post_process filters t =
+let post_process ctx filters t =
 	(* ensure that we don't process twice the same (cached) module *)
 	let m = (t_infos t).mt_module.m_extra in
 	if m.m_processed = 0 then m.m_processed <- !pp_counter;
 	if m.m_processed = !pp_counter then
 	match t with
+	| TClassDecl c when is_removable_class c -> ()
 	| TClassDecl c ->
 		let process_field f =
 			match f.cf_expr with
-			| None -> ()
-			| Some e ->
+			| Some e when not (is_removable_field ctx f) ->
 				Abstract.cast_stack := f :: !Abstract.cast_stack;
 				f.cf_expr <- Some (List.fold_left (fun e f -> f e) e filters);
 				Abstract.cast_stack := List.tl !Abstract.cast_stack;
+			| _ -> ()
 		in
 		List.iter process_field c.cl_ordered_fields;
 		List.iter process_field c.cl_ordered_statics;

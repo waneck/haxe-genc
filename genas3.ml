@@ -593,7 +593,7 @@ and gen_expr ctx e =
 		gen_value ctx e;
 		spr ctx ")";
 	| TMeta (_,e) ->
-		gen_value ctx e
+		gen_expr ctx e
 	| TReturn eo ->
 		if ctx.in_value <> None then unsupported e.epos;
 		(match eo with
@@ -823,7 +823,6 @@ and gen_value ctx e =
 	| TEnumParameter _
 	| TTypeExpr _
 	| TParenthesis _
-	| TMeta _
 	| TObjectDecl _
 	| TArrayDecl _
 	| TCall _
@@ -831,11 +830,18 @@ and gen_value ctx e =
 	| TUnop _
 	| TFunction _ ->
 		gen_expr ctx e
+	| TMeta (_,e1) ->
+		gen_value ctx e1
 	| TCast (e1,None) ->
 		let s = type_str ctx e.etype e1.epos in
-		if s = "*" then
+		begin match s with
+		| "*" ->
 			gen_value ctx e1
-		else begin
+		| "Function" ->
+			spr ctx "((";
+			gen_value ctx e1;
+			print ctx ") as %s)" s;
+		| _ ->
 			print ctx "%s(" s;
 			gen_value ctx e1;
 			spr ctx ")";

@@ -315,6 +315,7 @@ let property ctx p t =
 	| TInst ({ cl_path = [],"Array" },_) ->
 		(match p with
 		| "length" -> ident p, Some KInt, false (* UInt in the spec *)
+		| "map" | "filter" when Common.defined ctx.com Define.NoFlashOverride -> ident (p ^ "HX"), None, true
 		| "copy" | "insert" | "remove" | "iterator" | "toString" | "map" | "filter" -> ident p , None, true
 		| _ -> as3 p, None, false);
 	| TInst ({ cl_path = ["flash"],"Vector" },_) ->
@@ -326,9 +327,14 @@ let property ctx p t =
 	| TInst ({ cl_path = [],"String" },_) ->
 		(match p with
 		| "length" (* Int in AS3/Haxe *) -> ident p, None, false
+		| "charCodeAt" when Common.defined ctx.com Define.NoFlashOverride -> ident (p ^ "HX"), None, true
 		| "charCodeAt" (* use Haxe version *) -> ident p, None, true
 		| "cca" -> as3 "charCodeAt", None, false
 		| _ -> as3 p, None, false);
+	| TInst ({ cl_path = [],"Date" },_) ->
+		(match p with
+		| "toString" when Common.defined ctx.com Define.NoFlashOverride -> ident (p ^ "HX"), None, true
+		| _ -> ident p, None, false)
 	| TAnon a ->
 		(match !(a.a_status) with
 		| Statics { cl_path = [], "Math" } ->
@@ -1365,6 +1371,11 @@ let rec gen_expr_content ctx retval e =
 and gen_call ctx retval e el r =
 	match e.eexpr , el with
 	| TLocal { v_name = "__is__" }, [e;t] ->
+		gen_expr ctx true e;
+		gen_expr ctx true t;
+		write ctx (HOp A3OIs)
+	| TField (_,FStatic ({ cl_path = [],"Std" },{ cf_name = "is" })),[e;{ eexpr = TTypeExpr (TClassDecl _) } as t] ->
+		(* fast inlining of Std.is with known values *)
 		gen_expr ctx true e;
 		gen_expr ctx true t;
 		write ctx (HOp A3OIs)

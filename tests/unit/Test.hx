@@ -238,6 +238,7 @@ class Test #if swf_mark implements mt.Protect #end {
 			new TestType(),
 			new TestOrder(),
 			new TestGADT(),
+			new TestGeneric(),
 			#if !no_pattern_matching
 			new TestMatch(),
 			#end
@@ -256,6 +257,9 @@ class Test #if swf_mark implements mt.Protect #end {
 			#end
 			#if ((dce == "full") && !interp && !as3)
 			new TestDCE(),
+			#end
+			#if ( (java || neko) && !macro && !interp)
+			new TestThreads(),
 			#end
 			//new TestUnspecified(),
 			//new TestRemoting(),

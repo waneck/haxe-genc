@@ -28,13 +28,14 @@ open Typecore
 (* ---------------------------------------------------------------------- *)
 (* API OPTIMIZATIONS *)
 
+(* tells if an expression causes side effects. This does not account for potential null accesses (fields/arrays/ops) *)
 let has_side_effect e =
 	let rec loop e =
 		match e.eexpr with
-		| TConst _ | TLocal _ | TField (_,FEnum _) | TTypeExpr _ | TFunction _ -> ()
-		| TPatMatch _ | TNew _ | TCall _ | TField _ | TEnumParameter _ | TArray _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) -> raise Exit
+		| TConst _ | TLocal _ | TField _ | TTypeExpr _ | TFunction _ -> ()
+		| TPatMatch _ | TNew _ | TCall _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) -> raise Exit
 		| TReturn _ | TBreak | TContinue | TThrow _ | TCast (_,Some _) -> raise Exit
-		| TCast (_,None) | TBinop _ | TUnop _ | TParenthesis _ | TMeta _ | TWhile _ | TFor _ | TIf _ | TTry _ | TSwitch _ | TArrayDecl _ | TVars _ | TBlock _ | TObjectDecl _ -> Type.iter loop e
+		| TArray _ | TEnumParameter _ | TCast (_,None) | TBinop _ | TUnop _ | TParenthesis _ | TMeta _ | TWhile _ | TFor _ | TIf _ | TTry _ | TSwitch _ | TArrayDecl _ | TVars _ | TBlock _ | TObjectDecl _ -> Type.iter loop e
 	in
 	try
 		loop e; false
@@ -82,6 +83,7 @@ type in_local = {
 	mutable i_captured : bool;
 	mutable i_write : bool;
 	mutable i_read : int;
+	mutable i_force_temp : bool;
 }
 
 let inline_default_config cf t =
@@ -130,6 +132,7 @@ let rec type_inline ctx cf f ethis params tret config p force =
 				i_subst = alloc_var v.v_name v.v_type;
 				i_captured = false;
 				i_write = false;
+				i_force_temp = false;
 				i_read = 0;
 			} in
 			Hashtbl.add locals v.v_id i;
@@ -145,6 +148,7 @@ let rec type_inline ctx cf f ethis params tret config p force =
 				i_subst = v;
 				i_captured = false;
 				i_write = false;
+				i_force_temp = false;
 				i_read = 0;
 			}
 	in
@@ -177,7 +181,11 @@ let rec type_inline ctx cf f ethis params tret config p force =
 	*)
 	let ethis = (match ethis.eexpr with TConst TSuper -> { ethis with eexpr = TConst TThis } | _ -> ethis) in
 	let vthis = alloc_var "_this" ethis.etype in
-	let inlined_vars = List.map2 (fun e (v,_) -> local v, e) (ethis :: loop params f.tf_args true) ((vthis,None) :: f.tf_args) in
+	let inlined_vars = List.map2 (fun e (v,_) ->
+		let l = local v in
+		if has_side_effect e then l.i_force_temp <- true; (* force tmp var *)
+		l, e
+	) (ethis :: loop params f.tf_args true) ((vthis,None) :: f.tf_args) in
 	(*
 		here, we try to eliminate final returns from the expression tree.
 		However, this is not entirely correct since we don't yet correctly propagate
@@ -340,7 +348,7 @@ let rec type_inline ctx cf f ethis params tret config p force =
 	in
 	let force = ref force in
 	let vars = List.fold_left (fun acc (i,e) ->
-		let flag = (match e.eexpr with
+		let flag = not i.i_force_temp && (match e.eexpr with
 			| TLocal {v_extra = _,true} -> true
 			| TLocal _ | TConst _ -> not i.i_write
 			| TFunction _ -> if i.i_write then error "Cannot modify a closure parameter inside inline method" p; true
@@ -349,9 +357,9 @@ let rec type_inline ctx cf f ethis params tret config p force =
 		let flag = flag && (not i.i_captured || is_constant e) in
 		(* force inlining if we modify 'this' *)
 		if i.i_write && snd i.i_var.v_extra then force := true;
-		(* force inlining of 'this' variable if the expression is writable *)
-		let flag = if not flag && snd i.i_var.v_extra then begin
-			if i.i_write && not (is_writable e) then error "Cannot modify the abstract value, store it into a local first" p;
+		(* force inlining of 'this' variable if it is written *)
+		let flag = if not flag && snd i.i_var.v_extra && i.i_write then begin
+			if not (is_writable e) then error "Cannot modify the abstract value, store it into a local first" p;
 			true
 		end else flag in
 		if flag then begin
@@ -374,7 +382,7 @@ let rec type_inline ctx cf f ethis params tret config p force =
 
 		This could be fixed with better post process code cleanup (planed)
 	*)
-	if !cancel_inlining || (Common.platform ctx.com Js && not !force && (init <> None || !has_vars)) then
+	if !cancel_inlining then
 		None
 	else
 		let wrap e =
@@ -732,11 +740,17 @@ let sanitize_expr com e =
 		let cases = List.map (fun (el,e) -> el, complex e) cases in
 		let def = (match def with None -> None | Some e -> Some (complex e)) in
 		{ e with eexpr = TSwitch (e1,cases,def) }
-(* 	| TMatch (e1, en, cases, def) ->
-		let e1 = parent e1 in
-		let cases = List.map (fun (el,vars,e) -> el, vars, complex e) cases in
-		let def = (match def with None -> None | Some e -> Some (complex e)) in
-		{ e with eexpr = TMatch (e1,en,cases,def) } *)
+	| TPatMatch dt ->
+		let rec loop d = match d with
+			| DTGoto _ -> d
+			| DTExpr e -> DTExpr (complex e)
+			| DTBind(bl,dt) -> DTBind(bl, loop dt)
+			| DTGuard(e,dt1,dt2) -> DTGuard(complex e,loop dt1,match dt2 with None -> None | Some dt -> Some (loop dt))
+			| DTSwitch(e,cl,dto) ->
+				let cl = List.map (fun (e,dt) -> complex e,loop dt) cl in
+				DTSwitch(parent e,cl,match dto with None -> None | Some dt -> Some (loop dt))
+		in
+		{ e with eexpr = TPatMatch({dt with dt_dt_lookup = Array.map loop dt.dt_dt_lookup })}
 	| _ ->
 		e
 
@@ -764,7 +778,7 @@ let reduce_expr ctx e =
 				| _ ->
 					true
 			) l with
-			| [] -> { ec with epos = e.epos }
+			| [] -> ec
 			| l -> { e with eexpr = TBlock (List.rev (ec :: l)) })
 	| TParenthesis ec ->
 		{ ec with epos = e.epos }
@@ -817,6 +831,16 @@ let rec reduce_loop ctx e =
 			(match op with
 			| OpEq -> { e with eexpr = TConst (TBool true) }
 			| OpNotEq -> { e with eexpr = TConst (TBool false) }
+			| _ -> e)
+		| TFunction _, TConst TNull ->
+			(match op with
+			| OpEq -> { e with eexpr = TConst (TBool false) }
+			| OpNotEq -> { e with eexpr = TConst (TBool true) }
+			| _ -> e)
+		| TConst TNull, TFunction _ ->
+			(match op with
+			| OpEq -> { e with eexpr = TConst (TBool false) }
+			| OpNotEq -> { e with eexpr = TConst (TBool true) }
 			| _ -> e)
 		| TConst (TInt a), TConst (TInt b) ->
 			let opt f = try { e with eexpr = TConst (TInt (f a b)) } with Exit -> e in

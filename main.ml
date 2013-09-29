@@ -160,7 +160,8 @@ let make_path f =
 		| _ -> cl
 	) in
 	let error() =
-		let msg =
+		let msg = "Could not process argument " ^ f in
+		let msg = msg ^ "\n" ^
 			if String.length f == 0 then
 				"Class name must not be empty"
 			else match (List.hd (List.rev cl)).[0] with
@@ -506,6 +507,7 @@ let rec process_params create pl =
 
 and wait_loop boot_com host port =
 	let sock = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+	(try Unix.setsockopt sock Unix.SO_REUSEADDR true with _ -> ());
 	(try Unix.bind sock (Unix.ADDR_INET (Unix.inet_addr_of_string host,port)) with _ -> failwith ("Couldn't wait on " ^ host ^ ":" ^ string_of_int port));
 	Unix.listen sock 10;
 	Sys.catch_break false;
@@ -724,7 +726,7 @@ and wait_loop boot_com host port =
 		Unix.close sin;
 		(* prevent too much fragmentation by doing some compactions every X run *)
 		incr run_count;
-		if !run_count mod 1 = 50 then begin
+		if !run_count mod 10 = 0 then begin
 			let t0 = get_time() in
 			Gc.compact();
 			if verbose then begin
@@ -776,8 +778,8 @@ and do_connect host port args =
 
 and init ctx =
 	let usage = Printf.sprintf
-		"Haxe Compiler %d.%d.%d - (C)2005-2013 Haxe Foundation\n Usage : haxe%s -main <class> [-swf|-js|-neko|-php|-cpp|-as3] <output> [options]\n Options :"
-		(version / 100) ((version mod 100)/10) (version mod 10) (if Sys.os_type = "Win32" then ".exe" else "")
+		"Haxe Compiler %d.%d.%d %s- (C)2005-2013 Haxe Foundation\n Usage : haxe%s -main <class> [-swf|-js|-neko|-php|-cpp|-as3] <output> [options]\n Options :"
+		(version / 100) ((version mod 100)/10) (version mod 10) (Version.version_extra) (if Sys.os_type = "Win32" then ".exe" else "")
 	in
 	let com = ctx.com in
 	let classes = ref [([],"Std")] in
@@ -1227,7 +1229,7 @@ try
 			Codegen.captured_vars com;
 			Codegen.rename_local_vars com;
 		] in
-		List.iter (Codegen.post_process filters) com.types;
+		List.iter (Codegen.post_process tctx filters) com.types;
 		Codegen.post_process_end();
 		List.iter (fun f -> f()) (List.rev com.filters);
 		List.iter (Codegen.save_class_state tctx) com.types;
@@ -1313,8 +1315,10 @@ try
 		if r <> 0 then failwith ("Command failed with error " ^ string_of_int r)
 	) (List.rev !cmds)
 with
-	| Abort | Typecore.Fatal_error ->
+	| Abort ->
 		()
+	| Typecore.Fatal_error (m,p) ->
+		error ctx m p
 	| Common.Abort (m,p) ->
 		error ctx m p
 	| Lexer.Error (m,p) ->
