@@ -108,4 +108,9 @@ abstract ConstPointer<T>(Pointer<T>) {
 }
 
 @:coreType
+abstract FunctionPointer<T>(T) {
+	public inline function new(t) this = t;
+}
+
+@:coreType
 abstract VarArg from Dynamic to Dynamic { }

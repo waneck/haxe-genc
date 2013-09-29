@@ -31,6 +31,7 @@ type hxc = {
 	t_typeref : t -> t;
 	t_pointer : t -> t;
 	t_const_pointer : t -> t;
+	t_func_pointer : t -> t;
 	t_int64 : t -> t;
 	t_jmp_buf : t;
 
@@ -1148,11 +1149,13 @@ module ClosureHandler = struct
 			let el = List.map gen.map el in
 			let e = if not !is_extern && is_closure_expr e1 then begin
 				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
+				let mk_cast e = mk (TCast(e,None)) (gen.gcon.hxc.t_func_pointer e.etype) e.epos in
 				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
+				let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
 				let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic e.epos in
 				let eif = Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos in
-				let ethen = mk (TCall({efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)},ethis :: el)) e.etype e.epos in
-				let eelse = mk (TCall(efunc,el)) e.etype e.epos in
+				let ethen = mk (TCall(mk_cast efunc2,ethis :: el)) e.etype e.epos in
+				let eelse = mk (TCall(mk_cast efunc,el)) e.etype e.epos in
 				let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
 				let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
 				mk (TCast(ternary_hack,None)) r e.epos
@@ -1507,6 +1510,8 @@ let rec s_type ctx t =
 			"char*" (* we will manipulate an array of type parameters like an array of bytes *)
 		| _ -> s_type ctx t ^ "*")
 	| TAbstract({a_path = ["c"],"ConstPointer"},[t]) -> "const " ^ (s_type ctx t) ^ "*"
+	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret)]) ->
+		Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| TInst(({cl_path = [],"typeref"} as c),_) ->
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
@@ -2416,6 +2421,8 @@ let generate com =
 			| ["c"],"ConstPointer" ->
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				{acc with t_const_pointer = fun t -> TAbstract(a,[t])}
+			| ["c"],"FunctionPointer" ->
+				{acc with t_func_pointer = fun t -> TAbstract(a,[t])}
 			| ["c"],"Int64" ->
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				{acc with t_int64 = fun t -> TAbstract(a,[t])}
@@ -2434,6 +2441,7 @@ let generate com =
 		t_typeref = null_func;
 		t_pointer = null_func;
 		t_const_pointer = null_func;
+		t_func_pointer = null_func;
 		t_int64 = null_func;
 		t_jmp_buf = t_dynamic;
 		c_boot = null_class;
