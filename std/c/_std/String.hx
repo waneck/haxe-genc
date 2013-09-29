@@ -28,12 +28,12 @@ import c.Lib;
 import c.CString.memcmp;
 
 @:coreApi @:final class String {
-	
+
 	public var length(default,null) : Int;
 	private var __a:Pointer<Char>;
-	
+
 	// haxe API
-	
+
 	public function new(string:String) {
 		if ( string != null ){
 			length = string.length;
@@ -72,7 +72,7 @@ import c.CString.memcmp;
 		return null; // TODO this is *definitely* wrong here, null (0) is a valid char code
 	}
 
-	
+
 	public function indexOf( str : String, ?startIndex : Int ):Int {
 		if (str.length == 0){
 			return 0;
@@ -111,7 +111,7 @@ import c.CString.memcmp;
 	}
 
 	public function split( delimiter : String ):Array<String> {
-		
+
 		if (delimiter.length == 0){
 			var ret = new Array();
 			for (i in 0...length){
@@ -176,9 +176,9 @@ import c.CString.memcmp;
 		ret.__a[0] = untyped code; //TODO int->Int8 conv
 		return ret;
 	}
-	
+
 	// Helper
-	
+
 	@:keep private static function memmem(p0:Pointer<Char>,l0:Int,p1:Pointer<Char>,l1:Int):Int {
 		// nothing is everywhere
 		if (l1 == 0)
@@ -210,7 +210,7 @@ import c.CString.memcmp;
 			return -1;
 		}
 	}
-	
+
 	@:keep private static function compare(s0:String,s1:String) : Int {
 		var p0:Pointer<Char> = cast s0;
 		var p1:Pointer<Char> = cast s1;
@@ -238,11 +238,11 @@ import c.CString.memcmp;
 			}
 		}
 	}
-	
+
 	@:keep private static function equals(s0:String,s1:String) : Bool {
 		return compare(s0,s1) == 0;
 	}
-	
+
 	@:keep private static function concat(s0:String,s1:String) : String {
 		if (s0.length == 0)
 			return s1;
@@ -259,26 +259,26 @@ import c.CString.memcmp;
 	 * How to deal with strings that aren't used after return (stack-allocation)?
 	 * TODO: externs for string.h
 	 */
-	@:keep private static function ofPointerCopyNT(p:Pointer<Char>):String {
+	@:keep private static function ofPointerCopyNT(p:ConstPointer<Char>):String {
 		var len = c.CString.strlen(cast p);
 		return ofPointerCopy(len,p); // keep 0x00 for C-compat TODO: do we want that?
 	}
 
-	@:keep private static function ofPointerCopy<T>(len:Int, p:Pointer<Char>):String {
+	@:keep private static function ofPointerCopy<T>(len:Int, p:ConstPointer<Char>):String {
 		var ret = new String(null);
 		ret.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Char>()));
 		FixedArray.copy(p,0,ret.__a,0,len);
 		ret.length = len;
 		return ret;
 	}
-	
+
 	@:keep private static function stringOfSize(len:Int):String {
 		var s = new String(null);
 		s.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Char>()));
 		s.length = len;
 		return s;
 	}
-	
+
 	@:keep static private function raw(s:String):ConstPointer<Char> {
 		return cast s.__a;
 	}
