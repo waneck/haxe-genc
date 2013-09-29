@@ -1004,6 +1004,8 @@ end
 (*
 	- wraps String literals in String
 	- translates String OpAdd to String.concat
+	- translates String == String to String.equals
+	- translates switch(String) to if-chain
 *)
 module StringHandler = struct
 	let is_string t = match follow t with
@@ -1015,6 +1017,13 @@ module StringHandler = struct
 		(* always wrap String literal *)
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
+		| TBinop((OpEq | OpNotEq) as op,e1,e2) when is_string e1.etype ->
+			gen.gcom.warning "string" e.epos;
+			Expr.mk_binop op
+				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "equals" [gen.map e1; gen.map e2] e1.epos)
+				(Expr.mk_int gen.gcom 1 e1.epos)
+				e.etype
+				e.epos
 		| TBinop(OpAdd,e1,e2) when is_string e1.etype ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [gen.map e1; gen.map e2] e1.epos
 		| TBinop(OpAssignOp(OpAdd),e1,e2) when is_string e1.etype ->
@@ -1025,6 +1034,15 @@ module StringHandler = struct
 				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [gen.map e1; gen.map e2] e1.epos)
 				e1.etype
 				e.epos
+		| TSwitch(e1,cases,def) when is_string e1.etype ->
+			let mk_eq e1 e2 = mk (TBinop(OpEq,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
+			let mk_or e1 e2 = mk (TBinop(OpOr,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
+			let mk_if (el,e) eo =
+				let eif = List.fold_left (fun eacc e -> mk_or eacc (mk_eq e1 e)) (mk_eq e1 (List.hd el)) (List.tl el) in
+				mk (TIf(Codegen.mk_parent eif,e,eo)) e.etype e.epos
+			in
+			let ifs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def cases with Some e -> e | None -> assert false in
+			gen.map ifs
 		| _ ->
 			Type.map_expr gen.map e
 end
@@ -1787,15 +1805,6 @@ and generate_expr ctx e = match e.eexpr with
 		(match e3 with None -> () | Some e3 ->
 			spr ctx " else ";
 			generate_expr ctx (mk_block e3))
-	| TSwitch(e1,cases,def) when (match follow e1.etype with TInst({cl_path=[],"String"},_) -> true | _ -> false) ->
-		let mk_eq e1 e2 = mk (TBinop(OpEq,e1,e2)) ctx.con.com.basic.tbool (punion e1.epos e2.epos) in
-		let mk_or e1 e2 = mk (TBinop(OpOr,e1,e2)) ctx.con.com.basic.tbool (punion e1.epos e2.epos) in
-		let mk_if ((el : texpr list),e) eo =
-			let eif = List.fold_left (fun eacc e -> mk_or eacc (mk_eq e1 e)) (mk_eq e1 (List.hd el)) (List.tl el) in
-			mk (TIf(Codegen.mk_parent eif,e,eo)) e.etype e.epos
-		in
-		let ifs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def cases with Some e -> e | None -> assert false in
-		generate_expr ctx ifs
 	| TSwitch(e1,cases,edef) ->
 		spr ctx "switch";
 		generate_expr ctx e1;
@@ -1831,13 +1840,6 @@ and generate_expr ctx e = match e.eexpr with
 		b();
 		newline ctx;
 		spr ctx "}";
-	| TBinop((OpEq | OpNotEq) as op,e1,e2) when (match follow e1.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
-		generate_expr ctx
-			(Expr.mk_binop op
-				(Expr.mk_static_call_2 ctx.con.hxc.c_string "equals" [e1;e2] e1.epos)
-				(Expr.mk_int ctx.con.com 1 e1.epos)
-				e.etype
-				e1.epos)
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx e1;
 		print ctx " %s " (match op with OpUShr -> ">>" | _ -> s_binop op);
