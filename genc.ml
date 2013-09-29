@@ -948,14 +948,14 @@ module TypeChecker = struct
 			{ e with etype = v.v_type }
 		| TCall(e1,el) ->
 			begin match follow e1.etype with
-				| TFun(args,_) ->
+				| TFun(args,_) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,_)]) ->
 					{e with eexpr = TCall(gen.map e1,check_call_params gen el args)}
 				| _ -> Type.map_expr gen.map e
 			end
 		| TNew(c,tl,el) ->
 			let tcf,_ = get_constructor (fun cf -> apply_params c.cl_types tl cf.cf_type) c in
 			begin match follow tcf with
-				| TFun(args,_) ->
+				| TFun(args,_) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,_)]) ->
 					{e with eexpr = TNew(c,tl,check_call_params gen el args)}
 				| _ -> Type.map_expr gen.map e
 			end
