@@ -259,6 +259,7 @@ import c.CString.memcmp;
 	 * How to deal with strings that aren't used after return (stack-allocation)?
 	 * TODO: externs for string.h
 	 */
+	@:native("HX_STR")
 	@:keep private static function ofPointerCopyNT(p:ConstPointer<Char>):String {
 		var len = c.CString.strlen(cast p);
 		return ofPointerCopy(len,p); // keep 0x00 for C-compat TODO: do we want that?
