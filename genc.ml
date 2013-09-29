@@ -53,7 +53,6 @@ type hxc = {
 
 type context = {
 	com : Common.context;
-	cvar : tvar;
 	hxc : hxc;
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
@@ -162,7 +161,7 @@ module Expr = struct
 			epos = p;
 		}
 
-	let mk_cast t e =
+	let mk_cast e t =
 		{ e with eexpr = TCast(e, None); etype = t }
 
 	let mk_ref con p e =
@@ -206,8 +205,9 @@ module Expr = struct
 		let e = mk_static_call_2 con.hxc.c_lib "alloca" [mk_sizeof con p (mk_type_param con p t)] p in
 		{e with etype = t}
 
-	let mk_ccode ctx s =
-		mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos
+	let mk_ccode ctx s p =
+		mk_static_call_2 ctx.con.hxc.c_lib "cCode" [mk (TConst (TString s)) ctx.con.com.basic.tstring p] p
+		(* mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos *)
 
 	let mk_int com i p =
 		mk (TConst (TInt (Int32.of_int i))) com.basic.tint p
@@ -262,14 +262,12 @@ let get_type_id con t =
 		con.type_ids <- PMap.add id con.num_identified_types con.type_ids;
 		con.num_identified_types
 
-let wrap_function ethis efunc =
-	let efunc = mk (TCast(efunc,None)) t_dynamic efunc.epos in
-	let e = Expr.mk_obj_decl ["_this",ethis;"_func",efunc] efunc.epos in
-	let e = mk (TCast(e,None)) efunc.etype e.epos in
-	mk (TMeta((Meta.Custom ":closureWrap",[],e.epos),e)) e.etype e.epos
+let wrap_function con ethis efunc =
+	let e = Expr.mk_obj_decl ["_this",ethis;"_func",Expr.mk_cast efunc (con.hxc.t_func_pointer efunc.etype)] efunc.epos in
+	mk (TMeta((Meta.Custom ":closureWrap",[],e.epos),Expr.mk_cast e efunc.etype)) e.etype e.epos
 
-let wrap_static_function efunc =
-	wrap_function (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
+let wrap_static_function con efunc =
+	wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
 
 module Filters = struct
 
@@ -375,7 +373,7 @@ module Filters = struct
 					c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
 					let ef1 = Expr.mk_static_field c cf cf.cf_pos in
 					let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
-					let ef2 = wrap_static_function ef2 in
+					let ef2 = wrap_static_function con ef2 in
 					add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
 				end else begin
 					c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
@@ -694,7 +692,7 @@ module TypeParams = struct
 				let eret = { e with eexpr = TCall({ e1 with eexpr = TField(ef, fi) }, el @ el_last) } in
 				(* if type parameter is being cast into a concrete one, we need to dereference it *)
 				if is_type_param gen.gcon ret && not (is_type_param gen.gcon applied_ret) then
-					Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.hxc.t_pointer applied_ret) eret)
+					Expr.mk_deref gen.gcon e.epos (Expr.mk_cast eret (gen.gcon.hxc.t_pointer applied_ret))
 				else
 					eret
 			| TReturn (Some er) when Option.is_some out_var ->
@@ -733,9 +731,9 @@ module TypeParams = struct
 
 					ret
 				end else if is_field_type_param gen.gcon e1 then
-					{ e with eexpr = TBinop(op, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.hxc.t_pointer e2.etype) (gen.map e1)), gen.map e2) }
+					{ e with eexpr = TBinop(op, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.map e1) (gen.gcon.hxc.t_pointer e2.etype)), gen.map e2) }
 				else
-					{ e with eexpr = TBinop(op, gen.map e1, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.gcon.hxc.t_pointer e1.etype) (gen.map e2))) }
+					{ e with eexpr = TBinop(op, gen.map e1, Expr.mk_deref gen.gcon e.epos (Expr.mk_cast (gen.map e2) (gen.gcon.hxc.t_pointer e1.etype))) }
 			(* - pointer array access -> pointer + typeref's size * index *)
 			| TArray(e1, idx) -> (match follow e1.etype with
 				| TAbstract({a_path=["c"], "Pointer"},[t]) when is_type_param gen.gcon t ->
@@ -1073,7 +1071,7 @@ module ClosureHandler = struct
 		let e_ctx = mk (TLocal v_ctx) v_ctx.v_type p in
 		let mk_ctx_field v =
 			let ef = mk (TField(e_ctx,FDynamic v.v_name)) v.v_type p in
-			mk (TCast(ef,None)) v.v_type p
+			Expr.mk_cast ef v.v_type
 		in
 		let rec loop e = match e.eexpr with
 			| TVars vl ->
@@ -1136,7 +1134,7 @@ module ClosureHandler = struct
 		gen.add_field c cf true;
 		gen.run_filter cf;
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
-		wrap_function e_init e_field
+		wrap_function gen.gcon e_init e_field
 
 	let is_call_expr = ref false
 	let is_extern = ref false
@@ -1175,14 +1173,14 @@ module ClosureHandler = struct
 				let eelse = mk (TCall(mk_cast efunc,el)) e.etype e.epos in
 				let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
 				let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
-				mk (TCast(ternary_hack,None)) r e.epos
+				Expr.mk_cast ternary_hack r
 			end else
 				{e with eexpr = TCall(e1,el)}
 			in
 			is_extern := snd old;
 			e
 		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not (m = MethDynamic) && not !is_extern ->
-			wrap_static_function (Expr.mk_static_field c cf e.epos)
+			wrap_static_function gen.gcon (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
@@ -1271,10 +1269,10 @@ module ExprTransformation = struct
 			gen.declare_var (v,None);
 			let ev = Expr.mk_local vtemp e1.epos in
 			let ehasnext = mk (TField(ev,quick_field e1.etype "hasNext")) (tfun [] gen.gcon.com.basic.tbool) e1.epos in
-			let ehasnext = mk (TCast(ehasnext,None)) ehasnext.etype ehasnext.epos in
+			let ehasnext = Expr.mk_cast ehasnext ehasnext.etype in
 			let ehasnext = mk (TCall(ehasnext,[])) ehasnext.etype ehasnext.epos in
 			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
-			let enext = mk (TCast(enext,None)) enext.etype enext.epos in
+			let enext = Expr.mk_cast enext enext.etype in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
 			let ebody = Codegen.concat enext e2 in
 			mk (TBlock [
@@ -1581,7 +1579,6 @@ let rec s_type ctx t =
 			"c_" ^ signature ^ "*"
 		end
 	| TFun(args,ret) ->
-		(* Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args)) *)
 		"hx_closure*";
 	| _ -> "void*"
 
@@ -1589,14 +1586,14 @@ let s_type_with_name ctx t n =
 	match follow t with
 	| TFun(args,ret) ->
 		"hx_closure* " ^ n
+	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret)]) ->
+		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| _ ->
 		(s_type ctx t) ^ " " ^ n
 
 (* Expr generation *)
 
 let rec generate_call ctx e e1 el = match e1.eexpr,el with
-	| TLocal({v_name = "__c"}),[{eexpr = TConst(TString code)}] ->
-		spr ctx code;
 	| TField(_,FStatic({cl_path = ["c"],"Lib"}, cf)),(e1 :: el) ->
 		begin match cf.cf_name with
 		| "getAddress" ->
@@ -2039,11 +2036,11 @@ let generate_class ctx c =
 			match follow cf.cf_type, cf.cf_expr with
 			| TFun(args,_), Some e ->
 				let einit = if is_value_type ctx t_class then
-					Some (Expr.mk_ccode ctx ("{0}; //semicolon"))
+					Some (Expr.mk_ccode ctx ("{0}; //semicolon") cf.cf_pos)
 				else
 					let p = cf.cf_pos in
 					(* TODO: get rid of this *)
-					let esize = Expr.mk_ccode ctx (Printf.sprintf "sizeof(%s)" path) in
+					let esize = Expr.mk_ccode ctx (Printf.sprintf "sizeof(%s)" path) p in
 					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx.con.com 1 p;esize] p)
 				in
 				let loc = alloc_var "this" t_class in
@@ -2476,7 +2473,6 @@ let generate com =
 	let con = {
 		com = com;
 		hxc = hxc;
-		cvar = alloc_var "__c" t_dynamic;
 		num_temp_funcs = 0;
 		num_labels = 0;
 		num_anon_types = -1;
