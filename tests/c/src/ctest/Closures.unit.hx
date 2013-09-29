@@ -64,3 +64,11 @@ function f1(s1:String) {
 }
 var s = f1("foo")("bar")("end");
 s == "beginfoo1bar2end";
+
+var s0 = "foo";
+function fAssign(s1:String) {
+	s0 = s1;
+}
+s0 == "foo";
+fAssign("bar");
+s0 == "bar";
