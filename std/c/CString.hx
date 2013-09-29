@@ -5,8 +5,8 @@ import c.Pointer;
 
 @:include("<string.h>")
 extern class CString {
-	@:plain static public function memcpy<A,B>(destination:Pointer<A>, source:Pointer<B>, num:SizeT):Pointer<A>;
-	@:plain static public function memmove<A,B>(destination:Pointer<A>, source:Pointer<B>, num:SizeT):Pointer<A>;
+	@:plain static public function memcpy<A,B>(destination:Pointer<A>, source:ConstPointer<B>, num:SizeT):Pointer<A>;
+	@:plain static public function memmove<A,B>(destination:Pointer<A>, source:ConstPointer<B>, num:SizeT):Pointer<A>;
 	@:plain static public function strcpy(destination:Pointer<Char>, source:ConstPointer<Char>):Pointer<Char>;
 	@:plain static public function strncpy(destination:Pointer<Char>, source:ConstPointer<Char>, num:SizeT):Pointer<Char>;
 

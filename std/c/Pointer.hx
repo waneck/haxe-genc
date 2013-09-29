@@ -28,19 +28,19 @@ abstract Pointer<T>(Int) {
 	public inline function new(i:Int) {
 		this = untyped i;
 	}
-	
+
 	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
 		return new Pointer(lhs.value() + offset);
 	}
-	
+
 	@:extern @:op(A+B) public static inline function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
 		return new Pointer(lhs.value() + rhs.value());
 	}
-	
+
 	@:extern @:op(A-B) public static inline function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
 		return new Pointer(lhs.value() - offset);
 	}
-	
+
 	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
 		return new Pointer(lhs.value() - rhs.value());
 	}
@@ -48,25 +48,62 @@ abstract Pointer<T>(Int) {
 	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {
 		return new Pointer(++this);
 	}
-	
+
 	@:extern @:arrayAccess public inline function __get(index:Int):T {
 		return untyped this[index];
 	}
-	
+
 	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
 		return untyped this[index] = value;
 	}
-	
-	public inline function value() {
+
+	@:extern @:to inline public function const():ConstPointer<T>
+	{
+		return untyped this;
+	}
+
+	@:extern public inline function value() {
 		return this;
 	}
 }
 
 abstract ConstPointer<T>(Pointer<T>) {
 	public inline function new(ptr) this = ptr;
-	
+
+	@:extern @:op(A+B) public static inline function add<T>(lhs:ConstPointer<T>, offset:Int):ConstPointer<T> {
+		return new ConstPointer(lhs.value() + offset);
+	}
+
+	@:extern @:op(A+B) public static inline function addP<T>(lhs:ConstPointer<T>, rhs:ConstPointer<T>):ConstPointer<T> {
+		return new ConstPointer(lhs.value() + rhs.value());
+	}
+
+	@:extern @:op(A-B) public static inline function sub<T>(lhs:ConstPointer<T>, offset:Int):ConstPointer<T> {
+		return new ConstPointer(lhs.value() - offset);
+	}
+
+	@:extern @:op(A-B) public static inline function subP<T>(lhs:ConstPointer<T>, rhs:ConstPointer<T>):ConstPointer<T> {
+		return new ConstPointer(lhs.value() - rhs.value());
+	}
+
+	@:extern @:op(++A) public inline function increment<T>():ConstPointer<T> {
+		return new ConstPointer(++this);
+	}
+
+	@:extern @:arrayAccess public inline function __get(index:Int):T {
+		return untyped this[index];
+	}
+
+	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
+		return untyped this[index] = value;
+	}
+
 	@:from static public inline function fromString(s:String):ConstPointer<Char> {
-		return untyped s;
+		return @:privateAccess String.raw(s);
+	}
+
+	@:extern public inline function value() {
+		return this;
 	}
 }
 

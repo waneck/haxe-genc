@@ -129,7 +129,9 @@ module Expr = struct
 	let mk_static_call c cf el p =
 		let ef = mk_static_field c cf p in
 		let tr = match follow ef.etype with
-			| TFun(_,tr) -> tr
+			| TFun(args,tr) ->
+				List.iter2 (fun (_,_,t) e -> Type.unify e.etype t) args el;
+				tr
 			| _ -> assert false
 		in
 		mk (TCall(ef,el)) tr p
@@ -188,6 +190,16 @@ module Expr = struct
 			| _ -> assert false
 		in
 		{ eexpr = TNew(c,p,[]); etype = t; epos = pos }
+
+	let mk_null_type_param con pos t =
+		let t = con.hxc.t_typeref t in
+		let c,p = match follow t with
+			| TInst(c,p) -> c,p
+			| _ -> assert false
+		in
+		let typeref = { eexpr = TNew(c,p,[]); etype = t; epos = pos } in
+		{ eexpr = TField(typeref, FInstance(c,PMap.find "nullval" c.cl_fields)); etype = t; epos = pos }
+
 
 	let mk_stack_tp_init con t p =
 		let e = mk_static_call_2 con.hxc.c_lib "alloca" [mk_sizeof con p (mk_type_param con p t)] p in
@@ -705,13 +717,16 @@ module TypeParams = struct
 				if is_field_type_param gen.gcon e1 && is_field_type_param gen.gcon e2 then begin
 					if op <> Ast.OpAssign then assert false; (* FIXME: AssignOp should become two operations; should be very rare though *)
 					let local, wrap = match e1.eexpr with
-						| TLocal _ -> e1, (fun e -> e)
+						| TLocal _ | TConst _ -> e1, (fun e -> e)
 						| _ ->
-							let v = get_temp t_dynamic e.epos in
+							let t = gen.gcon.hxc.t_pointer gen.gcom.basic.tvoid in
+							let v = get_temp t e.epos in
 							Expr.mk_local v e1.epos, (fun e -> { e with eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, e) })
 					in
+					let as_pointer e = { e with etype = gen.gcon.hxc.t_pointer e.etype } in
+					let memcpy_args = [ as_pointer (wrap(gen.map e1)); as_pointer (gen.map e2); Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos e1.etype) ] in
 					let ret = Expr.mk_comma_block gen.gcon e.epos [
-						Expr.mk_static_call_2 (gen.gcon.hxc.c_cstring) "memcpy" [ wrap(gen.map e1); gen.map e2; Expr.mk_sizeof gen.gcon e.epos (Expr.mk_type_param gen.gcon e.epos e1.etype) ] e.epos;
+						Expr.mk_static_call_2 (gen.gcon.hxc.c_cstring) "memcpy" memcpy_args e.epos;
 						local
 					] in
 
@@ -734,6 +749,8 @@ module TypeParams = struct
 					gen.map { e with eexpr = TCall({ e1 with eexpr = TField(e1,FInstance(c,f)); etype = apply_params c.cl_types p f.cf_type}, [idx]) }
 				with | Not_found -> Type.map_expr gen.map e)
 				| _ -> Type.map_expr gen.map e)
+			| TConst TNull when is_type_param gen.gcon e.etype ->
+					Expr.mk_null_type_param gen.gcon e.epos e.etype
 			| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, v) -> (try
 					match follow e1.etype with
 					| TInst(c,p) ->
@@ -878,7 +895,7 @@ module TypeChecker = struct
 		| TCall({eexpr = TField(_,FStatic({cl_path = [],"String"}, {cf_name = "ofPointerCopyNT"}))},[{eexpr = TConst (TString _)} as e]),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TAbstract({a_path=["c"],"VarArg"},_)) ->
 			e
 		(* String assigned to const char* or VarArg = unwrap *)
-		| _,(TAbstract({a_path=["c"],"VarArg"},_) | TAbstract({a_path = ["c"],"ConstPointer"}, [TAbstract({a_path=[],"hx_char"},_)])) when (match follow e.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
+		| _,(TAbstract({a_path=["c"],"VarArg"},_)) when (match follow e.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "raw" [e] e.epos
 		| TMeta(m,e1),t ->
 			{ e with eexpr = TMeta(m,check gen e1 t)}
@@ -1618,9 +1635,6 @@ and generate_constant ctx e = function
 		print ctx "%ld" i
 	| TFloat s ->
 		print ctx "%s" s
-	| TNull when TypeParams.is_type_param ctx.con e.etype ->
-		generate_expr ctx (Expr.mk_type_param ctx.con e.epos e.etype);
-		spr ctx "->nullval"
 	| TNull ->
 		spr ctx "NULL"
 	| TSuper ->
