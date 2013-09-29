@@ -26,6 +26,7 @@ import haxe.macro.Context;
 import haxe.macro.Expr;
 import haxe.macro.Type;
 using StringTools;
+using haxe.macro.TypeTools;
 
 class UnitBuilder {
 	
@@ -98,8 +99,8 @@ class UnitBuilder {
 	static function mkEq(e1, e2, p) {
 		function isFloat(e) {
 			try return switch(Context.typeof(e)) {
-				case TAbstract(tr, _):
-					tr.get().name == "Float";
+				case TAbstract(deref => {name: "Float"}, _):
+					true;
 				case _:
 					false;
 			} catch (e:Dynamic) {
