@@ -29,6 +29,11 @@ using StringTools;
 using haxe.macro.TypeTools;
 
 class UnitBuilder {
+	static var isTrue = macro Main.isTrue;
+	static var isFalse = macro Main.isFalse;
+	static var equals = macro Main.equals;
+	static var equalsNot = macro Main.equalsNot;
+	static var equalsFloat = macro Main.equalsFloat;
 	
 	static public macro function build(basePath:String):Array<Field> {
 		var ret = Context.getBuildFields();
@@ -43,25 +48,17 @@ class UnitBuilder {
 				var pos = Context.makePosition( { min:0, max:0, file:filePath } );
 				if (file.endsWith(".unit.hx")) {
 					numFiles++;
-					var func = {
-						args: [],
-						ret: null,
-						params: [],
-						expr: macro @:pos(pos) {
+					var cl = macro class A {
+						static public function run() @:pos(pos) {
 							trace("Begin");
 							${read(filePath)}
 						}
 					}
-					var name = "test" + ~/\./g.map(file, function(_) return "_");
-					ret.push( {
-						name: name,
-						kind: FFun(func),
-						pos: pos,
-						access: [APublic],
-						doc: null,
-						meta: []
-					});
-					calls.push(macro this.$name());
+					var name = ~/\./g.map(file, function(_) return "_");
+					cl.name = name;
+					cl.pack = ["unit"];
+					Context.defineType(cl);
+					calls.push(macro unit.$name.run());
 				} else if (sys.FileSystem.isDirectory(filePath)) {
 					readDir(filePath);
 				}
@@ -109,11 +106,11 @@ class UnitBuilder {
 		}
 		var e = switch [isFloat(e1) || isFloat(e2), e2] {
 			case [true, macro Math.POSITIVE_INFINITY | Math.NEGATIVE_INFINITY] if (Context.defined("cpp") || Context.defined("php")):
-				macro t($e1 == $e2);
+				macro $isTrue($e1 == $e2);
 			case [true, _]:
-				macro feq($e1, $e2);
+				macro $equalsFloat($e1, $e2);
 			case _:
-				macro eq($e1, $e2);
+				macro $equals($e1, $e2);
 		}
 		return {
 			expr: e.expr,
@@ -133,9 +130,9 @@ class UnitBuilder {
 		for (e in block) {
 			var e = switch(e) {
 				case macro $e1 == $i{"false"}, macro $i{"false"} == $e1:
-					macro @:pos(e.pos) f($e1);
+					macro @:pos(e.pos) $isFalse($e1);
 				case macro $e1 == $i{"true"}, macro $i{"true"} == $e1:
-					macro @:pos(e.pos) t($e1);
+					macro @:pos(e.pos) $isTrue($e1);
 				case macro $e1 == $a{el}, macro $a{el} == $e1:
 					var el2 = [];
 					for (i in 0...el.length) {
@@ -149,7 +146,7 @@ class UnitBuilder {
 				case macro $e1 == $e2:
 					mkEq(e1, e2, e.pos);
 				case { expr: EBinop(OpGt | OpGte | OpLt | OpLte, _, _)}:
-					macro @:pos(e.pos) t($e);
+					macro @:pos(e.pos) $isTrue($e);
 				case macro throw $e:
 					macro exc(function() $e);
 				case macro $e1 in $a{el}:
@@ -157,11 +154,6 @@ class UnitBuilder {
 					for (e in el)
 						el2.push(macro $e1 == $e);
 					macro @:pos(e.pos) t(${ collapseToOrExpr(el2) } );
-				case { expr: EVars(vl) }:
-					for (v in vl)
-						if (v.name == "t" || v.name == "f" || v.name == "eq" || v.name == "neq")
-							Context.error('${v.name} is reserved for unit testing', e.pos);
-						e;
 				case _:
 					e;
 			}

@@ -15,7 +15,7 @@ try {
 	throw 1;
 } catch(e:String) {
 	trace("Should not be entered...");
-	f(true);
+	throw false;
 } catch(e:Dynamic) {
 	s = "Caught dynamic";
 }

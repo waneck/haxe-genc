@@ -41,7 +41,7 @@ switch(e.expr) {
 		r1 = s1;
 		r2 = s2;
 	case _:
-		f(true);
+		throw false;
 }
 r1 == "foo";
 r2 == "bar";

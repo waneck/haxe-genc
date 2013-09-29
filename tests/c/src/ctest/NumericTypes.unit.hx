@@ -1,5 +1,5 @@
-var a:UInt8 = 1;
-var b:Int8 = 1;
+var a:c.Types.UInt8 = 1;
+var b:c.Types.Int8 = 1;
 
 var i = 12;
 var ptr = c.Lib.getAddress(i);

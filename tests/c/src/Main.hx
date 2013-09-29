@@ -1,11 +1,6 @@
 import c.Types;
 import c.Pointer;
 
-typedef MyTypedef = {
-	var given:String;
-	@:optional var maybeGiven:String;
-}
-
 @:build(UnitBuilder.build("src/ctest"))
 class Main {
 	static var count = 0;
@@ -17,13 +12,13 @@ class Main {
 		c.CStdio.printf("Done %i tests (%i failed)\\n", [count, failures]);
 	}
 	
-	function optArg(s1:String, ?s2:String = "baz", ?i:Int = 12) {
+	static public function optArg(s1:String, ?s2:String = "baz", ?i:Int = 12) {
 		var buf:Pointer<Char> = cast c.CStdlib.malloc(s1.length + s2.length + 20);
 		c.CStdio.sprintf(buf, "%s%s%i", [s1, s2, i]);
 		return untyped String.ofPointerCopyNT(buf);
 	}
 
-	@:generic static function eq<T>(t1:T, t2:T, ?p:haxe.PosInfos) {
+	@:generic static public function equals<T>(t1:T, t2:T, ?p:haxe.PosInfos) {
 		count++;
 		if (t1 != t2) {
 			failures++;
@@ -31,7 +26,7 @@ class Main {
 		}
 	}
 	
-	@:generic static function neq<T>(t1:T, t2:T, ?p:haxe.PosInfos) {
+	@:generic static public function equalsNot<T>(t1:T, t2:T, ?p:haxe.PosInfos) {
 		count++;
 		if (t1 == t2) {
 			failures++;
@@ -39,7 +34,7 @@ class Main {
 		}
 	}
 	
-	static function feq(f1:Float,f2:Float) {
+	static public function floatEquals(f1:Float,f2:Float) {
 		var f1 = f1 < 0 ? -f1 : f1;
 		var f2 = f2 < 0 ? -f2 : f2;
 		if (f1 > f2 && f1 - f2 > 0.00001 || f2 > f1 && f2 - f1 > 0.00001) {
@@ -48,7 +43,7 @@ class Main {
 		}
 	}
 	
-	static function t(t:Bool, ?p:haxe.PosInfos) {
+	static public function isTrue(t:Bool, ?p:haxe.PosInfos) {
 		count++;
 		if (!t) {
 			failures++;
@@ -56,7 +51,7 @@ class Main {
 		}
 	}
 	
-	static function f(t:Bool, ?p:haxe.PosInfos) {
+	static public function isFalse(t:Bool, ?p:haxe.PosInfos) {
 		count++;
 		if (t) {
 			failures++;
