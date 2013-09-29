@@ -2057,20 +2057,6 @@ let generate_class ctx c =
 			| _ -> ()
 	end;
 
-	ctx.buf <- ctx.buf_c;
-
-	spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types)));
-	newline ctx;
-
-	(* generate static vars *)
-	if not (DynArray.empty svars) then begin
-		spr ctx "// static vars\n";
-		DynArray.iter (fun cf ->
-			spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
-			newline ctx;
-		) svars;
-	end;
-
 	(* add init field as function *)
 	begin match c.cl_init with
 		| None -> ()
@@ -2085,6 +2071,22 @@ let generate_class ctx c =
 			} in
 			f.cf_expr <- Some (mk (TFunction tf) t c.cl_pos);
 			DynArray.add methods (f,true)
+	end;
+
+	let vars = DynArray.to_list vars in
+	let vars = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) vars in
+	ctx.buf <- ctx.buf_c;
+
+	spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types)));
+	newline ctx;
+
+	(* generate static vars *)
+	if not (DynArray.empty svars) then begin
+		spr ctx "// static vars\n";
+		DynArray.iter (fun cf ->
+			spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
+			newline ctx;
+		) svars;
 	end;
 
 	(* generate function implementations *)
@@ -2108,11 +2110,11 @@ let generate_class ctx c =
 	newline ctx;
 
 	(* generate member struct *)
-	if not (DynArray.empty vars) then begin
+	if not (vars = []) then begin
 		spr ctx "// member var structure\n";
 		print ctx "typedef struct %s {" path;
 		let b = open_block ctx in
-		DynArray.iter (fun cf ->
+		List.iter (fun cf ->
 			newline ctx;
 			spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
 		) vars;
