@@ -4191,7 +4191,7 @@ let explode_expressions ctx e =
 			let e1 = simplify e1 in
 			{e with eexpr = TIf(e1,loop e2,opt loop e3)}
 		| TCall({eexpr = TCall(e2,_)} as e1,el1) ->
-			let et = declare_temp e2.etype (Some (loop e1)) e2.epos in
+			let et = declare_temp e1.etype (Some (loop e1)) e1.epos in
 			{e with eexpr = TCall(et,List.map simplify el1)}
 		| TCall(e1,el) ->
 			{e with eexpr = TCall(loop e1,List.map simplify el)}
