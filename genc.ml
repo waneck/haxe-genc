@@ -762,12 +762,11 @@ module ClosureHandler = struct
 				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
 				let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
 				let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic e.epos in
-				let eif = Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos in
+				let eif = Codegen.mk_parent (Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos) in
 				let ethen = mk (TCall(mk_cast efunc2,ethis :: el)) e.etype e.epos in
 				let eelse = mk (TCall(mk_cast efunc,el)) e.etype e.epos in
 				let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
-				let ternary_hack = mk (TMeta((Meta.Custom ":ternary",[],e.epos),e)) e.etype e.epos in
-				Expr.mk_cast ternary_hack r
+				Expr.mk_cast e r
 			end else
 				{e with eexpr = TCall(e1,el)}
 			in
@@ -1473,7 +1472,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 				assert false
 		in
 		print ctx "goto %s" label;
-	| TMeta((Meta.Custom ":ternary",_,_),{eexpr = TIf(e1,e2,Some e3)}) ->
+	| TIf(e1,e2,Some e3) when need_val ->
 		spr ctx "(";
 		generate_expr ctx true e1;
 		spr ctx " ? ";
