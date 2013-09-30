@@ -1289,15 +1289,20 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 				| TConst (TString s) -> s
 				| TCast ({eexpr = TConst (TString s) },None) -> s
 				| TCall({eexpr = TField(_,FStatic({cl_path = [],"String"},
-							     {cf_name = "ofPointerCopyNT"}))},
-			                     [{eexpr = TConst (TString s)}]) -> s
+					{cf_name = "ofPointerCopyNT"}))},
+					[{eexpr = TConst (TString s)}]) -> s
 				| _ ->
 				let _ = print_endline (s_expr (Type.s_type (print_context())) e1 ) in
 				assert false
 			in
 			spr ctx code;
 		| _ ->
-			assert false
+			ctx.con.com.error ("Unknown Lib function: " ^ cf.cf_name) e.epos
+		end
+	| TField(_,FStatic({cl_path = ["c"],"Lib"}, {cf_name="callMain"})),[] ->
+		begin match ctx.con.com.main with
+			| Some e -> generate_expr ctx false e
+			| None -> ctx.con.com.error "Cannot call main" e.epos;
 		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
 		ignore(check_include_meta ctx c.cl_meta);
@@ -2103,17 +2108,7 @@ let initialize_class con c =
 					add_init eassign;
 			end
 		| Method _ -> check_dynamic cf true;
-	) c.cl_ordered_statics;
-
-	(* check if we have the main class *)
-	begin match con.com.main_class with
-		| Some path when path = c.cl_path ->
-			let efield = Expr.mk_static_field_2 con.hxc.c_boot "mainFunc" c.cl_pos in
-			let efield2 = Expr.mk_static_field_2 c "main" c.cl_pos in
-			let eassign = mk (TBinop(OpAssign,efield,efield2)) efield.etype c.cl_pos in
-			add_init eassign
-		| _ -> ()
-	end
+	) c.cl_ordered_statics
 
 let generate com =
 	let rec find_class path mtl = match mtl with
@@ -2123,22 +2118,6 @@ let generate com =
 	in
 	let c_lib = find_class (["c"],"Lib") com.types in
 	let null_func _ = assert false in
-	let null_abstract = {
-		a_path = [],"";
-		a_private = false;
-		a_module = null_module;
-		a_pos = null_pos;
-		a_doc = None;
-		a_types = [];
-		a_meta = [];
-		a_from = [];
-		a_to = [];
-		a_ops = [];
-		a_unops = [];
-		a_impl = None;
-		a_array = [];
-		a_this = mk_mono();
-	} in
 	let hxc = List.fold_left (fun acc mt -> match mt with
 		| TClassDecl c ->
 			begin match c.cl_path with

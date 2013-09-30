@@ -26,8 +26,6 @@ typedef long long hx_int64;
 typedef int Date;
 ')
 @:keep @:native('hxc') class Boot {
-	
-	static public var mainFunc:Void->Dynamic;
 	static public var argc:Int;
 	static public var argv:Pointer<Pointer<Char>>;
 	
@@ -36,7 +34,7 @@ typedef int Date;
 		Boot.argv = argv;
 		c.Init._hx_init();
 		try {
-			mainFunc();
+			c.Lib.callMain();
 			return 0;
 		} catch(e:Dynamic) {
 			trace("Something went wrong");

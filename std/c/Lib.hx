@@ -4,13 +4,15 @@ import c.Pointer;
 import c.Types;
 
 extern class Lib {
-	@:plain public static function sizeof<T>(c:TypeReference<T>):Int;
+	public static function sizeof<T>(c:TypeReference<T>):Int;
 
-	@:plain public static function dereference<T>(ptr:Pointer<T>):T;
+	public static function dereference<T>(ptr:Pointer<T>):T;
 	
-	@:plain public static function getAddress<T>(t:T):Pointer<T>;
+	public static function getAddress<T>(t:T):Pointer<T>;
 	
-	@:plain public static function alloca(i:Int):Pointer<Void>;
+	public static function alloca(i:Int):Pointer<Void>;
 	
-	@:plain public static function cCode(s:ConstPointer<Char>):Dynamic;
+	public static function cCode(s:ConstPointer<Char>):Dynamic;
+	
+	public static function callMain():Void;
 }
