@@ -23,6 +23,7 @@ package c;
 import c.Pointer;
 import c.Lib;
 
+@:keep
 @:struct
 class FixedArray<T> implements ArrayAccess<T>
 {

@@ -37,7 +37,7 @@ import c.CString.memcmp;
 	public function new(string:String) {
 		if ( string != null ){
 			length = string.length;
-			__a = cast c.CStdlib.calloc(string.length, Lib.sizeof(new TypeReference<Char>()));
+			__a = cast c.CStdlib.calloc(string.length, 8 /*TODO*/);
 			FixedArray.copy(string.__a,0,__a,0,string.length); // 0x00
 		} else {
 			__a = null;
@@ -122,7 +122,10 @@ import c.CString.memcmp;
 		var start = 0;
 		var cur = indexOf(delimiter);
 		if (cur == -1){
-			return [this];
+			var ret = new Array();
+			ret.push(this);
+			return ret;
+			//return [this];
 		} else {
 			var ret = new Array();
 			while (true){
@@ -250,7 +253,7 @@ import c.CString.memcmp;
 			return s0;
 		var ret = new String(null);
 		ret.length = s0.length + s1.length;
-		ret.__a = cast c.CStdlib.calloc(ret.length, Lib.sizeof(new TypeReference<Char>()));
+		ret.__a = cast c.CStdlib.calloc(ret.length, 8 /*TODO*/);
 		FixedArray.copy(s0.__a,0,ret.__a,0,s0.length);
 		FixedArray.copy(s1.__a,0,ret.__a,s0.length,s1.length);
 		return ret;
@@ -267,7 +270,7 @@ import c.CString.memcmp;
 
 	@:keep private static function ofPointerCopy<T>(len:Int, p:ConstPointer<Char>):String {
 		var ret = new String(null);
-		ret.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Char>()));
+		ret.__a = cast c.CStdlib.calloc(len, 8 /*TODO*/);
 		FixedArray.copy(p,0,ret.__a,0,len);
 		ret.length = len;
 		return ret;
@@ -275,7 +278,7 @@ import c.CString.memcmp;
 
 	@:keep private static function stringOfSize(len:Int):String {
 		var s = new String(null);
-		s.__a = cast c.CStdlib.calloc(len, Lib.sizeof(new TypeReference<Char>()));
+		s.__a = cast c.CStdlib.calloc(len, 8 /*TODO*/);
 		s.length = len;
 		return s;
 	}

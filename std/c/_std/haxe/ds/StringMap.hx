@@ -22,7 +22,6 @@
 
 package haxe.ds;
 
-@:generic
 class StringMap<T> implements Map.IMap<String,T> {
 
 	var tree:haxe.ds.BalancedTree<String, T>;

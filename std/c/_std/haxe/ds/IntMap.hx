@@ -22,7 +22,6 @@
 
 package haxe.ds;
 
-@:generic
 class IntMap<T> implements Map.IMap<Int,T> {
 
 	var tree:haxe.ds.BalancedTree<Int, T>;

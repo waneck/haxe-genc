@@ -32,7 +32,6 @@ package haxe.ds;
 	Iteration over keys and values, using `keys` and `iterator` respectively,
 	are in-order.
 **/
-@:generic
 class BalancedTree<K,V> {
 	var root:TreeNode<K,V>;
 	var compare:K->K->Int;
@@ -207,7 +206,6 @@ class BalancedTree<K,V> {
 	}
 }
 
-@:generic
 class TreeNode<K,V> {
 	public var left : TreeNode<K,V>;
 	public var right : TreeNode<K,V>;
