@@ -146,21 +146,12 @@ module Expr = struct
 	let mk_local v p =
 		{ eexpr = TLocal v; etype = v.v_type; epos = p }
 
-	let mk_comma_block con p el =
+	let mk_block con p el =
 		let t = match List.rev el with
 			| [] -> con.com.basic.tvoid
 			| hd :: _ -> hd.etype
 		in
-		{
-			eexpr = TMeta( (Meta.Comma,[],p),
-			{
-				eexpr = TBlock el;
-				etype = t;
-				epos = p;
-			});
-			etype = t;
-			epos = p;
-		}
+		mk (TBlock el) t p
 
 	let mk_cast e t =
 		{ e with eexpr = TCast(e, None); etype = t }
@@ -382,7 +373,7 @@ module VarDeclarations = struct
 			) tvars in
 			(match el with
 			| [e] -> e
-			| _ -> Expr.mk_comma_block gen.gcon e.epos el)
+			| _ -> Expr.mk_block gen.gcon e.epos el)
 		| TPatMatch dt ->
  			let rec dtl d = match d with
 				| DTGoto _ | DTExpr _ ->
@@ -406,7 +397,8 @@ module VarDeclarations = struct
 				gen.declare_var (v,None)
 			) dt.dt_var_init;
 			Type.map_expr gen.map e
-		| _ -> Type.map_expr gen.map e
+		| _ ->
+			Type.map_expr gen.map e
 
 end
 
@@ -923,8 +915,8 @@ module ExprTransformation = struct
 			let eassign = Codegen.binop OpAssign (Expr.mk_static_field_2 gen.gcon.hxc.c_exception "thrownObject" p) e1 e1.etype e1.epos in
 			let epeek = Expr.mk_static_call_2 gen.gcon.hxc.c_exception "peek" [] p in
 			let el = [Expr.mk_deref gen.gcon p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
-			let ejmp = Codegen.mk_parent (Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p) in
-			Expr.mk_comma_block gen.gcon p [eassign;ejmp]
+			let ejmp = Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p in
+			Expr.mk_block gen.gcon p [eassign;ejmp]
 		| TFor(v,e1,e2) ->
 			let e1 = gen.map e1 in
 			let vtemp = gen.declare_temp e1.etype None in
@@ -1367,15 +1359,15 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "[";
 		generate_expr ctx true e2;
 		spr ctx "]"
-	| TMeta( (Meta.Comma,_,_), { eexpr = TBlock(el) } ) when el <> [] ->
-		spr ctx "(";
-		concat ctx "," (generate_expr ctx true) el;
-		spr ctx ")"
 	| TBlock([]) ->
 		spr ctx "{ }"
 	| TBlock [{eexpr = TBlock _} as e1] ->
 		(* TODO: I don't really understand where these come from *)
 		generate_expr ctx need_val e1
+	| TBlock el when need_val ->
+		spr ctx "(";
+		concat ctx "," (generate_expr ctx true) el;
+		spr ctx ")"
 	| TBlock(el) ->
 		spr ctx "{";
 		let b = open_block ctx in
