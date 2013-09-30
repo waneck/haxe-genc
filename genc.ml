@@ -174,38 +174,6 @@ module Expr = struct
 	let mk_sizeof con p e =
 		mk_static_call con.hxc.c_lib con.hxc.cf_sizeof [e] p
 
-	let mk_assign_ref con p local value =
-		mk_comma_block con p [
-			{
-				eexpr = TBinop(Ast.OpAssign, local, value);
-				etype = value.etype;
-				epos = p;
-			};
-			mk_ref con p local
-		]
-
-	let mk_type_param con pos t =
-		let t = con.hxc.t_typeref t in
-		let c,p = match follow t with
-			| TInst(c,p) -> c,p
-			| _ -> assert false
-		in
-		{ eexpr = TNew(c,p,[]); etype = t; epos = pos }
-
-	let mk_null_type_param con pos t =
-		let t = con.hxc.t_typeref t in
-		let c,p = match follow t with
-			| TInst(c,p) -> c,p
-			| _ -> assert false
-		in
-		let typeref = { eexpr = TNew(c,p,[]); etype = t; epos = pos } in
-		{ eexpr = TField(typeref, FInstance(c,PMap.find "nullval" c.cl_fields)); etype = t; epos = pos }
-
-
-	let mk_stack_tp_init con t p =
-		let e = mk_static_call_2 con.hxc.c_lib "alloca" [mk_sizeof con p (mk_type_param con p t)] p in
-		{e with etype = t}
-
 	let mk_ccode ctx s p =
 		mk_static_call_2 ctx.con.hxc.c_lib "cCode" [mk (TConst (TString s)) ctx.con.com.basic.tstring p] p
 		(* mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos *)
@@ -979,7 +947,7 @@ module ExprTransformation = struct
 				| TInst(c,[t]) -> c,t
 				| _ -> assert false
 			in
-			mk (TNew(c,[t],[Expr.mk_type_param gen.gcon e.epos t])) gen.gcon.com.basic.tvoid e.epos
+			mk (TNew(c,[t],[])) gen.gcon.com.basic.tvoid e.epos
 		| TArrayDecl el ->
 			mk_array_decl gen el e.etype e.epos
 		| _ ->
