@@ -2034,9 +2034,9 @@ let generate_hxc_files con =
 
 let add_filters con =
 	(* ascending priority *)
+	Filters.add_filter con VarDeclarations.filter;
 	Filters.add_filter con ExprTransformation.filter;
 	Filters.add_filter con ArrayHandler.filter;
-	Filters.add_filter con VarDeclarations.filter;
 	Filters.add_filter con TypeChecker.filter;
 	Filters.add_filter con StringHandler.filter;
 	Filters.add_filter con ClosureHandler.filter;
