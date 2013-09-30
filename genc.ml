@@ -156,18 +156,11 @@ module Expr = struct
 	let mk_cast e t =
 		{ e with eexpr = TCast(e, None); etype = t }
 
-	let mk_ref con p e =
-		mk_static_call con.hxc.c_lib con.hxc.cf_addressof [e] p
-
 	let mk_deref con p e =
 		mk_static_call con.hxc.c_lib con.hxc.cf_deref [e] p
 
-	let mk_sizeof con p e =
-		mk_static_call con.hxc.c_lib con.hxc.cf_sizeof [e] p
-
 	let mk_ccode ctx s p =
 		mk_static_call_2 ctx.con.hxc.c_lib "cCode" [mk (TConst (TString s)) ctx.con.com.basic.tstring p] p
-		(* mk (TCall ((mk (TLocal ctx.con.cvar) t_dynamic Ast.null_pos), [mk (TConst (TString s)) t_dynamic Ast.null_pos])) t_dynamic Ast.null_pos *)
 
 	let mk_int com i p =
 		mk (TConst (TInt (Int32.of_int i))) com.basic.tint p
