@@ -1137,6 +1137,7 @@ end
 	- TTry is replaced with a TSwitch and uses setjmp
 	- TThrow is replaced with a call to longjmp
 	- TFor is replaced with TWhile
+	- TArrayDecl introduces an init function which is TCalled
 *)
 module ExprTransformation = struct
 
@@ -1907,21 +1908,10 @@ and generate_expr ctx e = match e.eexpr with
 		print ctx "%s: {}" (mk_label (Array.length dt.dt_dt_lookup));
 		newline ctx;
 	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ | TFunction _ ->
-		(* handled in field init pass *)
+		(* removed by filters *)
 		assert false
 
 (* Type generation *)
-
-(*
-	This function applies some general transformations.
-
-	- TArrayDecl introduces an init function which is TCalled
-*)
-let init_field ctx cf =
-	match cf.cf_expr with
-		| None -> None
-		| Some {eexpr = TFunction tf} -> Some tf.tf_expr
-		| Some e -> Some e
 
 let generate_function_header ctx c cf stat =
 	let args,ret,s = match follow cf.cf_type with
@@ -1951,7 +1941,11 @@ let generate_typedef_declaration ctx t =
 	Printf.sprintf "const typeref %s__typeref = { \"%s\", %s, sizeof(%s) }; //typeref declaration" (path_to_name path) (s_type_path path) nullval (s_type ctx t)
 
 let generate_method ctx c cf stat =
-	let e = init_field ctx cf in
+	let e = match cf.cf_expr with
+		| None -> None
+		| Some {eexpr = TFunction tf} -> Some tf.tf_expr
+		| Some e -> Some e
+	in
 	ctx.fctx <- {
 		field = cf;
 		loop_stack = []
