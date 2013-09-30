@@ -1504,7 +1504,10 @@ let rec s_type ctx t =
 			| _ -> s)
 			| _ -> assert false;
 	)
-	| TInst({cl_kind = KTypeParameter _},_) -> "void*"
+	| TInst({cl_kind = KTypeParameter _} as c,_) ->
+		(* HACK HACK HACK HACK *)
+		if c.cl_path = (["c";"TypeReference"],"T") then "const void*"
+		else "void*"
 	| TInst(c,_) ->
 		let ptr = if is_value_type ctx t then "" else "*" in
 		add_class_dependency ctx c;
