@@ -68,7 +68,7 @@ extern class CStdio {
 
 	@:plain static public function putchar(ch:Int):Int;
 
-	@:plain static public function puts(str:Pointer<Char>):Int;
+	@:plain static public function puts(str:ConstPointer<Char>):Int;
 
 	@:plain static public function ungetc(ch:Int, stream:File):Int;
 
