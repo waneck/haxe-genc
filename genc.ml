@@ -360,71 +360,11 @@ module Filters = struct
 		} in
 		gen
 
-	let initialize_class con c =
-		let add_init e = match c.cl_init with
-			| None -> c.cl_init <- Some e
-			| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
-		in
-		let check_dynamic cf stat = match cf.cf_kind with
-			| Method MethDynamic ->
-				(* create implementation field *)
-				let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl" } in
-				if stat then begin
-					c.cl_ordered_statics <- cf2 :: c.cl_ordered_statics;
-					c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
-					let ef1 = Expr.mk_static_field c cf cf.cf_pos in
-					let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
-					let ef2 = wrap_static_function con ef2 in
-					add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
-				end else begin
-					c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
-					c.cl_fields <- PMap.add cf2.cf_name cf2 c.cl_fields
-				end;
-				cf.cf_expr <- None;
-				cf.cf_kind <- Var {v_read = AccNormal; v_write = AccNormal};
-			| _ ->
-				()
-		in
-
-		List.iter (fun cf -> match cf.cf_kind with
-			| Var _ -> ()
-			| Method m -> match cf.cf_type with
-				| TFun(args,ret) -> check_dynamic cf false;
-				| _ -> assert false;
-		) c.cl_ordered_fields;
-
-		List.iter (fun cf -> match cf.cf_kind with
-			| Var _ ->
-				begin match cf.cf_expr with
-					| None -> ()
-					| Some e ->
-						(* add static var initialization to cl_init *)
-						let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
-						let ethis = mk (TTypeExpr (TClassDecl c)) ta cf.cf_pos in
-						let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
-						let eassign = mk (TBinop(OpAssign,efield,e)) efield.etype cf.cf_pos in
-						cf.cf_expr <- Some eassign;
-						add_init eassign;
-				end
-			| Method _ -> check_dynamic cf true;
-		) c.cl_ordered_statics;
-
-		(* check if we have the main class *)
-		begin match con.com.main_class with
-			| Some path when path = c.cl_path ->
-				let efield = Expr.mk_static_field_2 con.hxc.c_boot "mainFunc" c.cl_pos in
-				let efield2 = Expr.mk_static_field_2 c "main" c.cl_pos in
-				let eassign = mk (TBinop(OpAssign,efield,efield2)) efield.etype c.cl_pos in
-				add_init eassign
-			| _ -> ()
-		end
-
 	let run_filters_types con =
 		let gen = mk_gen_context con in
 		List.iter (fun md -> match md with
 			| TClassDecl c ->
 				gen.mtype <- Some md;
-				initialize_class con c;
 				let added = ref [] in
 				let old_run_filter = gen.run_filter in
 				gen.run_filter <- (fun cf ->
@@ -1135,7 +1075,7 @@ module ClosureHandler = struct
 	let rec is_closure_expr e =
 		match e.eexpr with
 			| TLocal _
-			| TField(_,(FInstance(_,{cf_kind = Var _ | Method MethDynamic}) | FStatic(_,{cf_kind = Var _ | Method MethDynamic}))) ->
+			| TField(_,(FInstance(_,{cf_kind = Var _ }) | FStatic(_,{cf_kind = Var _ }))) ->
 				true
 			| TField(_,FAnon _) ->
 				true
@@ -1185,7 +1125,7 @@ module ClosureHandler = struct
 			in
 			is_extern := snd old;
 			e
-		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not (m = MethDynamic) && not !is_extern ->
+		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not !is_extern ->
 			wrap_static_function gen.gcon (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
@@ -2030,7 +1970,7 @@ let generate_class ctx c =
 
 	(* split fields into member vars, static vars and functions *)
 	List.iter (fun cf -> match cf.cf_kind with
-		| Var _ | Method MethDynamic -> DynArray.add vars cf
+		| Var _ -> DynArray.add vars cf
 		| Method m ->  DynArray.add methods (cf,false)
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with
@@ -2404,6 +2344,72 @@ let add_filters con =
 	Filters.add_filter con ClosureHandler.filter;
 	Filters.add_filter con DefaultValues.filter
 
+let initialize_class con c =
+	let add_init e = match c.cl_init with
+		| None -> c.cl_init <- Some e
+		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
+	in
+	let check_dynamic cf stat = match cf.cf_kind with
+		| Method MethDynamic ->
+			(* create implementation field *)
+			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl"; cf_kind = Method MethNormal } in
+			if stat then begin
+				c.cl_ordered_statics <- cf2 :: c.cl_ordered_statics;
+				c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
+				let ef1 = Expr.mk_static_field c cf cf.cf_pos in
+				let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
+				let ef2 = wrap_static_function con ef2 in
+				add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
+			end else begin
+				c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
+				c.cl_fields <- PMap.add cf2.cf_name cf2 c.cl_fields
+			end;
+			cf.cf_expr <- None;
+			cf.cf_kind <- Var {v_read = AccNormal; v_write = AccNormal};
+			cf.cf_type <- con.hxc.t_closure cf.cf_type;
+		| _ ->
+			()
+	in
+
+	let check_closure cf = match cf.cf_type with
+		| TFun _ -> cf.cf_type <- con.hxc.t_closure cf.cf_type;
+		| _ -> ()
+	in
+
+	List.iter (fun cf -> match cf.cf_kind with
+		| Var _ -> check_closure cf
+		| Method m -> match cf.cf_type with
+			| TFun(_) -> check_dynamic cf false;
+			| _ -> assert false;
+	) c.cl_ordered_fields;
+
+	List.iter (fun cf -> match cf.cf_kind with
+		| Var _ ->
+			check_closure cf;
+			begin match cf.cf_expr with
+				| None -> ()
+				| Some e ->
+					(* add static var initialization to cl_init *)
+					let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
+					let ethis = mk (TTypeExpr (TClassDecl c)) ta cf.cf_pos in
+					let efield = Codegen.field ethis cf.cf_name cf.cf_type cf.cf_pos in
+					let eassign = mk (TBinop(OpAssign,efield,e)) efield.etype cf.cf_pos in
+					cf.cf_expr <- Some eassign;
+					add_init eassign;
+			end
+		| Method _ -> check_dynamic cf true;
+	) c.cl_ordered_statics;
+
+	(* check if we have the main class *)
+	begin match con.com.main_class with
+		| Some path when path = c.cl_path ->
+			let efield = Expr.mk_static_field_2 con.hxc.c_boot "mainFunc" c.cl_pos in
+			let efield2 = Expr.mk_static_field_2 c "main" c.cl_pos in
+			let eassign = mk (TBinop(OpAssign,efield,efield2)) efield.etype c.cl_pos in
+			add_init eassign
+		| _ -> ()
+	end
+
 let generate com =
 	let rec find_class path mtl = match mtl with
 		| TClassDecl c :: _ when c.cl_path = path -> c
@@ -2502,6 +2508,10 @@ let generate com =
 		filters = [];
 	} in
 	add_filters con;
+	List.iter (fun mt -> match mt with
+		| TClassDecl c -> initialize_class con c
+		| _ -> ()
+	) com.types;
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
