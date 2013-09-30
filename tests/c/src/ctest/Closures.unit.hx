@@ -44,11 +44,11 @@ var buf = new StringBuf();
 function newTrace(s,?p) {
 	buf.add(s);
 }
-haxe.Log.trace = newTrace;
-trace("foo");
-trace("bar");
-haxe.Log.trace = old;
-buf.toString() == "foobar";
+//haxe.Log.trace = newTrace;
+//trace("foo");
+//trace("bar");
+//haxe.Log.trace = old;
+//buf.toString() == "foobar";
 
 var s0 = "begin";
 function f1(s1:String) {

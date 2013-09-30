@@ -35,6 +35,7 @@ type hxc = {
 	t_closure : t -> t;
 	t_int64 : t -> t;
 	t_jmp_buf : t;
+	t_vararg : t;
 
 	c_lib : tclass;
 	c_boot : tclass;
@@ -45,7 +46,7 @@ type hxc = {
 	c_cstring : tclass;
 	c_csetjmp : tclass;
 	c_cstdlib : tclass;
-	c_bool    : tabstract;
+	c_cstdio : tclass;
 
 	cf_deref : tclass_field;
 	cf_addressof : tclass_field;
@@ -112,6 +113,17 @@ let rec follow t =
 	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
 		follow (Codegen.Abstract.get_underlying_type a pl)
 	| _ -> t
+
+module Analyzer = struct
+	let assigns_to_trace = ref false
+
+	let rec run e =
+		match e.eexpr with
+		| TBinop(OpAssign, {eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"}, {cf_name = "trace"}))}, _) ->
+			assigns_to_trace := true
+		| _ ->
+			Type.iter run e
+end
 
 module Expr = struct
 
@@ -407,7 +419,11 @@ module DefaultValues = struct
 					let eif = mk (TIf(econd,eassign,None)) gen.gcom.basic.tvoid e.epos in
 					Codegen.concat eif e
 			) tf.tf_expr tf.tf_args in
-			{ e with eexpr = TFunction({tf with tf_expr = e})}
+			{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
+		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
+			let eformat = mk (TConst (TString "%s:%ld:%s\\n")) gen.gcom.basic.tstring e.epos in
+			let eargs = mk (TArrayDecl [List.assoc "fileName" fl;List.assoc "lineNumber" fl;e1]) (gen.gcom.basic.tarray gen.gcon.hxc.t_vararg) e.epos in
+			Expr.mk_static_call_2 gen.gcon.hxc.c_cstdio "printf" [eformat;eargs] e.epos
 		| _ ->
 			Type.map_expr gen.map e
 
@@ -2061,14 +2077,18 @@ let initialize_class con c =
 		| _ -> ()
 	in
 
-	List.iter (fun cf -> match cf.cf_kind with
+	List.iter (fun cf ->
+		(match cf.cf_expr with Some e -> Analyzer.run e | _ -> ());
+		match cf.cf_kind with
 		| Var _ -> check_closure cf
 		| Method m -> match cf.cf_type with
 			| TFun(_) -> check_dynamic cf false;
 			| _ -> assert false;
 	) c.cl_ordered_fields;
 
-	List.iter (fun cf -> match cf.cf_kind with
+	List.iter (fun cf ->
+		(match cf.cf_expr with Some e -> Analyzer.run e | _ -> ());
+		match cf.cf_kind with
 		| Var _ ->
 			check_closure cf;
 			begin match cf.cf_expr with
@@ -2133,6 +2153,7 @@ let generate com =
 				| ["c"],"CString" -> {acc with c_cstring = c}
 				| ["c"],"CStdlib" -> {acc with c_cstdlib = c}
 				| ["c"],"CSetjmp" -> {acc with c_csetjmp = c}
+				| ["c"],"CStdio" -> {acc with c_cstdio = c}
 				| _ -> acc
 			end
 		| TAbstractDecl a ->
@@ -2148,8 +2169,8 @@ let generate com =
 			| ["c"],"Int64" ->
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				{acc with t_int64 = fun t -> TAbstract(a,[t])}
-			| [],"Bool" ->
-				{acc with c_bool = a}
+			| ["c"],"VarArg" ->
+				{acc with t_vararg = TAbstract(a,[])}
 			| _ ->
 				acc
 			end
@@ -2167,6 +2188,7 @@ let generate com =
 		t_func_pointer = null_func;
 		t_int64 = null_func;
 		t_jmp_buf = t_dynamic;
+		t_vararg = t_dynamic;
 		c_boot = null_class;
 		c_exception = null_class;
 		c_string = null_class;
@@ -2175,7 +2197,8 @@ let generate com =
 		c_cstring = null_class;
 		c_csetjmp = null_class;
 		c_cstdlib = null_class;
-		c_bool = null_abstract;
+		c_cstdio = null_class;
+
 	} com.types in
 	let con = {
 		com = com;
