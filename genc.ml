@@ -1014,6 +1014,8 @@ module StringHandler = struct
 	let filter gen e =
 		match e.eexpr with
 		(* always wrap String literal *)
+		| TCall({eexpr = TField(_,FStatic({cl_path=[],"String"},{cf_name = "raw"}))},[{eexpr = TConst(TString s)} as e]) ->
+			e
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
 		| TBinop((OpEq | OpNotEq) as op,e1,e2) when is_string e1.etype ->
