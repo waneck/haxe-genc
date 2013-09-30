@@ -25,11 +25,11 @@
 class Sys {
 
 	public static function print( v : Dynamic ) : Void {
-
+		c.CStdio.printf(Std.string(v), []);
 	}
 
 	public static function println( v : Dynamic ) : Void {
-
+		c.CStdio.puts(Std.string(v));
 	}
 
 	//public static function stdin() : haxe.io.Input {
