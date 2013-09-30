@@ -247,13 +247,7 @@ module Filters = struct
 		let ret = List.fold_left (fun e f ->
 			let run = f gen in
 			let process_next_block = ref true in
-			(* set all temps as used, as we cannot guarantee for now the availability of a var *)
 			let rec map e = match e.eexpr with
-				| TMeta( (Meta.Comma,_,_), { eexpr = TBlock(el) } ) ->
-					process_next_block := false;
-					let ret = run e in
-					process_next_block := true;
-					ret
 				| TBlock(el) when !process_next_block ->
 					let old_declared = !declared_vars in
 					declared_vars := [];
@@ -355,8 +349,6 @@ module VarDeclarations = struct
 
 	let filter gen = function e ->
 		match e.eexpr with
-		| TMeta( (Meta.Comma,a,p), ({ eexpr = TBlock(el) } as block) ) when el <> [] ->
-			{ e with eexpr = TMeta( (Meta.Comma,a,p), { block with eexpr = TBlock(List.map gen.map el) }) }
 		| TVars tvars ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
 				gen.declare_var (v,None);
@@ -1444,7 +1436,9 @@ and generate_expr ctx need_val e = match e.eexpr with
 		l()
 	| TContinue ->
 		spr ctx "continue";
-	| TBreak _ ->
+	| TMeta((Meta.Custom ":really",_,_), {eexpr = TBreak}) ->
+		spr ctx "break";
+	| TBreak ->
 		let label = match ctx.fctx.loop_stack with
 			| (Some s) :: _ -> s
 			| None :: l ->
@@ -1468,39 +1462,32 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "if";
 		generate_expr ctx true e1;
 		generate_expr ctx false (mk_block e2);
-		(match e3 with None -> () | Some e3 ->
-			spr ctx " else ";
-			generate_expr ctx false (mk_block e3))
+		begin match e3 with
+			| None -> ()
+			| Some e3 ->
+				spr ctx " else ";
+				generate_expr ctx false (mk_block e3)
+		end
 	| TSwitch(e1,cases,edef) ->
 		spr ctx "switch";
 		generate_expr ctx true e1;
 		spr ctx "{";
 		let generate_case_expr e =
-			spr ctx "{";
-			let b = open_block ctx in
-			List.iter (fun e ->
-				newline ctx;
-				generate_expr ctx false e;
-			) (match e.eexpr with TBlock el -> el | _ -> [e]);
-			newline ctx;
-			spr ctx "break";
-			b();
-			newline ctx;
-			spr ctx "}";
+			generate_expr ctx false (Codegen.concat e (mk (TMeta((Meta.Custom ":really",[],e.epos),mk TBreak e.etype e.epos)) e.etype e.epos))
 		in
 		let b = open_block ctx in
 		List.iter (fun (el,e) ->
 			newline ctx;
 			spr ctx "case ";
 			concat ctx "," (generate_expr ctx true) el;
-			spr ctx ":";
+			spr ctx ": ";
 			generate_case_expr e;
 		) cases;
 		begin match edef with
 			| None -> ()
 			| Some e ->
 				newline ctx;
-				spr ctx "default:";
+				spr ctx "default: ";
 				generate_case_expr e;
 		end;
 		b();
