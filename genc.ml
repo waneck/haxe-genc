@@ -1268,17 +1268,20 @@ let rec s_type_with_name ctx t n =
 
 (* Expr generation *)
 
-let rec generate_call ctx e e1 el = match e1.eexpr,el with
+let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 	| TField(_,FStatic({cl_path = ["c"],"Lib"}, cf)),(e1 :: el) ->
 		begin match cf.cf_name with
 		| "getAddress" ->
 			spr ctx "&(";
-			generate_expr ctx e1;
+			generate_expr ctx true e1;
 			spr ctx ")"
 		| "dereference" ->
-			spr ctx "*(";
-			generate_expr ctx e1;
-			spr ctx ")"
+			if not need_val then generate_expr ctx true e1
+			else begin
+				spr ctx "*(";
+				generate_expr ctx true e1;
+				spr ctx ")"
+			end
 		| "sizeof" ->
 			(* get TypeReference's type *)
 			let t = match follow e1.etype with
@@ -1288,7 +1291,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 			print ctx "sizeof(%s)" (s_type ctx t);
 		| "alloca" ->
 			spr ctx "ALLOCA(";
-			generate_expr ctx e1;
+			generate_expr ctx true e1;
 			spr ctx ")"
 		| "cCode" ->
 			let code = match e1.eexpr with
@@ -1308,7 +1311,7 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
 		ignore(check_include_meta ctx c.cl_meta);
 		print ctx "%s(" name;
-		concat ctx "," (generate_expr ctx) el;
+		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
 	| TField(_,FStatic(_,cf)),el when Meta.has Meta.Native cf.cf_meta ->
 		let name = match get_native_name cf.cf_meta with
@@ -1316,26 +1319,26 @@ let rec generate_call ctx e e1 el = match e1.eexpr,el with
 			| None -> ctx.con.com.error "String argument expected for @:native" e.epos; "_"
 		in
 		print ctx "%s(" name;
-		concat ctx "," (generate_expr ctx) el;
+		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
 	| TField(e1,FInstance(c,cf)),el ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf);
 		spr ctx "(";
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		List.iter (fun e ->
 			spr ctx ",";
-			generate_expr ctx e
+			generate_expr ctx true e
 		) el;
 		spr ctx ")"
 	| TField(_,FEnum(en,ef)),el ->
 		print ctx "new_%s(" (full_enum_field_name en ef);
-		concat ctx "," (generate_expr ctx) el;
+		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")"
 	| _ ->
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		spr ctx "(";
-		concat ctx "," (generate_expr ctx) el;
+		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")"
 
 and generate_constant ctx e = function
@@ -1357,35 +1360,35 @@ and generate_constant ctx e = function
 	| TThis ->
 		spr ctx "this"
 
-and generate_expr ctx e = match e.eexpr with
+and generate_expr ctx need_val e = match e.eexpr with
 	| TConst c ->
 		generate_constant ctx e c
 	| TArray(e1, e2) ->
-		generate_expr ctx e1;
+		generate_expr ctx need_val e1;
 		spr ctx "[";
-		generate_expr ctx e2;
+		generate_expr ctx true e2;
 		spr ctx "]"
 	| TMeta( (Meta.Comma,_,_), { eexpr = TBlock(el) } ) when el <> [] ->
 		spr ctx "(";
-		concat ctx "," (generate_expr ctx) el;
+		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")"
 	| TBlock([]) ->
 		spr ctx "{ }"
 	| TBlock [{eexpr = TBlock _} as e1] ->
 		(* TODO: I don't really understand where these come from *)
-		generate_expr ctx e1
+		generate_expr ctx need_val e1
 	| TBlock(el) ->
 		spr ctx "{";
 		let b = open_block ctx in
 		List.iter (fun e ->
 			newline ctx;
-			generate_expr ctx e;
+			generate_expr ctx false e;
 		) el;
 		b();
 		newline ctx;
 		spr ctx "}";
 	| TCall(e1,el) ->
-		generate_call ctx e e1 el
+		generate_call ctx e true e1 el
 	| TTypeExpr (TClassDecl c) ->
 		spr ctx (path_to_name c.cl_path);
 	| TTypeExpr (TEnumDecl e) ->
@@ -1403,7 +1406,7 @@ and generate_expr ctx e = match e.eexpr with
 	| TField(e1,fa) ->
 		let n = field_name fa in
 		spr ctx "(";
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		if is_value_type ctx e1.etype then
 			print ctx ").%s" n
 		else
@@ -1419,19 +1422,19 @@ and generate_expr ctx e = match e.eexpr with
 			| _ -> assert false
 		in
 		print ctx "new_c_%s(" s;
-		concat ctx "," (generate_expr ctx) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
+		concat ctx "," (generate_expr ctx true) (List.map (fun (_,e) -> add_type_dependency ctx e.etype; e) fl);
 		spr ctx ")";
 	| TNew(c,tl,el) ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c (match c.cl_constructor with None -> assert false | Some cf -> cf));
 		spr ctx "(";
-		concat ctx "," (generate_expr ctx) el;
+		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
 	| TReturn None ->
 		spr ctx "return"
 	| TReturn (Some e1) ->
 		spr ctx "return ";
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 	| TVars(vl) ->
 		let f (v,eo) =
 			spr ctx (s_type_with_name ctx v.v_type v.v_name);
@@ -1439,22 +1442,22 @@ and generate_expr ctx e = match e.eexpr with
 				| None -> ()
 				| Some e ->
 					spr ctx " = ";
-					generate_expr ctx e;
+					generate_expr ctx true e;
 			end
 		in
 		concat ctx ";" f vl
 	| TWhile(e1,e2,NormalWhile) ->
 		spr ctx "while";
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		let l = begin_loop ctx in
-		generate_expr ctx (mk_block e2);
+		generate_expr ctx false (mk_block e2);
 		l()
 	| TWhile(e1,e2,DoWhile) ->
 		spr ctx "do";
 		let l = begin_loop ctx in
-		generate_expr ctx (mk_block e2);
+		generate_expr ctx false (mk_block e2);
 		spr ctx " while";
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		l()
 	| TContinue ->
 		spr ctx "continue";
@@ -1472,29 +1475,29 @@ and generate_expr ctx e = match e.eexpr with
 		print ctx "goto %s" label;
 	| TMeta((Meta.Custom ":ternary",_,_),{eexpr = TIf(e1,e2,Some e3)}) ->
 		spr ctx "(";
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		spr ctx " ? ";
-		generate_expr ctx e2;
+		generate_expr ctx true e2;
 		spr ctx " : ";
-		generate_expr ctx e3;
+		generate_expr ctx true e3;
 		spr ctx ")"
 	| TIf(e1,e2,e3) ->
 		spr ctx "if";
-		generate_expr ctx e1;
-		generate_expr ctx (mk_block e2);
+		generate_expr ctx true e1;
+		generate_expr ctx false (mk_block e2);
 		(match e3 with None -> () | Some e3 ->
 			spr ctx " else ";
-			generate_expr ctx (mk_block e3))
+			generate_expr ctx false (mk_block e3))
 	| TSwitch(e1,cases,edef) ->
 		spr ctx "switch";
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		spr ctx "{";
 		let generate_case_expr e =
 			spr ctx "{";
 			let b = open_block ctx in
 			List.iter (fun e ->
 				newline ctx;
-				generate_expr ctx e;
+				generate_expr ctx false e;
 			) (match e.eexpr with TBlock el -> el | _ -> [e]);
 			newline ctx;
 			spr ctx "break";
@@ -1506,7 +1509,7 @@ and generate_expr ctx e = match e.eexpr with
 		List.iter (fun (el,e) ->
 			newline ctx;
 			spr ctx "case ";
-			concat ctx "," (generate_expr ctx) el;
+			concat ctx "," (generate_expr ctx true) el;
 			spr ctx ":";
 			generate_case_expr e;
 		) cases;
@@ -1520,33 +1523,39 @@ and generate_expr ctx e = match e.eexpr with
 		b();
 		newline ctx;
 		spr ctx "}";
+	| TBinop(OpAssign,e1,e2) ->
+		generate_expr ctx need_val e1;
+		spr ctx " = ";
+		generate_expr ctx true e2;
 	| TBinop(op,e1,e2) ->
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		print ctx " %s " (match op with OpUShr -> ">>" | _ -> s_binop op);
-		generate_expr ctx e2;
+		generate_expr ctx true e2;
 	| TUnop(op,Prefix,e1) ->
 		spr ctx (s_unop op);
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 	| TUnop(op,Postfix,e1) ->
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		spr ctx (s_unop op);
 	| TParenthesis e1 ->
 		spr ctx "(";
-		generate_expr ctx e1;
+		generate_expr ctx need_val e1;
 		spr ctx ")";
 	| TMeta(_,e) ->
-		generate_expr ctx e
+		generate_expr ctx need_val e
+	| TCast(e1,_) when not need_val ->
+		generate_expr ctx need_val e1
 	| TCast(e1,_) ->
 		begin match follow e1.etype with
-		| TInst(c,_) when Meta.has Meta.Struct c.cl_meta -> generate_expr ctx e1;
-		| TAbstract({a_path = ["c"],"Pointer"},[t]) when ((s_type ctx e.etype) = "int") -> generate_expr ctx e1;
+		| TInst(c,_) when Meta.has Meta.Struct c.cl_meta -> generate_expr ctx true e1;
+		| TAbstract({a_path = ["c"],"Pointer"},[t]) when ((s_type ctx e.etype) = "int") -> generate_expr ctx true e1;
 		| _ ->
 			print ctx "((%s) (" (s_type ctx e.etype);
-			generate_expr ctx e1;
+			generate_expr ctx true e1;
 			spr ctx "))"
 		end
 	| TEnumParameter (e1,ef,i) ->
-		generate_expr ctx e1;
+		generate_expr ctx true e1;
 		begin match follow e1.etype with
 			| TEnum(en,_) ->
 				add_enum_dependency ctx en;
@@ -1555,7 +1564,7 @@ and generate_expr ctx e = match e.eexpr with
 			| _ ->
 				assert false
 		end
-	| TPatMatch dt ->
+(* 	| TPatMatch dt ->
 		let fl = ctx.con.num_labels in
 		ctx.con.num_labels <- ctx.con.num_labels + (Array.length dt.dt_dt_lookup) + 1;
 		let mk_label i = Printf.sprintf "_hx_label%i" (i + fl) in
@@ -1618,8 +1627,8 @@ and generate_expr ctx e = match e.eexpr with
 			newline ctx;
 		) dt.dt_dt_lookup;
 		print ctx "%s: {}" (mk_label (Array.length dt.dt_dt_lookup));
-		newline ctx;
-	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ | TFunction _ ->
+		newline ctx; *)
+	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ | TFunction _ | TPatMatch _ ->
 		(* removed by filters *)
 		assert false
 
@@ -1665,7 +1674,7 @@ let generate_method ctx c cf stat =
 	generate_function_header ctx c cf stat;
 	begin match e with
 		| None -> ()
-		| Some e -> generate_expr ctx e
+		| Some e -> generate_expr ctx false e
 	end;
 	newline ctx
 
