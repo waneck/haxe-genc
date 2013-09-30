@@ -1137,6 +1137,8 @@ module ClosureHandler = struct
 			| TLocal _
 			| TField(_,(FInstance(_,{cf_kind = Var _ | Method MethDynamic}) | FStatic(_,{cf_kind = Var _ | Method MethDynamic}))) ->
 				true
+			| TField(_,FAnon _) ->
+				true
 			| TMeta(_,e1) | TParenthesis(e1) ->
 				is_closure_expr e1
 			| _ ->

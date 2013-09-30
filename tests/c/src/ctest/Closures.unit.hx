@@ -72,3 +72,11 @@ function fAssign(s1:String) {
 s0 == "foo";
 fAssign("bar");
 s0 == "bar";
+
+var s1 = "foo";
+var anon = {
+	test:function(s2) {
+		return s1 + s2;
+	}
+}
+anon.test("bar") == "foobar";
