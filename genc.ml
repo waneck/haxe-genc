@@ -882,7 +882,7 @@ module ExprTransformation = struct
 			let epush = Expr.mk_static_call_2 hxc.c_exception "push" [] p in
 			let esubj = Codegen.mk_parent (Expr.mk_static_call_2 hxc.c_csetjmp "setjmp" [Expr.mk_deref gen.gcon p epush] p) in
 			let epop = Expr.mk_static_call_2 hxc.c_exception "pop" [] p in
-			let loc = alloc_var "_hx_jmp_buf" (hxc.t_pointer hxc.t_jmp_buf) in
+			let loc = gen.declare_temp (hxc.t_pointer hxc.t_jmp_buf) None in
 			let epopassign = mk (TVars [loc,Some epop]) gen.gcon.com.basic.tvoid p in
 			let ec1,found = Expr.insert_expr (gen.map e1) true (fun e ->
 				match e.eexpr with
@@ -893,9 +893,8 @@ module ExprTransformation = struct
 			let c1 = [Expr.mk_int gen.gcom 0 e.epos],ec1 in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
-				let eassign = Codegen.binop OpAssign (mk (TVars [v,None]) gen.gcon.com.basic.tvoid p) (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p) v.v_type p in
-				let e = Codegen.concat eassign (Codegen.concat epopassign (gen.map e)) in
-				let e = mk (TBlock [e]) e.etype e.epos in
+				let evar = mk (TVars [v,Some (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p)]) gen.gcon.com.basic.tvoid p in
+				let e = Codegen.concat evar (Codegen.concat epopassign (gen.map e)) in
 				if v.v_type == t_dynamic then begin
 					def := Some e;
 					None;
@@ -909,7 +908,7 @@ module ExprTransformation = struct
 			let epeek = Expr.mk_static_call_2 gen.gcon.hxc.c_exception "peek" [] p in
 			let el = [Expr.mk_deref gen.gcon p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
 			let ejmp = Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p in
-			Expr.mk_block gen.gcon p [eassign;ejmp]
+			Codegen.concat eassign ejmp
 		| TFor(v,e1,e2) ->
 			let e1 = gen.map e1 in
 			let vtemp = gen.declare_temp e1.etype None in
@@ -1352,8 +1351,8 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "[";
 		generate_expr ctx true e2;
 		spr ctx "]"
-	| TBlock([]) ->
-		spr ctx "{ }"
+	| TBlock([])  ->
+		if need_val then spr ctx "{ }"
 	| TBlock [{eexpr = TBlock _} as e1] ->
 		(* TODO: I don't really understand where these come from *)
 		generate_expr ctx need_val e1
