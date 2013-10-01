@@ -958,27 +958,27 @@ module VTableHandler = struct
 
 	type maps = {
 		mutable next  : int;
-		mutable cids  : ( string, int ) PMap.t; 
+		mutable cids  : ( string, int ) PMap.t;
 		mutable count : ( int, int ) PMap.t;
 		mutable types : ( int, tclass ) PMap.t;
 	}
-	
-	let insert_or_inc con m id  = 
+
+	let insert_or_inc con m id  =
 		if PMap.exists id m then PMap.add id ((PMap.find id m) + 1) m else (PMap.add id 0 m)
-	
+
 	let get_class_id m c =
 		let s  = String.concat ""  ((snd c.cl_path) :: (fst c.cl_path)) in
 		let id = m.next in
-		if PMap.exists s m.cids 
-			then (PMap.find s m.cids, m) 
+		if PMap.exists s m.cids
+			then (PMap.find s m.cids, m)
 			else (	m.cids <- PMap.add s id m.cids; m.next <- id +1; (id,m) )
-			
+
 	let get_chains con tps =
 		let m = List.fold_left ( fun m tp -> match tp with
-			| TClassDecl c -> ( match c.cl_super with 
-				| Some (c1,_) -> 
-					let (id,m) =  (get_class_id m c)  in 
-					let (id1,m) =  (get_class_id m c1) in 
+			| TClassDecl c -> ( match c.cl_super with
+				| Some (c1,_) ->
+					let (id,m) =  (get_class_id m c)  in
+					let (id1,m) =  (get_class_id m c1) in
 						m.types <- PMap.add id c m.types;
 						m.types <- PMap.add id1 c1 m.types;
 						m.count <- (insert_or_inc con m.count id);
@@ -986,8 +986,8 @@ module VTableHandler = struct
 						m
 				| None -> m )
 			| _ -> m ) { count = PMap.empty; types = PMap.empty; cids = PMap.empty; next = 0} tps in
-		
-		let eochains = 
+
+		let eochains =
 			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
 			List.iter ( fun c -> print_endline (  " end of chain: " ^ (snd c.cl_path)   ) ) eochains
 
@@ -1414,9 +1414,6 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "]"
 	| TBlock([])  ->
 		if need_val then spr ctx "{ }"
-	| TBlock [{eexpr = TBlock _} as e1] ->
-		(* TODO: I don't really understand where these come from *)
-		generate_expr ctx need_val e1
 	| TBlock el when need_val ->
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx true) el;
@@ -1711,10 +1708,18 @@ let generate_method ctx c cf stat =
 		field = cf;
 		loop_stack = []
 	};
+	let rec loop e = match e.eexpr with
+		| TBlock [{eexpr = TBlock _} as e1] ->
+			loop e1
+		| _ ->
+			Type.map_expr loop e
+	in
 	generate_function_header ctx c cf stat;
 	begin match e with
 		| None -> ()
-		| Some e -> generate_expr ctx false e
+		| Some e -> match loop e with
+			| {eexpr = TBlock [] } -> spr ctx "{ }"
+			| e -> generate_expr ctx false e
 	end;
 	newline ctx;
 	spr ctx "\n"
@@ -2244,9 +2249,9 @@ let generate com =
 		| TClassDecl c -> initialize_class con c
 		| _ -> ()
 	) com.types;
-	
+
 	VTableHandler.get_chains con com.types;
-	
+
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
