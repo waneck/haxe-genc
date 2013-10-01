@@ -1716,7 +1716,8 @@ let generate_method ctx c cf stat =
 		| None -> ()
 		| Some e -> generate_expr ctx false e
 	end;
-	newline ctx
+	newline ctx;
+	spr ctx "\n"
 
 let generate_class ctx c =
 	let vars = DynArray.create () in
@@ -1789,17 +1790,19 @@ let generate_class ctx c =
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
-		spr ctx "// static vars\n";
+		spr ctx "\n// static vars\n";
 		DynArray.iter (fun cf ->
 			spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
 			newline ctx;
 		) svars;
 	end;
 
+	spr ctx "\n";
+
 	(* generate function implementations *)
 	if not (DynArray.empty methods) then begin
 		DynArray.iter (fun (cf,stat) ->
-			generate_method ctx c cf stat
+			generate_method ctx c cf stat;
 		) methods;
 	end;
 
@@ -1818,7 +1821,7 @@ let generate_class ctx c =
 
 	(* generate member struct *)
 	if not (vars = []) then begin
-		spr ctx "// member var structure\n";
+		spr ctx "\n// member var structure\n";
 		print ctx "typedef struct %s {" path;
 		let b = open_block ctx in
 		List.iter (fun cf ->
@@ -1829,7 +1832,6 @@ let generate_class ctx c =
 		newline ctx;
 		print ctx "} %s" path;
 		newline ctx;
-		spr ctx "\n";
 	end else begin
 		print ctx "typedef struct %s { void* dummy; } %s" path path;
 		newline ctx;
@@ -1837,7 +1839,7 @@ let generate_class ctx c =
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
-		spr ctx "// static vars\n";
+		spr ctx "\n// static vars\n";
 		DynArray.iter (fun cf ->
 		spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
 		newline ctx
@@ -1846,7 +1848,7 @@ let generate_class ctx c =
 
 	(* generate forward declarations of functions *)
 	if not (DynArray.empty methods) then begin
-		spr ctx "// forward declarations\n";
+		spr ctx "\n// forward declarations\n";
 		DynArray.iter (fun (cf,stat) ->
 			generate_function_header ctx c cf stat;
 			newline ctx;
