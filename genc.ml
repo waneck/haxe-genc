@@ -14,6 +14,7 @@ open Type
 
 	Function names:
 		generate_ -> outputs content to buffer
+		s_ -> return string
 
 *)
 
@@ -125,6 +126,36 @@ module Analyzer = struct
 			Type.iter run e
 end
 
+
+(* Helper *)
+
+let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
+
+let get_type_id con t =
+	let id = Type.s_type (print_context()) (follow t) in
+	try
+		PMap.find id con.type_ids
+	with Not_found ->
+		con.num_identified_types <- con.num_identified_types + 1;
+		con.type_ids <- PMap.add id con.num_identified_types con.type_ids;
+		con.num_identified_types
+
+let sort_anon_fields fields =
+	List.sort (fun cf1 cf2 ->
+		match Meta.has Meta.Optional cf1.cf_meta, Meta.has Meta.Optional cf2.cf_meta with
+		| false,false | true,true -> compare cf1.cf_name cf2.cf_name
+		| true, false -> 1
+		| false, true -> -1
+	) fields
+
+let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
+
+let alloc_temp_func con =
+	let id = con.num_temp_funcs in
+	con.num_temp_funcs <- con.num_temp_funcs + 1;
+	let name = "_hx_func_" ^ (string_of_int id) in
+	name, id
+
 module Expr = struct
 
 	let t_path t = match follow t with
@@ -214,25 +245,17 @@ module Expr = struct
 			| _ -> e :: acc,found
 		) ([],false) el in
 		mk (TBlock (List.rev el)) e.etype e.epos,found
+
+	let wrap_function con ethis efunc =
+		let e = mk_obj_decl ["_this",ethis;"_func",mk_cast efunc (con.hxc.t_func_pointer efunc.etype)] efunc.epos in
+		mk_cast e (con.hxc.t_closure efunc.etype)
+
+	let wrap_static_function con efunc =
+		wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
 end
 
-let path_to_name (pack,name) = match pack with [] -> name | _ -> String.concat "_" pack ^ "_" ^ name
 
-let get_type_id con t =
-	let id = Type.s_type (print_context()) (follow t) in
-	try
-		PMap.find id con.type_ids
-	with Not_found ->
-		con.num_identified_types <- con.num_identified_types + 1;
-		con.type_ids <- PMap.add id con.num_identified_types con.type_ids;
-		con.num_identified_types
-
-let wrap_function con ethis efunc =
-	let e = Expr.mk_obj_decl ["_this",ethis;"_func",Expr.mk_cast efunc (con.hxc.t_func_pointer efunc.etype)] efunc.epos in
-	Expr.mk_cast e (con.hxc.t_closure efunc.etype)
-
-let wrap_static_function con efunc =
-	wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
+(* Filters *)
 
 module Filters = struct
 
@@ -352,11 +375,10 @@ module Filters = struct
 
 end
 
-(** VarDeclarations **)
-(**
-	this filter will take all out-of-place TVars declarations and add to the beginning of each block
-	TPatMatch has some var names sanitized
-**)
+(*
+	This filter will take all out-of-place TVars declarations and add to the beginning of each block.
+	TPatMatch has some var names sanitized.
+*)
 module VarDeclarations = struct
 
 	let filter gen = function e ->
@@ -429,21 +451,6 @@ module DefaultValues = struct
 
 end
 
-let sort_anon_fields fields =
-	List.sort (fun cf1 cf2 ->
-		match Meta.has Meta.Optional cf1.cf_meta, Meta.has Meta.Optional cf2.cf_meta with
-		| false,false | true,true -> compare cf1.cf_name cf2.cf_name
-		| true, false -> 1
-		| false, true -> -1
-	) fields
-
-let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
-
-let alloc_temp_func con =
-	let id = con.num_temp_funcs in
-	con.num_temp_funcs <- con.num_temp_funcs + 1;
-	let name = "_hx_func_" ^ (string_of_int id) in
-	name, id
 
 (*
 	This filter handles unification cases where AST transformation may be required.
@@ -632,7 +639,7 @@ end
 	This filter turns all non-top TFunction nodes into class fields and creates a c.Closure object
 	in their place.
 
-	It also handles call to closures, i.e. local variables and Var class fields.
+	It also handles calls to closures, i.e. local variables and Var class fields.
 *)
 module ClosureHandler = struct
 	let fstack = ref []
@@ -708,7 +715,7 @@ module ClosureHandler = struct
 		gen.add_field c cf true;
 		gen.run_filter cf;
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
-		wrap_function gen.gcon e_init e_field
+		Expr.wrap_function gen.gcon e_init e_field
 
 	let is_call_expr = ref false
 	let is_extern = ref false
@@ -766,7 +773,7 @@ module ClosureHandler = struct
 			is_extern := snd old;
 			e
 		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not !is_extern ->
-			wrap_static_function gen.gcon (Expr.mk_static_field c cf e.epos)
+			Expr.wrap_static_function gen.gcon (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
@@ -947,8 +954,6 @@ module ExprTransformation = struct
 end
 
 
-
-
 (* Output and context *)
 
 let spr ctx s = Buffer.add_string ctx.buf s
@@ -1080,6 +1085,7 @@ let anon_signature ctx fields =
 		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
 		s
 
+
 (* Dependency handling *)
 
 let add_dependency ctx dept path =
@@ -1139,6 +1145,7 @@ let add_type_dependency ctx t = match follow t with
 		(* TODO: that doesn't seem quite right *)
 		add_dependency ctx DForward ([],"Dynamic")
 
+
 (* Helper *)
 
 let rec is_value_type ctx t = match follow t with
@@ -1179,6 +1186,7 @@ let full_field_name c cf =
 let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
+
 
 (* Type signature *)
 
@@ -1256,6 +1264,7 @@ let rec s_type_with_name ctx t n =
 		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| _ ->
 		(s_type ctx t) ^ " " ^ n
+
 
 (* Expr generation *)
 
@@ -1623,6 +1632,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 		(* removed by filters *)
 		assert false
 
+
 (* Type generation *)
 
 let generate_function_header ctx c cf stat =
@@ -1908,7 +1918,7 @@ let generate_enum ctx en =
 
 let generate_typeref con t =
 	let path = Expr.t_path t in
-	let ctx = mk_type_context con path  in
+	let ctx = mk_type_context con path in
 	ctx.buf <- ctx.buf_c;
 	spr ctx (generate_typedef_declaration ctx t);
 	newline ctx;
@@ -1985,9 +1995,6 @@ let generate_anon con name fields =
 	spr ctx "}";
 	close_type_context ctx
 
-let generate_anon_file con =
-	PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) con.anon_types
-
 let generate_init_file con =
 	let ctx = mk_type_context con (["c"],"Init") in
 	ctx.buf <- ctx.buf_c;
@@ -2035,20 +2042,8 @@ let generate_make_file con =
 	output_string ch "\n\nclean:\n\t$(RM) $(OUT) $(OBJECTS)";
 	close_out ch
 
-let generate_hxc_files con =
-	generate_anon_file con;
-	generate_init_file con;
-	generate_make_file con
 
-let add_filters con =
-	(* ascending priority *)
-	Filters.add_filter con VarDeclarations.filter;
-	Filters.add_filter con ExprTransformation.filter;
-	Filters.add_filter con ArrayHandler.filter;
-	Filters.add_filter con TypeChecker.filter;
-	Filters.add_filter con StringHandler.filter;
-	Filters.add_filter con ClosureHandler.filter;
-	Filters.add_filter con DefaultValues.filter
+(* Init & main *)
 
 let initialize_class con c =
 	let add_init e = match c.cl_init with
@@ -2064,7 +2059,7 @@ let initialize_class con c =
 				c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
 				let ef1 = Expr.mk_static_field c cf cf.cf_pos in
 				let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
-				let ef2 = wrap_static_function con ef2 in
+				let ef2 = Expr.wrap_static_function con ef2 in
 				add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
 			end else begin
 				c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
@@ -2177,7 +2172,6 @@ let generate com =
 		c_csetjmp = null_class;
 		c_cstdlib = null_class;
 		c_cstdio = null_class;
-
 	} com.types in
 	let con = {
 		com = com;
@@ -2194,7 +2188,17 @@ let generate com =
 		generated_types = [];
 		filters = [];
 	} in
-	add_filters con;
+	(* ascending priority *)
+	let filters = [
+		VarDeclarations.filter;
+		ExprTransformation.filter;
+		ArrayHandler.filter;
+		TypeChecker.filter;
+		StringHandler.filter;
+		ClosureHandler.filter;
+		DefaultValues.filter
+	] in
+	List.iter (Filters.add_filter con) filters;
 	List.iter (fun mt -> match mt with
 		| TClassDecl c -> initialize_class con c
 		| _ -> ()
@@ -2202,4 +2206,6 @@ let generate com =
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
-	generate_hxc_files con
+	PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) con.anon_types;
+	generate_init_file con;
+	generate_make_file con
