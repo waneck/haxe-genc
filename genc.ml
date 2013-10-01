@@ -999,6 +999,12 @@ end
 
 module VTableHandler = struct
 
+	let fold_map f c xs = 
+		let c, ys = List.fold_left ( fun (acc,ys) x -> 
+			let acc, y  = f acc x in acc, (y :: ys) 
+		) (c,[]) xs in
+		c, List.rev ys
+
 	type maps = {
 		mutable next  : int;
 		mutable cids  : ( string, int ) PMap.t;
@@ -1016,6 +1022,64 @@ module VTableHandler = struct
 			then (PMap.find s m.cids, m)
 			else (	m.cids <- PMap.add s id m.cids; m.next <- id +1; (id,m) )
 
+	let filterin f i xs = 
+		let rec loop i xs acc = match xs with 
+		| x :: xs -> if f(x) then loop (i+1) xs ((i,x) :: acc) else loop i xs acc
+		| [] -> (i,acc)
+		in loop i xs []
+				
+	let get_methods i c = let (i,res) = filterin ( fun cf -> match cf.cf_kind with
+			| Method (MethNormal) -> true
+			| _ -> false ) i c.cl_ordered_fields in (i,List.rev res)
+			
+	(*let get_methods c = List.filter ( fun cf -> match cf.cf_kind with
+			| Method (MethNormal) -> true
+			| _ -> false ) c.cl_ordered_fields;*)
+	
+	let reverse_collect c =
+		let rev_chain c = 
+			let rec loop c acc = match c.cl_super with
+			| Some (c,_) ->  loop c ( c :: acc)
+			| _ -> acc
+			in (loop c [c])
+		in
+		let rec collect super acc xs idx = match xs with 
+		| []        -> super :: acc
+		| c :: tail -> 
+			let (idx,methods) = (get_methods idx c) in
+			let mm = List.fold_left ( fun  m (midx,cf) -> 
+				PMap.add cf.cf_name ( cf.cf_name,cf,midx,c) m )  PMap.empty methods in
+			let mm = PMap.foldi ( fun k v mm -> if PMap.mem k mm then mm else PMap.add k v mm ) super mm in
+			collect mm (super :: acc) tail idx
+		in
+		let ichain = collect PMap.empty [] (rev_chain c) 0
+		in ichain (*print_endline (string_of_int (List.length ichain))*)
+		
+	let p_ichain xs = List.iter (fun m ->
+		(   print_endline "---";
+			(PMap.iter 
+				(fun _ (n,cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) n midx) ) 
+			m)
+		)
+	) xs
+	
+	let get_class_name cf = match cf.cf_type with
+	| TInst (c,_) -> snd c.cl_path
+	| _ -> assert false
+		
+				
+	let p_methods c = (
+		List.iter ( fun cf -> match cf.cf_kind with
+			| Method (MethNormal) -> 
+				print_endline ( " methnormal: " ^ cf.cf_name )
+			| _ -> ()
+		) c.cl_ordered_fields;
+		List.iter ( fun cf -> match cf.cf_kind with
+			| Method (MethNormal) -> 
+				print_endline ( " override: " ^ cf.cf_name  )
+			| _ -> ()
+		) c.cl_overrides )
+	
 	let get_chains con tps =
 		let m = List.fold_left ( fun m tp -> match tp with
 			| TClassDecl c -> ( match c.cl_super with
@@ -1032,7 +1096,10 @@ module VTableHandler = struct
 
 		let eochains =
 			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
-			List.iter ( fun c -> print_endline (  " end of chain: " ^ (snd c.cl_path)   ) ) eochains
+			List.iter ( fun c -> (
+				print_endline (  " end of chain: " ^ (snd c.cl_path)   );  
+				p_methods c ;
+				p_ichain (reverse_collect c)) ) eochains
 
 end
 
