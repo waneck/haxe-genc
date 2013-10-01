@@ -1163,7 +1163,7 @@ let add_class_dependency ctx c =
 
 let add_enum_dependency ctx en =
 	if not (check_include_meta ctx en.e_meta) && not en.e_extern then
-		add_dependency ctx (if Meta.has Meta.Struct en.e_meta then DFull else DForward) en.e_path
+		add_dependency ctx (if Meta.has Meta.Struct en.e_meta || Meta.has Meta.FlatEnum en.e_meta then DFull else DForward) en.e_path
 
 let add_abstract_dependency ctx a =
 	if not (check_include_meta ctx a.a_meta) then
@@ -1190,7 +1190,7 @@ let add_type_dependency ctx t = match follow t with
 let rec is_value_type ctx t = match follow t with
 	| TAbstract({ a_impl = None }, _) -> true
 	| TInst(c,_) -> has_meta Meta.Struct c.cl_meta
-	| TEnum(_,_) -> false (* TODO: define when a TEnum will be stack-allocated and when it won't *)
+	| TEnum(en,_) -> Meta.has Meta.FlatEnum en.e_meta
 	| TAbstract(a,tl) ->
 		if has_meta Meta.NotNull a.a_meta then
 			true
@@ -1441,9 +1441,13 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TField(_,FStatic(c,cf)) ->
 		add_class_dependency ctx c;
 		spr ctx (full_field_name c cf)
+	| TField(_,FEnum(en,ef)) when Meta.has Meta.FlatEnum en.e_meta ->
+		spr ctx (full_enum_field_name en ef)
 	| TField(_,FEnum(en,ef)) ->
 		add_enum_dependency ctx en;
 		print ctx "new_%s()" (full_enum_field_name en ef)
+	| TField(e1,FDynamic "index") when (match follow e1.etype with TEnum(en,_) -> Meta.has Meta.FlatEnum en.e_meta | _ -> false) ->
+		generate_expr ctx need_val e1
 	| TField(e1,fa) ->
 		let n = field_name fa in
 		spr ctx "(";
@@ -1864,6 +1868,15 @@ let generate_class ctx c =
 	spr ctx (get_typeref_forward ctx c.cl_path);
 	newline ctx
 
+let generate_flat_enum ctx en =
+	ctx.buf <- ctx.buf_h;
+	let ctors = List.map (fun s -> PMap.find s en.e_constrs) en.e_names in
+	let path = path_to_name en.e_path in
+	print ctx "typedef enum %s {\n\t" path;
+	let f ef = spr ctx (full_enum_field_name en ef) in
+	concat ctx ",\n\t" f ctors;
+	print ctx "\n} %s;" path
+
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
 	add_dependency ctx DForward ([],"typeref");
@@ -1981,7 +1994,10 @@ let generate_type con mt = match mt with
 		close_type_context ctx;
 	| TEnumDecl en when not en.e_extern ->
 		let ctx = mk_type_context con en.e_path  in
-		generate_enum ctx en;
+		if Meta.has Meta.FlatEnum en.e_meta then
+			generate_flat_enum ctx en
+		else
+			generate_enum ctx en;
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()
 	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
@@ -2082,7 +2098,10 @@ let generate_make_file con =
 		output_string ch (Printf.sprintf "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OUTFLAG)%s.$(OBJEXT) -c %s.c\n\n" (relpath ctx.type_path) (relpath ctx.type_path))
 	) con.generated_types;
 	output_string ch "OBJECTS = ";
-	List.iter (fun ctx -> output_string ch (Printf.sprintf "%s.$(OBJEXT) " (relpath ctx.type_path))) con.generated_types;
+	List.iter (fun ctx ->
+		if Buffer.length ctx.buf_c > 0 then
+			output_string ch (Printf.sprintf "%s.$(OBJEXT) " (relpath ctx.type_path))
+	) con.generated_types;
 	output_string ch "\n\n$(OUT): $(OBJECTS)";
 	output_string ch "\n\t$(CC) $(CFLAGS) $(INCLUDES) $(OBJECTS) -o $(OUT) $(LDFLAGS)\n";
 	output_string ch "\n\nclean:\n\t$(RM) $(OUT) $(OBJECTS)";
