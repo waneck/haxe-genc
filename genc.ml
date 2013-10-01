@@ -832,9 +832,9 @@ module ArrayHandler = struct
 
 	let get_type_size tp = match tp with
 	| TAbstract ( { a_path =[], "Int" } ,_ )
-	| TAbstract ( { a_path =["c"], ("Int32" | "UInt32") } ,_ ) -> "32"
-	| TAbstract ( { a_path =["c"], ("Int16" | "UInt16") } ,_ ) -> "16"
-	| TAbstract ( { a_path =["c"], ("Int8" | "UInt8" | "Char" | "UChar") } ,_ ) -> "8"
+	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32"
+	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16") } ,_ ) -> "16"
+	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hc_char" | "hx_uchar") } ,_ ) -> "8"
 	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
 	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64"
 	| _ -> "64"
