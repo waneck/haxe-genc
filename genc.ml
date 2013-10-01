@@ -253,6 +253,9 @@ module Expr = struct
 
 	let wrap_static_function con efunc =
 		wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
+
+	let add_meta m e =
+		mk (TMeta((m,[],e.epos),e)) e.etype e.epos
 end
 
 
@@ -614,11 +617,11 @@ module SwitchHandler = struct
 			let mk_label_expr i = mk (TConst (TInt (Int32.of_int (i + fl)))) gen.gcom.basic.tint e.epos in
 			let mk_label_meta i =
 				let elabel = mk_label_expr i in
-				mk (TMeta((Meta.Custom ":label",[],e.epos),elabel)) elabel.etype elabel.epos
+				Expr.add_meta (Meta.Custom ":label") elabel
 			in
 			let mk_goto_meta i =
 				let elabel = mk_label_expr i in
-				mk (TMeta((Meta.Custom ":goto",[],e.epos),elabel)) elabel.etype elabel.epos
+				Expr.add_meta (Meta.Custom ":goto") elabel
 			in
 			let check_var_name v =
 				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
@@ -652,6 +655,7 @@ module SwitchHandler = struct
 				(Codegen.concat elabel edt) :: acc,i + 1
 			) ([],0) dt.dt_dt_lookup in
 			let e = gen.map (Expr.mk_block gen.gcon e.epos el) in
+			let e = Expr.add_meta (Meta.Custom ":patternMatching") e in
 			List.iter (fun (v,_) -> check_var_name v) dt.dt_var_init;
 			let einit = mk (TVars dt.dt_var_init) gen.gcom.basic.tvoid e.epos in
 			let elabel = mk_label_meta i in
@@ -1587,7 +1591,9 @@ and generate_expr ctx need_val e = match e.eexpr with
 		generate_expr ctx true e1;
 		spr ctx "{";
 		let generate_case_expr e =
-			generate_expr ctx false (Codegen.concat e (mk (TMeta((Meta.Custom ":really",[],e.epos),mk TBreak e.etype e.epos)) e.etype e.epos))
+			let e = if Meta.has (Meta.Custom ":patternMatching") ctx.fctx.meta then e
+			else Codegen.concat e (Expr.add_meta (Meta.Custom ":really") (mk TBreak e.etype e.epos)) in
+			generate_expr ctx false e
 		in
 		let b = open_block ctx in
 		List.iter (fun (el,e) ->
