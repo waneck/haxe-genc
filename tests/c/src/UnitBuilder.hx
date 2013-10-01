@@ -49,10 +49,7 @@ class UnitBuilder {
 				if (file.endsWith(".unit.hx")) {
 					numFiles++;
 					var cl = macro class A {
-						static public function run() @:pos(pos) {
-							trace("Begin");
-							${read(filePath)}
-						}
+						static public function run() @:pos(pos) ${read(filePath)}
 					}
 					var name = ~/\./g.map(file, function(_) return "_");
 					cl.name = name;
@@ -126,7 +123,7 @@ class UnitBuilder {
 			case EBlock(b): b;
 			case _: throw "false";
 		}
-		var ret = [];
+		var ret = [macro @:pos(p) trace("Begin")];
 		for (e in block) {
 			var e = switch(e) {
 				case macro $e1 == $i{"false"}, macro $i{"false"} == $e1:
