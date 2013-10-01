@@ -174,9 +174,7 @@ module Expr = struct
 	let mk_static_call c cf el p =
 		let ef = mk_static_field c cf p in
 		let tr = match follow ef.etype with
-			| TFun(args,tr) ->
-				List.iter2 (fun (_,_,t) e -> Type.unify e.etype t) args el;
-				tr
+			| TFun(args,tr) -> tr
 			| _ -> assert false
 		in
 		mk (TCall(ef,el)) tr p
@@ -424,7 +422,14 @@ module DefaultValues = struct
 			) tf.tf_expr tf.tf_args in
 			{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
 		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
-			let eformat = mk (TConst (TString "%s:%ld:%s\\n")) gen.gcom.basic.tstring e.epos in
+			let s = match follow e1.etype with
+				| TAbstract({a_path=[],"Int"},_) -> "i"
+				| TInst({cl_path=[],"String"},_) -> "s"
+				| _ ->
+					gen.gcom.warning "This will probably not work as expected" e.epos;
+					"s"
+			in
+			let eformat = mk (TConst (TString ("%s:%ld: %" ^ s ^ "\\n"))) gen.gcom.basic.tstring e.epos in
 			let eargs = mk (TArrayDecl [List.assoc "fileName" fl;List.assoc "lineNumber" fl;e1]) (gen.gcom.basic.tarray gen.gcon.hxc.t_vararg) e.epos in
 			Expr.mk_static_call_2 gen.gcon.hxc.c_cstdio "printf" [eformat;eargs] e.epos
 		| _ ->
@@ -865,7 +870,7 @@ module ArrayHandler = struct
 				Type.map_expr gen.map e
 			end
 		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, ev) ->
-			if op <> Ast.OpAssign then assert false; (* FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
+			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix = get_type_size (follow tp) in
@@ -978,7 +983,7 @@ module ExprTransformation = struct
 			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
 			let enext = Expr.mk_cast enext enext.etype in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
-			let ebody = Codegen.concat enext e2 in
+			let ebody = Codegen.concat enext (gen.map e2) in
 			mk (TBlock [
 				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
@@ -1337,6 +1342,18 @@ let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
+let keywords =
+	let h = Hashtbl.create 0 in
+	List.iter (fun s -> Hashtbl.add h s ()) [
+		"auto";"break";"case";"char";"const";"continue";" default";"do";"double";
+		"else";"enum";"extern";"float";"for";"goto";"if";"int";
+		"long";"register";"return";"short";"signed";"sizeof";"static";"struct";
+		"switch";"typedef";"union";"unsigned";"void";"volatile";"while";
+	];
+	h
+
+let escape_name n =
+	if Hashtbl.mem keywords n then "hx_" ^ n else n
 
 (* Type signature *)
 
@@ -1411,9 +1428,9 @@ let rec s_type_with_name ctx t n =
 		s_type_with_name ctx t n
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
-		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
+		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) (escape_name n) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| _ ->
-		(s_type ctx t) ^ " " ^ n
+		(s_type ctx t) ^ " " ^ (escape_name n)
 
 
 (* Expr generation *)
@@ -1461,7 +1478,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 	| TField(_,FStatic({cl_path = ["c"],"Lib"}, {cf_name="callMain"})),[] ->
 		begin match ctx.con.com.main with
 			| Some e -> generate_expr ctx false e
-			| None -> ctx.con.com.error "Cannot call main" e.epos;
+			| None -> ()
 		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
 		ignore(check_include_meta ctx c.cl_meta);
@@ -1564,11 +1581,11 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx true e1;
 		if is_value_type ctx e1.etype then
-			print ctx ").%s" n
+			print ctx ").%s" (escape_name n)
 		else
-			print ctx ")->%s" n
+			print ctx ")->%s" (escape_name n)
 	| TLocal v ->
-		spr ctx v.v_name;
+		spr ctx (escape_name v.v_name);
 	| TObjectDecl fl ->
 		let s = match follow e.etype with
 			| TAnon an ->
@@ -2332,6 +2349,12 @@ let generate com =
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
-	PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) con.anon_types;
+	let rec loop () =
+		let anons = con.anon_types in
+		con.anon_types <- PMap.empty;
+		PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) anons;
+		if not (PMap.is_empty con.anon_types) then loop()
+	in
+	loop();
 	generate_init_file con;
 	generate_make_file con
