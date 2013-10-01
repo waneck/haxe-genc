@@ -1270,6 +1270,18 @@ let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
+let keywords =
+	let h = Hashtbl.create 0 in
+	List.iter (fun s -> Hashtbl.add h s ()) [
+		"auto";"break";"case";"char";"const";"continue";" default";"do";"double";
+		"else";"enum";"extern";"float";"for";"goto";"if";"int";
+		"long";"register";"return";"short";"signed";"sizeof";"static";"struct";
+		"switch";"typedef";"union";"unsigned";"void";"volatile";"while";
+	];
+	h
+
+let escape_name n =
+	if Hashtbl.mem keywords n then "hx_" ^ n else n
 
 (* Type signature *)
 
@@ -1344,9 +1356,9 @@ let rec s_type_with_name ctx t n =
 		s_type_with_name ctx t n
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
-		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) n (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
+		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) (escape_name n) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
 	| _ ->
-		(s_type ctx t) ^ " " ^ n
+		(s_type ctx t) ^ " " ^ (escape_name n)
 
 
 (* Expr generation *)
@@ -1497,11 +1509,11 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx true e1;
 		if is_value_type ctx e1.etype then
-			print ctx ").%s" n
+			print ctx ").%s" (escape_name n)
 		else
-			print ctx ")->%s" n
+			print ctx ")->%s" (escape_name n)
 	| TLocal v ->
-		spr ctx v.v_name;
+		spr ctx (escape_name v.v_name);
 	| TObjectDecl fl ->
 		let s = match follow e.etype with
 			| TAnon an ->
