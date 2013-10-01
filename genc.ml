@@ -609,7 +609,7 @@ module StringHandler = struct
 		| TBinop((OpEq | OpNotEq) as op,e1,e2) when is_string e1.etype ->
 			Expr.mk_binop op
 				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "equals" [gen.map e1; gen.map e2] e1.epos)
-				(Expr.mk_int gen.gcom 1 e1.epos)
+				(mk (TConst (TBool true)) gen.gcom.basic.tbool e1.epos)
 				e.etype
 				e.epos
 		| TBinop(OpAdd,e1,e2) when is_string e1.etype ->
