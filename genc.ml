@@ -26,6 +26,7 @@ type dependency_type =
 type function_context = {
 	field : tclass_field;
 	mutable loop_stack : string option list;
+	mutable meta : metadata;
 }
 
 type hxc = {
@@ -1081,6 +1082,7 @@ let mk_type_context con path =
 		fctx = {
 			field = null_field;
 			loop_stack = [];
+			meta = [];
 		};
 		dependencies = PMap.empty;
 	}
@@ -1623,8 +1625,11 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "(";
 		generate_expr ctx need_val e1;
 		spr ctx ")";
-	| TMeta(_,e) ->
-		generate_expr ctx need_val e
+	| TMeta(m,e) ->
+		ctx.fctx.meta <- m :: ctx.fctx.meta;
+		let e1 = generate_expr ctx need_val e in
+		ctx.fctx.meta <- List.tl ctx.fctx.meta;
+		e1
 	| TCast(e1,_) when not need_val ->
 		generate_expr ctx need_val e1
 	| TCast(e1,_) ->
@@ -1688,7 +1693,8 @@ let generate_method ctx c cf stat =
 	in
 	ctx.fctx <- {
 		field = cf;
-		loop_stack = []
+		loop_stack = [];
+		meta = [];
 	};
 	let rec loop e = match e.eexpr with
 		| TBlock [{eexpr = TBlock _} as e1] ->
