@@ -424,7 +424,14 @@ module DefaultValues = struct
 			) tf.tf_expr tf.tf_args in
 			{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
 		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
-			let eformat = mk (TConst (TString "%s:%ld:%s\\n")) gen.gcom.basic.tstring e.epos in
+			let s = match follow e1.etype with
+				| TAbstract({a_path=[],"Int"},_) -> "i"
+				| TInst({cl_path=[],"String"},_) -> "s"
+				| _ ->
+					gen.gcom.warning "This will probably not work as expected" e.epos;
+					"s"
+			in
+			let eformat = mk (TConst (TString ("%s:%ld: %" ^ s ^ "\\n"))) gen.gcom.basic.tstring e.epos in
 			let eargs = mk (TArrayDecl [List.assoc "fileName" fl;List.assoc "lineNumber" fl;e1]) (gen.gcom.basic.tarray gen.gcon.hxc.t_vararg) e.epos in
 			Expr.mk_static_call_2 gen.gcon.hxc.c_cstdio "printf" [eformat;eargs] e.epos
 		| _ ->
