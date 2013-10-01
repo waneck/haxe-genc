@@ -1061,10 +1061,15 @@ module VTableHandler = struct
 			let methods = (get_methods c) in
 			let mm = List.fold_left ( fun  m cf -> 
 				PMap.add cf.cf_name ( cf, (get_id cf.cf_name) ,c) m ) PMap.empty methods in
-			let mm = PMap.foldi ( fun k v mm -> 
+			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm -> 
 									if PMap.mem k mm then 
-										mm 
-									else PMap.add k v mm ) super mm 
+										(* mark overridden method *)
+										if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
+											mm
+										else (
+											scf.cf_meta <- (Meta.Custom ":overridden", [], scf.cf_pos) :: scf.cf_meta;
+											mm )
+									else PMap.add k (scf,vidx,sc) mm ) super mm 
 			in
 			collect mm (super :: acc) tail
 		in
