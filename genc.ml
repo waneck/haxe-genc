@@ -393,29 +393,6 @@ module VarDeclarations = struct
 			(match el with
 			| [e] -> e
 			| _ -> Expr.mk_block gen.gcon e.epos el)
-		| TPatMatch dt ->
- 			let rec dtl d = match d with
-				| DTGoto _ | DTExpr _ ->
-					()
-				| DTGuard(_,dt1,dt2) ->
-					dtl dt1;
-					(match dt2 with None -> () | Some dt -> dtl dt)
-				| DTSwitch(_,cl,dto) ->
-					List.iter (fun (_,dt) -> dtl dt) cl;
-					(match dto with None -> () | Some dt -> dtl dt)
-				| DTBind(bl,dt) ->
-					List.iter (fun ((v,_),_) ->
-						if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-						gen.declare_var (v,None);
-					) bl;
-					dtl dt
-			in
-			Array.iter dtl dt.dt_dt_lookup;
-			List.iter (fun (v,_) ->
-				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-				gen.declare_var (v,None)
-			) dt.dt_var_init;
-			Type.map_expr gen.map e
 		| _ ->
 			Type.map_expr gen.map e
 
@@ -622,7 +599,67 @@ module StringHandler = struct
 				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [gen.map e1; gen.map e2] e1.epos)
 				e1.etype
 				e.epos
-		| TSwitch(e1,cases,def) when is_string e1.etype ->
+		| _ ->
+			Type.map_expr gen.map e
+end
+
+module SwitchHandler = struct
+	let filter gen e =
+		match e.eexpr with
+		| TPatMatch dt ->
+			let fl = gen.gcon.num_labels in
+			gen.gcon.num_labels <- gen.gcon.num_labels + (Array.length dt.dt_dt_lookup) + 1;
+			let i_last = Array.length dt.dt_dt_lookup in
+			let mk_label_expr i = mk (TConst (TInt (Int32.of_int (i + fl)))) gen.gcom.basic.tint e.epos in
+			let mk_label_meta i =
+				let elabel = mk_label_expr i in
+				mk (TMeta((Meta.Custom ":label",[],e.epos),elabel)) elabel.etype elabel.epos
+			in
+			let mk_goto_meta i =
+				let elabel = mk_label_expr i in
+				mk (TMeta((Meta.Custom ":goto",[],e.epos),elabel)) elabel.etype elabel.epos
+			in
+			let check_var_name v =
+				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
+			in
+			let rec mk_dt dt =
+				match dt with
+				| DTExpr e ->
+					let egoto = mk_goto_meta i_last in
+					Codegen.concat e egoto
+				| DTGuard(e1,dt,dto) ->
+					let ethen = mk_dt dt in
+					let eelse = match dto with None -> None | Some dt -> Some (mk_dt dt) in
+					mk (TIf(Codegen.mk_parent e1,ethen,eelse)) ethen.etype (punion e1.epos ethen.epos)
+				| DTBind(vl,dt) ->
+					let vl = List.map (fun ((v,_),e) ->
+						check_var_name v;
+						v,Some e
+					) vl in
+					let evars = mk (TVars vl) gen.gcom.basic.tvoid e.epos in
+					Codegen.concat evars (mk_dt dt)
+				| DTGoto i ->
+					mk_goto_meta i
+				| DTSwitch(e1,cl,dto) ->
+					let cl = List.map (fun (e,dt) -> [e],mk_dt dt) cl in
+					let edef = match dto with None -> None | Some dt -> Some (mk_dt dt) in
+					mk (TSwitch(e1,cl,edef)) t_dynamic e.epos
+			in
+			let el,i = Array.fold_left (fun (acc,i) dt ->
+				let elabel = mk_label_meta i in
+				let edt = mk_dt dt in
+				(Codegen.concat elabel edt) :: acc,i + 1
+			) ([],0) dt.dt_dt_lookup in
+			let e = gen.map (Expr.mk_block gen.gcon e.epos el) in
+			List.iter (fun (v,_) -> check_var_name v) dt.dt_var_init;
+			let einit = mk (TVars dt.dt_var_init) gen.gcom.basic.tvoid e.epos in
+			let elabel = mk_label_meta i in
+			let e1 = Codegen.concat einit (Codegen.concat e elabel) in
+			if dt.dt_first = i - 1 then
+				e1
+			else
+				Codegen.concat (mk_goto_meta dt.dt_first) e1
+		| TSwitch(e1,cases,def) when StringHandler.is_string e1.etype ->
 			let mk_eq e1 e2 = mk (TBinop(OpEq,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
 			let mk_or e1 e2 = mk (TBinop(OpOr,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
 			let mk_if (el,e) eo =
@@ -632,8 +669,9 @@ module StringHandler = struct
 			let ifs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def cases with Some e -> e | None -> assert false in
 			gen.map ifs
 		| _ ->
-			Type.map_expr gen.map e
+				Type.map_expr gen.map e
 end
+
 
 (*
 	This filter turns all non-top TFunction nodes into class fields and creates a c.Closure object
@@ -1508,6 +1546,10 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "continue";
 	| TMeta((Meta.Custom ":really",_,_), {eexpr = TBreak}) ->
 		spr ctx "break";
+	| TMeta((Meta.Custom ":goto",_,_), {eexpr = TConst (TInt i)}) ->
+		print ctx "goto hx_label_%ld" i
+	| TMeta((Meta.Custom ":label",_,_), {eexpr = TConst (TInt i)}) ->
+		print ctx "hx_label_%ld: {}" i
 	| TBreak ->
 		let label = match ctx.fctx.loop_stack with
 			| (Some s) :: _ -> s
@@ -1604,70 +1646,6 @@ and generate_expr ctx need_val e = match e.eexpr with
 			| _ ->
 				assert false
 		end
-(* 	| TPatMatch dt ->
-		let fl = ctx.con.num_labels in
-		ctx.con.num_labels <- ctx.con.num_labels + (Array.length dt.dt_dt_lookup) + 1;
-		let mk_label i = Printf.sprintf "_hx_label%i" (i + fl) in
-		let rec loop d =
-			match d with
-			| DTGoto i ->
-				print ctx "goto %s" (mk_label i);
-				newline ctx;
-			| DTBind(bl,dt) ->
-				List.iter (fun ((v,p),e) ->
-					print ctx "%s = " v.v_name;
-					generate_expr ctx e;
-					newline ctx;
-				) bl;
-				loop dt
-			| DTExpr e -> generate_expr ctx (mk_block e)
-			| DTGuard(e, dt1, dt2) ->
-				spr ctx "if(";
-				generate_expr ctx e;
-				spr ctx ")";
-				loop dt1;
-				(match dt2 with None -> () | Some dt ->
-					spr ctx " else ";
-					loop dt)
-			| DTSwitch(e,cl,dto) ->
-				spr ctx "switch(";
-				generate_expr ctx e;
-				spr ctx ") {";
-				let b = open_block ctx in
-				List.iter (fun (e,dt) ->
-					newline ctx;
-					spr ctx "case ";
-					generate_expr ctx e;
-					spr ctx ":";
-					loop dt;
-					newline ctx;
-					spr ctx "break";
-				) cl;
-				begin match dto with
-					| None -> ()
-					| Some dt ->
-						newline ctx;
-						spr ctx "default:";
-						loop dt;
-						newline ctx;
-						spr ctx "break";
-				end;
-				b();
-				newline ctx;
-				spr ctx "}";
-				newline ctx;
-		in
-		print ctx "goto %s" (mk_label dt.dt_first);
-		Array.iteri (fun i d ->
-			newline ctx;
-			print ctx "%s: {}" (mk_label i);
-			newline ctx;
-			loop d;
-			print ctx "goto %s" (mk_label (Array.length dt.dt_dt_lookup));
-			newline ctx;
-		) dt.dt_dt_lookup;
-		print ctx "%s: {}" (mk_label (Array.length dt.dt_dt_lookup));
-		newline ctx; *)
 	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ | TFunction _ | TPatMatch _ ->
 		(* removed by filters *)
 		assert false
@@ -2260,6 +2238,7 @@ let generate com =
 		ArrayHandler.filter;
 		TypeChecker.filter;
 		StringHandler.filter;
+		SwitchHandler.filter;
 		ClosureHandler.filter;
 		DefaultValues.filter
 	] in
