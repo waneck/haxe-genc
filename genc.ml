@@ -954,6 +954,45 @@ module ExprTransformation = struct
 end
 
 
+module VTableHandler = struct
+
+	type maps = {
+		mutable next  : int;
+		mutable cids  : ( string, int ) PMap.t; 
+		mutable count : ( int, int ) PMap.t;
+		mutable types : ( int, tclass ) PMap.t;
+	}
+	
+	let insert_or_inc con m id  = 
+		if PMap.exists id m then PMap.add id ((PMap.find id m) + 1) m else (PMap.add id 0 m)
+	
+	let get_class_id m c =
+		let s  = String.concat ""  ((snd c.cl_path) :: (fst c.cl_path)) in
+		let id = m.next in
+		if PMap.exists s m.cids 
+			then (PMap.find s m.cids, m) 
+			else (	m.cids <- PMap.add s id m.cids; m.next <- id +1; (id,m) )
+			
+	let get_chains con tps =
+		let m = List.fold_left ( fun m tp -> match tp with
+			| TClassDecl c -> ( match c.cl_super with 
+				| Some (c1,_) -> 
+					let (id,m) =  (get_class_id m c)  in 
+					let (id1,m) =  (get_class_id m c1) in 
+						m.types <- PMap.add id c m.types;
+						m.types <- PMap.add id1 c1 m.types;
+						m.count <- (insert_or_inc con m.count id);
+						m.count <- (insert_or_inc con m.count id1);
+						m
+				| None -> m )
+			| _ -> m ) { count = PMap.empty; types = PMap.empty; cids = PMap.empty; next = 0} tps in
+		
+		let eochains = 
+			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
+			List.iter ( fun c -> print_endline (  " end of chain: " ^ (snd c.cl_path)   ) ) eochains
+
+end
+
 (* Output and context *)
 
 let spr ctx s = Buffer.add_string ctx.buf s
@@ -2203,6 +2242,9 @@ let generate com =
 		| TClassDecl c -> initialize_class con c
 		| _ -> ()
 	) com.types;
+	
+	VTableHandler.get_chains con com.types;
+	
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
