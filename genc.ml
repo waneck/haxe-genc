@@ -1067,7 +1067,7 @@ module VTableHandler = struct
 										if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
 											mm
 										else (
-											scf.cf_meta <- (Meta.Custom ":overridden", [], scf.cf_pos) :: scf.cf_meta;
+											scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
 											mm )
 									else PMap.add k (scf,vidx,sc) mm ) super mm 
 			in
