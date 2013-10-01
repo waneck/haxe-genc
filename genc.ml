@@ -1032,38 +1032,49 @@ module VTableHandler = struct
 		| x :: xs -> if f(x) then loop (i+1) xs ((i,x) :: acc) else loop i xs acc
 		| [] -> (i,acc)
 		in loop i xs []
-				
-	let get_methods i c = let (i,res) = filterin ( fun cf -> match cf.cf_kind with
+	
+	let get_methods c = List.filter ( fun cf -> match cf.cf_kind with
 			| Method (MethNormal) -> true
-			| _ -> false ) i c.cl_ordered_fields in (i,List.rev res)
-			
-	(*let get_methods c = List.filter ( fun cf -> match cf.cf_kind with
-			| Method (MethNormal) -> true
-			| _ -> false ) c.cl_ordered_fields;*)
+			| _ -> false ) (List.rev c.cl_ordered_fields)
 	
 	let reverse_collect c =
+		let next  = ref 0 in
+		let idmap = ref PMap.empty in
+		let get_id n =
+			if PMap.exists n !idmap then 
+				PMap.find n !idmap 
+			else 
+				let id = !next in
+				next := !next + 1; 
+				idmap := PMap.add n id !idmap;
+				id
+		in
 		let rev_chain c = 
 			let rec loop c acc = match c.cl_super with
 			| Some (c,_) ->  loop c ( c :: acc)
 			| _ -> acc
 			in (loop c [c])
 		in
-		let rec collect super acc xs idx = match xs with 
+		let rec collect super acc xs = match xs with 
 		| []        -> super :: acc
 		| c :: tail -> 
-			let (idx,methods) = (get_methods idx c) in
-			let mm = List.fold_left ( fun  m (midx,cf) -> 
-				PMap.add cf.cf_name ( cf.cf_name,cf,midx,c) m )  PMap.empty methods in
-			let mm = PMap.foldi ( fun k v mm -> if PMap.mem k mm then mm else PMap.add k v mm ) super mm in
-			collect mm (super :: acc) tail idx
+			let methods = (get_methods c) in
+			let mm = List.fold_left ( fun  m cf -> 
+				PMap.add cf.cf_name ( cf, (get_id cf.cf_name) ,c) m ) PMap.empty methods in
+			let mm = PMap.foldi ( fun k v mm -> 
+									if PMap.mem k mm then 
+										mm 
+									else PMap.add k v mm ) super mm 
+			in
+			collect mm (super :: acc) tail
 		in
-		let ichain = collect PMap.empty [] (rev_chain c) 0
-		in ichain (*print_endline (string_of_int (List.length ichain))*)
+		let ichain = collect PMap.empty [] (rev_chain c)
+		in  ichain (*print_endline (string_of_int (List.length ichain))*)
 		
 	let p_ichain xs = List.iter (fun m ->
 		(   print_endline "---";
 			(PMap.iter 
-				(fun _ (n,cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) n midx) ) 
+				(fun _ (cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) cf.cf_name midx) ) 
 			m)
 		)
 	) xs
