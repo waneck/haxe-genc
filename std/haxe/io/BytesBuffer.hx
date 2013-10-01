@@ -153,7 +153,8 @@ class BytesBuffer {
 		var buf = b.toByteArray();
 		var bytes = new Bytes(buf.length, buf);
 		#else
-		var bytes = new Bytes(b.length,b.__a);
+		//var bytes = new Bytes(b.length,b.__a);
+		var bytes = null;
 		#end
 		b = null;
 		return bytes;

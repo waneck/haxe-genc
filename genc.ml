@@ -174,9 +174,7 @@ module Expr = struct
 	let mk_static_call c cf el p =
 		let ef = mk_static_field c cf p in
 		let tr = match follow ef.etype with
-			| TFun(args,tr) ->
-				List.iter2 (fun (_,_,t) e -> Type.unify e.etype t) args el;
-				tr
+			| TFun(args,tr) -> tr
 			| _ -> assert false
 		in
 		mk (TCall(ef,el)) tr p
@@ -872,7 +870,7 @@ module ArrayHandler = struct
 				Type.map_expr gen.map e
 			end
 		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, ev) ->
-			if op <> Ast.OpAssign then assert false; (* FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
+			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix = get_type_size (follow tp) in
@@ -985,7 +983,7 @@ module ExprTransformation = struct
 			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
 			let enext = Expr.mk_cast enext enext.etype in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
-			let ebody = Codegen.concat enext e2 in
+			let ebody = Codegen.concat enext (gen.map e2) in
 			mk (TBlock [
 				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;

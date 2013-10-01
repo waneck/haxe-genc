@@ -4201,6 +4201,8 @@ let explode_expressions ctx e =
 			{e with eexpr = TBinop(OpAssign,e1,simplify e2)}
 		| TBinop(op,e1,e2) ->
 			{e with eexpr = TBinop(op, simplify e1, simplify e2)}
+		| TFunction tf ->
+			{e with eexpr = TFunction {tf with tf_expr = loop (mk_block tf.tf_expr) }}
 		| _ ->
 			Type.map_expr loop e
 	and simplify e = match e.eexpr with
