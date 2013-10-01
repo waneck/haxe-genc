@@ -2282,6 +2282,12 @@ let generate com =
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
-	PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) con.anon_types;
+	let rec loop () =
+		let anons = con.anon_types in
+		con.anon_types <- PMap.empty;
+		PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) anons;
+		if not (PMap.is_empty con.anon_types) then loop()
+	in
+	loop();
 	generate_init_file con;
 	generate_make_file con
