@@ -1411,7 +1411,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 	| TField(_,FStatic({cl_path = ["c"],"Lib"}, {cf_name="callMain"})),[] ->
 		begin match ctx.con.com.main with
 			| Some e -> generate_expr ctx false e
-			| None -> ctx.con.com.error "Cannot call main" e.epos;
+			| None -> ()
 		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
 		ignore(check_include_meta ctx c.cl_meta);
