@@ -837,6 +837,7 @@ module ArrayHandler = struct
 	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hc_char" | "hx_uchar") } ,_ ) -> "8"
 	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
 	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64"
+	(* FIXME: should we include ConstSizeArray here? *)
 	| _ -> "64"
 
 	let rec mk_specialization_call c n suffix ethis el p =
@@ -859,6 +860,7 @@ module ArrayHandler = struct
 		(* - pointer array access -> pointer + typeref's size * index *)
 		| TArray(e1, e2) ->
 			begin try begin match follow e1.etype with
+				| TAbstract({a_path=["c"], "ConstSizeArray"},[t;_])
 				| TAbstract({a_path=["c"], "Pointer"},[t]) ->
 					e
 				| TInst(c,[tp]) ->
@@ -869,7 +871,7 @@ module ArrayHandler = struct
 			end with Not_found ->
 				Type.map_expr gen.map e
 			end
-		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ as op), {eexpr = TArray(e1,e2)}, ev) ->
+		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ ), {eexpr = TArray(e1,e2)}, ev) ->
 			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
@@ -1004,9 +1006,9 @@ end
 
 module VTableHandler = struct
 
-	let fold_map f c xs = 
-		let c, ys = List.fold_left ( fun (acc,ys) x -> 
-			let acc, y  = f acc x in acc, (y :: ys) 
+	let fold_map f c xs =
+		let c, ys = List.fold_left ( fun (acc,ys) x ->
+			let acc, y  = f acc x in acc, (y :: ys)
 		) (c,[]) xs in
 		c, List.rev ys
 
@@ -1027,80 +1029,80 @@ module VTableHandler = struct
 			then (PMap.find s m.cids, m)
 			else (	m.cids <- PMap.add s id m.cids; m.next <- id +1; (id,m) )
 
-	let filterin f i xs = 
-		let rec loop i xs acc = match xs with 
+	let filterin f i xs =
+		let rec loop i xs acc = match xs with
 		| x :: xs -> if f(x) then loop (i+1) xs ((i,x) :: acc) else loop i xs acc
 		| [] -> (i,acc)
 		in loop i xs []
-	
+
 	let get_methods c = List.filter ( fun cf -> match cf.cf_kind with
 			| Method (MethNormal) -> true
 			| _ -> false ) (List.rev c.cl_ordered_fields)
-	
+
 	let reverse_collect c =
 		let next  = ref 0 in
 		let idmap = ref PMap.empty in
 		let get_id n =
-			if PMap.exists n !idmap then 
-				PMap.find n !idmap 
-			else 
+			if PMap.exists n !idmap then
+				PMap.find n !idmap
+			else
 				let id = !next in
-				next := !next + 1; 
+				next := !next + 1;
 				idmap := PMap.add n id !idmap;
 				id
 		in
-		let rev_chain c = 
+		let rev_chain c =
 			let rec loop c acc = match c.cl_super with
 			| Some (c,_) ->  loop c ( c :: acc)
 			| _ -> acc
 			in (loop c [c])
 		in
-		let rec collect super acc xs = match xs with 
+		let rec collect super acc xs = match xs with
 		| []        -> super :: acc
-		| c :: tail -> 
+		| c :: tail ->
 			let methods = (get_methods c) in
-			let mm = List.fold_left ( fun  m cf -> 
+			let mm = List.fold_left ( fun  m cf ->
 				PMap.add cf.cf_name ( cf, (get_id cf.cf_name) ,c) m ) PMap.empty methods in
-			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm -> 
-									if PMap.mem k mm then 
+			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm ->
+									if PMap.mem k mm then
 										(* mark overridden method *)
-										if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
+										if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then
 											mm
 										else (
 											scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
 											mm )
-									else PMap.add k (scf,vidx,sc) mm ) super mm 
+									else PMap.add k (scf,vidx,sc) mm ) super mm
 			in
 			collect mm (super :: acc) tail
 		in
 		let ichain = collect PMap.empty [] (rev_chain c)
 		in  ichain (*print_endline (string_of_int (List.length ichain))*)
-		
+
 	let p_ichain xs = List.iter (fun m ->
 		(   print_endline "---";
-			(PMap.iter 
-				(fun _ (cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) cf.cf_name midx) ) 
+			(PMap.iter
+				(fun _ (cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) cf.cf_name midx) )
 			m)
 		)
 	) xs
-	
+
 	let get_class_name cf = match cf.cf_type with
 	| TInst (c,_) -> snd c.cl_path
 	| _ -> assert false
-		
-				
+
+
 	let p_methods c = (
 		List.iter ( fun cf -> match cf.cf_kind with
-			| Method (MethNormal) -> 
+			| Method (MethNormal) ->
 				print_endline ( " methnormal: " ^ cf.cf_name )
 			| _ -> ()
 		) c.cl_ordered_fields;
 		List.iter ( fun cf -> match cf.cf_kind with
-			| Method (MethNormal) -> 
+			| Method (MethNormal) ->
 				print_endline ( " override: " ^ cf.cf_name  )
 			| _ -> ()
 		) c.cl_overrides )
-	
+
 	let get_chains con tps =
 		let m = List.fold_left ( fun m tp -> match tp with
 			| TClassDecl c -> ( match c.cl_super with
@@ -1118,7 +1120,7 @@ module VTableHandler = struct
 		let eochains =
 			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
 			List.iter ( fun c -> (
-				print_endline (  " end of chain: " ^ (snd c.cl_path)   );  
+				print_endline (  " end of chain: " ^ (snd c.cl_path)   );
 				p_methods c ;
 				p_ichain (reverse_collect c)) ) eochains
 
@@ -1445,6 +1447,14 @@ let rec s_type_with_name ctx t n =
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) (escape_name n) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
+	| TAbstract({a_path = ["c"],"ConstSizeArray"},[t;const]) ->
+		let size = match follow const with
+			| TInst({ cl_path=[],name },_) when String.length name > 1 && String.get name 0 = 'I' ->
+				String.sub name 1 (String.length name - 1)
+			| _ ->
+				"1"
+		in
+		(s_type ctx t) ^ " " ^ (escape_name n) ^ "["^ size ^"]"
 	| _ ->
 		(s_type ctx t) ^ " " ^ (escape_name n)
 
@@ -2089,7 +2099,8 @@ let generate_type con mt = match mt with
 		else
 			generate_enum ctx en;
 		close_type_context ctx;
-	| TAbstractDecl { a_path = [],"Void" } -> ()
+	| TAbstractDecl { a_path = [],"Void" }
+	| TAbstractDecl { a_path = ["c"],"ConstSizeArray" } -> ()
 	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
 		generate_typeref con (TAbstract(a,List.map snd a.a_types))
 	| _ ->
@@ -2287,6 +2298,9 @@ let generate com =
 			end
 		| TAbstractDecl a ->
 			begin match a.a_path with
+			| ["c"],"ConstSizeArray" ->
+				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
+				acc
 			| ["c"],"Pointer" ->
 				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				{acc with t_pointer = fun t -> TAbstract(a,[t])}

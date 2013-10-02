@@ -5,13 +5,13 @@ import c.Pointer;
 class Main {
 	static var count = 0;
 	static var failures = 0;
-	
+
 	static public function main() {
 		trace("Beginning unit tests");
 		new Main();
 		c.CStdio.printf("Done %i tests (%i failed)\\n", [count, failures]);
 	}
-	
+
 	static public function optArg(s1:String, ?s2:String = "baz", ?i:Int = 12) {
 		var buf:Pointer<Char> = cast c.CStdlib.malloc(s1.length + s2.length + 20);
 		c.CStdio.sprintf(buf, "%s%s%i", [s1, s2, i]);
@@ -25,7 +25,7 @@ class Main {
 			haxe.Log.trace("Failure", p);
 		}
 	}
-	
+
 	@:generic static public function equalsNot<T>(t1:T, t2:T, ?p:haxe.PosInfos) {
 		count++;
 		if (t1 == t2) {
@@ -33,7 +33,7 @@ class Main {
 			haxe.Log.trace("Failure", p);
 		}
 	}
-	
+
 	static public function floatEquals(f1:Float,f2:Float) {
 		var f1 = f1 < 0 ? -f1 : f1;
 		var f2 = f2 < 0 ? -f2 : f2;
@@ -42,7 +42,7 @@ class Main {
 			haxe.Log.trace("Failure");
 		}
 	}
-	
+
 	static public function isTrue(t:Bool, ?p:haxe.PosInfos) {
 		count++;
 		if (!t) {
@@ -50,7 +50,7 @@ class Main {
 			haxe.Log.trace("Failure", p);
 		}
 	}
-	
+
 	static public function isFalse(t:Bool, ?p:haxe.PosInfos) {
 		count++;
 		if (t) {
