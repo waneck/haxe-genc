@@ -6,6 +6,7 @@ import c.Types;
 import c.NInt;
 import String;
 import c.Closure;
+import c.VTable;
 
 @:headerCode('
 #ifndef _MSC_VER

@@ -49,6 +49,7 @@ type hxc = {
 	c_csetjmp : tclass;
 	c_cstdlib : tclass;
 	c_cstdio : tclass;
+	c_vtable : tclass;
 
 	cf_deref : tclass_field;
 	cf_addressof : tclass_field;
@@ -1010,11 +1011,13 @@ module VTableHandler = struct
 		) (c,[]) xs in
 		c, List.rev ys
 
+	type vt_t = (string, tclass_field * int * tclass) PMap.t
 	type maps = {
-		mutable next  : int;
-		mutable cids  : ( string, int ) PMap.t;
-		mutable count : ( int, int ) PMap.t;
-		mutable types : ( int, tclass ) PMap.t;
+		mutable next    : int;
+		mutable cids    : ( string, int ) PMap.t;
+		mutable count   : ( int, int ) PMap.t;
+		mutable types   : ( int, tclass ) PMap.t;
+		mutable vtables : ( int, vt_t ) PMap.t;
 	}
 
 	let insert_or_inc con m id  =
@@ -1062,14 +1065,14 @@ module VTableHandler = struct
 			let mm = List.fold_left ( fun  m cf -> 
 				PMap.add cf.cf_name ( cf, (get_id cf.cf_name) ,c) m ) PMap.empty methods in
 			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm -> 
-									if PMap.mem k mm then 
-										(* mark overridden method *)
-										if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
-											mm
-										else (
-											scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
-											mm )
-									else PMap.add k (scf,vidx,sc) mm ) super mm 
+				if PMap.mem k mm then 
+					(* mark overridden method *)
+					if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
+						mm
+					else (
+						scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
+						mm )
+				else PMap.add k (scf,vidx,sc) mm ) super mm 
 			in
 			collect mm (super :: acc) tail
 		in
@@ -1101,6 +1104,8 @@ module VTableHandler = struct
 			| _ -> ()
 		) c.cl_overrides )
 	
+	
+	
 	let get_chains con tps =
 		let m = List.fold_left ( fun m tp -> match tp with
 			| TClassDecl c -> ( match c.cl_super with
@@ -1113,14 +1118,40 @@ module VTableHandler = struct
 						m.count <- (insert_or_inc con m.count id1);
 						m
 				| None -> m )
-			| _ -> m ) { count = PMap.empty; types = PMap.empty; cids = PMap.empty; next = 0} tps in
+			| _ -> m ) { count   = PMap.empty; 
+			             types   = PMap.empty; 
+						 cids    = PMap.empty; 
+						 vtables = PMap.empty; 
+						 next    = 0} tps in
 
 		let eochains =
 			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
+			let gcid c = 
+				let (id,m) = get_class_id m c in id
+			in
+			let ifadd c v = if PMap.exists (gcid c) m.vtables then false 
+							else 
+							let pm = PMap.add (gcid c) v m.vtables in
+							let _ = m.vtables <- pm in 
+							true
+			in
 			List.iter ( fun c -> (
 				print_endline (  " end of chain: " ^ (snd c.cl_path)   );  
-				p_methods c ;
-				p_ichain (reverse_collect c)) ) eochains
+				p_methods c;
+				let ichain = (reverse_collect c) in
+				List.iter ( fun m ->
+					PMap.iter ( fun n (cf,midx,c) -> 
+						if (ifadd c m) then begin
+							print_endline ( " adding field: " ^ (snd c.cl_path)  );
+							let fname = (snd c.cl_path) in
+							let cf_hd = Type.mk_field fname
+								(TInst(con.hxc.c_vtable,[])) null_pos in
+							con.hxc.c_vtable.cl_statics <- PMap.add fname cf_hd con.hxc.c_vtable.cl_statics;
+							con.hxc.c_vtable.cl_ordered_statics <- cf_hd :: con.hxc.c_vtable.cl_ordered_statics;
+						end else () ) m 
+					 ) ichain
+				)
+			) eochains
 
 end
 
@@ -1818,6 +1849,18 @@ let generate_method ctx c cf stat =
 	newline ctx;
 	spr ctx "\n"
 
+	
+(*let mk_class_field name t public pos kind params =*)
+let generate_header_fields ctx = 
+	let v = Var {v_read=AccNormal;v_write=AccNormal} in
+	let cf_vt = Expr.mk_class_field "__vtable" 
+		(TInst(ctx.con.hxc.c_vtable,[])) false null_pos v [] in
+	let cf_hd = Expr.mk_class_field "__header" 
+		(ctx.con.hxc.t_int64 t_dynamic) false null_pos v [] in
+	[cf_vt;cf_hd]
+	
+
+	
 let generate_class ctx c =
 	let vars = DynArray.create () in
 	let svars = DynArray.create () in
@@ -1882,6 +1925,7 @@ let generate_class ctx c =
 
 	let vars = DynArray.to_list vars in
 	let vars = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) vars in
+	let vars = (generate_header_fields ctx) @ vars in
 	ctx.buf <- ctx.buf_c;
 
 	spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types)));
@@ -2283,6 +2327,7 @@ let generate com =
 				| ["c"],"CStdlib" -> {acc with c_cstdlib = c}
 				| ["c"],"CSetjmp" -> {acc with c_csetjmp = c}
 				| ["c"],"CStdio" -> {acc with c_cstdio = c}
+				| ["c"],"VTable" -> {acc with c_vtable = c}
 				| _ -> acc
 			end
 		| TAbstractDecl a ->
@@ -2327,6 +2372,7 @@ let generate com =
 		c_csetjmp = null_class;
 		c_cstdlib = null_class;
 		c_cstdio = null_class;
+		c_vtable = null_class;
 	} com.types in
 	let con = {
 		com = com;
