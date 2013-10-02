@@ -670,14 +670,40 @@ module SwitchHandler = struct
 			else
 				Codegen.concat (mk_goto_meta dt.dt_first) e1
 		| TSwitch(e1,cases,def) when StringHandler.is_string e1.etype ->
+			let length_map = Hashtbl.create 0 in
+			List.iter (fun (el,e) ->
+				List.iter (fun es ->
+					match es.eexpr with
+					| TConst (TString s) ->
+						let l = String.length s in
+						let sl = try
+							Hashtbl.find length_map l
+						with Not_found ->
+							let sl = ref [] in
+							Hashtbl.replace length_map l sl;
+							sl
+						in
+						sl := ([es],e) :: !sl;
+					| _ ->
+						()
+				) el
+			) cases;
 			let mk_eq e1 e2 = mk (TBinop(OpEq,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
 			let mk_or e1 e2 = mk (TBinop(OpOr,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
 			let mk_if (el,e) eo =
 				let eif = List.fold_left (fun eacc e -> mk_or eacc (mk_eq e1 e)) (mk_eq e1 (List.hd el)) (List.tl el) in
 				mk (TIf(Codegen.mk_parent eif,e,eo)) e.etype e.epos
 			in
-			let ifs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def cases with Some e -> e | None -> assert false in
-			gen.map ifs
+			let cases = Hashtbl.fold (fun i el acc ->
+				let eint = mk (TConst (TInt (Int32.of_int i))) gen.gcom.basic.tint e.epos in
+				let fs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def !el with Some e -> e | None -> assert false in
+				([eint],fs) :: acc
+			) length_map [] in
+ 			let c_string = match gen.gcom.basic.tstring with TInst(c,_) -> c | _ -> assert false in
+			let cf_length = PMap.find "length" c_string.cl_fields in
+			let ef = mk (TField(e1,FInstance(c_string,cf_length))) gen.gcom.basic.tint e.epos in
+			let e = mk (TSwitch(Codegen.mk_parent ef,cases,None)) t_dynamic e.epos in
+			gen.map e
 		| _ ->
 				Type.map_expr gen.map e
 end
