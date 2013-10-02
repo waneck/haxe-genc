@@ -4206,14 +4206,23 @@ let explode_expressions ctx e =
 		| _ ->
 			Type.map_expr loop e
 	and simplify e = match e.eexpr with
-		| TIf _ | TBlock _ | TSwitch _ | TCall _ ->
+		(* "statements" *)
+		| TIf _ | TSwitch _ | TPatMatch _ | TBlock _ ->
 			declare_temp e.etype (Some (loop e)) e.epos
-		| TBinop(op,e1,e2) ->
-			{e with eexpr = TBinop(op, simplify e1, simplify e2)}
-		| TParenthesis e1 ->
-			{e with eexpr = TParenthesis(simplify e1)}
-		| _ ->
+		(* side-effects *)
+		| TNew _ | TCall _ | TUnop((Decrement | Increment),_,_) | TBinop((OpAssign | OpAssignOp _),_,_) ->
+			declare_temp e.etype (Some (loop e)) e.epos
+		(* no side-effects *)
+		| TConst _ | TLocal _ | TTypeExpr _ | TFunction _ ->
 			e
+		(* invalid value node *)
+		| TWhile _ | TFor _ ->
+			assert false
+		(* this one SHOULD not happen, but sometimes does *)
+		| TVars _ ->
+			e
+		| _ ->
+			Type.map_expr simplify e
 	in
 	let e = loop e in
 	match !block_stack with
