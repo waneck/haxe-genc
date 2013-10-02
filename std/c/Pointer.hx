@@ -94,10 +94,6 @@ abstract ConstPointer<T>(Pointer<T>) {
 		return untyped this[index];
 	}
 
-	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
-		return untyped this[index] = value;
-	}
-
 	@:from static public inline function fromString(s:String):ConstPointer<Char> {
 		return @:privateAccess String.raw(s);
 	}

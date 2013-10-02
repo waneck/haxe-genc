@@ -18,3 +18,12 @@ a.push("baz");
 a.pop() == "baz";
 a.pop() == "bar";
 a.pop() == "foo";
+
+var a = ArrayStruct.createWithSize(10);
+a._count == 10;
+for(i in -10...0)
+{
+	a.constArray[-i-1] = i;
+	a.constArray[-i-1] == i;
+}
+a._count == 10;
