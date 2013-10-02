@@ -246,8 +246,8 @@ module Expr = struct
 		mk (TBlock (List.rev el)) e.etype e.epos,found
 
 	let wrap_function con ethis efunc =
-		let e = mk_obj_decl ["_this",ethis;"_func",mk_cast efunc (con.hxc.t_func_pointer efunc.etype)] efunc.epos in
-		mk_cast e (con.hxc.t_closure efunc.etype)
+		let c,t = match con.hxc.t_closure t_dynamic with TInst(c,_) as t -> c,t | _ -> assert false in
+		mk (TNew(c,[efunc.etype],[efunc;ethis])) t efunc.epos
 
 	let wrap_static_function con efunc =
 		wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
@@ -1916,8 +1916,6 @@ let generate_class ctx c =
 			DynArray.add methods (f,true)
 	end;
 
-	let vars = DynArray.to_list vars in
-	let vars = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) vars in
 	ctx.buf <- ctx.buf_c;
 
 	spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types)));
@@ -1955,11 +1953,11 @@ let generate_class ctx c =
 	newline ctx;
 
 	(* generate member struct *)
-	if not (vars = []) then begin
+	if not (DynArray.empty vars) then begin
 		spr ctx "\n// member var structure\n";
 		print ctx "typedef struct %s {" path;
 		let b = open_block ctx in
-		List.iter (fun cf ->
+		DynArray.iter (fun cf ->
 			newline ctx;
 			spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
 		) vars;
