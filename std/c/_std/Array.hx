@@ -206,15 +206,18 @@ import c.NInt.Int64;
 
 	public function iterator() : Iterator<T>
 	{
-		return null;
+		//return null;
 		//TODO
-		// var i = 0;
-		// var len = length;
-		// return
-		// {
-		// 	hasNext:function() return i < len,
-		// 	next:function() return __a.array[i++]
-		// };
+		 var i = 0;
+		 var len = length;
+		 return
+		 {
+		 	hasNext:function() return i < len,
+		 	next:function() {
+				i = i + 1;
+				return __a[i - 1];
+			}
+		 };
 	}
 
 	public function map<S>( f : T -> S ) : Array<S> {
