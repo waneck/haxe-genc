@@ -1923,8 +1923,8 @@ let generate_class ctx c =
 
 	ctx.buf <- ctx.buf_c;
 
-	spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types)));
-	newline ctx;
+	(* spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types))); *)
+	(* newline ctx; *)
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
@@ -1993,8 +1993,8 @@ let generate_class ctx c =
 		) methods;
 	end;
 
-	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx c.cl_path);
+(* 	add_dependency ctx DForward ([],"typeref");
+	spr ctx (get_typeref_forward ctx c.cl_path); *)
 	newline ctx
 
 let generate_flat_enum ctx en =
@@ -2008,9 +2008,9 @@ let generate_flat_enum ctx en =
 
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
-	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx en.e_path);
-	newline ctx;
+(* 	add_dependency ctx DForward ([],"typeref");
+	spr ctx (get_typeref_forward ctx en.e_path); *)
+	(* newline ctx; *)
 
 	let ctors = List.map (fun s -> PMap.find s en.e_constrs) en.e_names in
 	let path = path_to_name en.e_path in
@@ -2076,8 +2076,8 @@ let generate_enum ctx en =
 	newline ctx;
 
 	ctx.buf <- ctx.buf_c;
-	spr ctx (generate_typedef_declaration ctx (TEnum(en,List.map snd en.e_types)));
-	newline ctx;
+	(* spr ctx (generate_typedef_declaration ctx (TEnum(en,List.map snd en.e_types))); *)
+	(* newline ctx; *)
 
 	(* generate constructor functions *)
 	spr ctx "// constructor functions";
@@ -2104,17 +2104,15 @@ let generate_enum ctx en =
 			assert false
 	) ctors
 
-let generate_typeref con t =
+(* let generate_typeref con t =
 	let path = Expr.t_path t in
 	let ctx = mk_type_context con path in
 	ctx.buf <- ctx.buf_c;
 	spr ctx (generate_typedef_declaration ctx t);
 	newline ctx;
 	ctx.buf <- ctx.buf_h;
-	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx path);
 	newline ctx;
-	close_type_context ctx
+	close_type_context ctx *)
 
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
@@ -2131,7 +2129,10 @@ let generate_type con mt = match mt with
 	| TAbstractDecl { a_path = [],"Void" }
 	| TAbstractDecl { a_path = ["c"],"ConstSizeArray" } -> ()
 	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
-		generate_typeref con (TAbstract(a,List.map snd a.a_types))
+		let ctx = mk_type_context con a.a_path in
+		ctx.buf <- ctx.buf_c;
+		spr ctx " ";
+		close_type_context ctx
 	| _ ->
 		()
 
