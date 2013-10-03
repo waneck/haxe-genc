@@ -165,7 +165,9 @@ module Expr = struct
 		| TEnum(e,_) -> e.e_path
 		| TAbstract(a,_) -> a.a_path
 		| _ -> [],"Dynamic"
-
+	
+	let mk_runtime_prefix n = "_hx_" ^ n
+		
 	let mk_static_field c cf p =
 		let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
 		let ethis = mk (TTypeExpr (TClassDecl c)) ta p in
@@ -795,7 +797,10 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
-		| _ when (match follow e.etype with TInst({cl_path=["c"],"Closure"},_) -> true | _ -> false) ->
+		| _ when (match follow e.etype with 
+				| TInst({cl_path=["c"],"Closure"},_) 
+				| TAbstract( { a_path = ["c"],"FunctionPointer" }, _ ) -> true 
+				| _ -> false) ->
 			(* skip previously creates closures *)
 			e
 		| TCall(e1,el) ->
@@ -1005,156 +1010,6 @@ module ExprTransformation = struct
 end
 
 
-module VTableHandler = struct
-
-	let fold_map f c xs =
-		let c, ys = List.fold_left ( fun (acc,ys) x ->
-			let acc, y  = f acc x in acc, (y :: ys)
-		) (c,[]) xs in
-		c, List.rev ys
-
-	type vt_t = (string, tclass_field * int * tclass) PMap.t
-	type maps = {
-		mutable next    : int;
-		mutable cids    : ( string, int ) PMap.t;
-		mutable count   : ( int, int ) PMap.t;
-		mutable types   : ( int, tclass ) PMap.t;
-		mutable vtables : ( int, vt_t ) PMap.t;
-	}
-
-	let insert_or_inc con m id  =
-		if PMap.exists id m then PMap.add id ((PMap.find id m) + 1) m else (PMap.add id 0 m)
-
-	let get_class_id m c =
-		let s  = String.concat ""  ((snd c.cl_path) :: (fst c.cl_path)) in
-		let id = m.next in
-		if PMap.exists s m.cids
-			then (PMap.find s m.cids, m)
-			else (	m.cids <- PMap.add s id m.cids; m.next <- id +1; (id,m) )
-
-	let filterin f i xs =
-		let rec loop i xs acc = match xs with
-		| x :: xs -> if f(x) then loop (i+1) xs ((i,x) :: acc) else loop i xs acc
-		| [] -> (i,acc)
-		in loop i xs []
-
-	let get_methods c = List.filter ( fun cf -> match cf.cf_kind with
-			| Method (MethNormal) -> true
-			| _ -> false ) (List.rev c.cl_ordered_fields)
-
-	let reverse_collect c =
-		let next  = ref 0 in
-		let idmap = ref PMap.empty in
-		let get_id n =
-			if PMap.exists n !idmap then
-				PMap.find n !idmap
-			else
-				let id = !next in
-				next := !next + 1;
-				idmap := PMap.add n id !idmap;
-				id
-		in
-		let rev_chain c =
-			let rec loop c acc = match c.cl_super with
-			| Some (c,_) ->  loop c ( c :: acc)
-			| _ -> acc
-			in (loop c [c])
-		in
-		let rec collect super acc xs = match xs with
-		| []        -> super :: acc
-		| c :: tail ->
-			let methods = (get_methods c) in
-			let mm = List.fold_left ( fun  m cf ->
-				PMap.add cf.cf_name ( cf, (get_id cf.cf_name) ,c) m ) PMap.empty methods in
-			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm -> 
-				if PMap.mem k mm then 
-					(* mark overridden method *)
-					if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
-						mm
-					else (
-						scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
-						mm )
-				else PMap.add k (scf,vidx,sc) mm ) super mm 
-			in
-			collect mm (super :: acc) tail
-		in
-		let ichain = collect PMap.empty [] (rev_chain c)
-		in  ichain (*print_endline (string_of_int (List.length ichain))*)
-
-	let p_ichain xs = List.iter (fun m ->
-		(   print_endline "---";
-			(PMap.iter
-				(fun _ (cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) cf.cf_name midx) )
-			m)
-		)
-	) xs
-
-	let get_class_name cf = match cf.cf_type with
-	| TInst (c,_) -> snd c.cl_path
-	| _ -> assert false
-
-
-	let p_methods c = (
-		List.iter ( fun cf -> match cf.cf_kind with
-			| Method (MethNormal) ->
-				print_endline ( " methnormal: " ^ cf.cf_name )
-			| _ -> ()
-		) c.cl_ordered_fields;
-		List.iter ( fun cf -> match cf.cf_kind with
-			| Method (MethNormal) ->
-				print_endline ( " override: " ^ cf.cf_name  )
-			| _ -> ()
-		) c.cl_overrides )
-
-	let get_chains con tps =
-		let m = List.fold_left ( fun m tp -> match tp with
-			| TClassDecl c -> ( match c.cl_super with
-				| Some (c1,_) ->
-					let (id,m) =  (get_class_id m c)  in
-					let (id1,m) =  (get_class_id m c1) in
-						m.types <- PMap.add id c m.types;
-						m.types <- PMap.add id1 c1 m.types;
-						m.count <- (insert_or_inc con m.count id);
-						m.count <- (insert_or_inc con m.count id1);
-						m
-				| None -> m )
-			| _ -> m ) { count   = PMap.empty; 
-			             types   = PMap.empty; 
-						 cids    = PMap.empty; 
-						 vtables = PMap.empty; 
-						 next    = 0} tps in
-
-		let eochains =
-			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
-			let gcid c = 
-				let (id,m) = get_class_id m c in id
-			in
-			let ifadd c v = if PMap.exists (gcid c) m.vtables then false 
-							else 
-							let pm = PMap.add (gcid c) v m.vtables in
-							let _ = m.vtables <- pm in 
-							true
-			in
-			List.iter ( fun c -> (
-				print_endline (  " end of chain: " ^ (snd c.cl_path)   );  
-				p_methods c;
-				let ichain = (reverse_collect c) in
-				List.iter ( fun m ->
-					PMap.iter ( fun n (cf,midx,c) -> 
-						if (ifadd c m) then begin
-							print_endline ( " adding field: " ^ (snd c.cl_path)  );
-							let fname = (snd c.cl_path) in
-							let cf_hd = Type.mk_field fname
-								(TInst(con.hxc.c_vtable,[])) null_pos in
-							con.hxc.c_vtable.cl_statics <- PMap.add fname cf_hd con.hxc.c_vtable.cl_statics;
-							con.hxc.c_vtable.cl_ordered_statics <- cf_hd :: con.hxc.c_vtable.cl_ordered_statics;
-						end else () ) m 
-					 ) ichain
-				)
-			) eochains
-
-end
-
 (* Output and context *)
 
 let spr ctx s = Buffer.add_string ctx.buf s
@@ -1348,6 +1203,213 @@ let add_type_dependency ctx t = match follow t with
 		add_dependency ctx DForward ([],"Dynamic")
 
 
+
+module VTableHandler = struct
+
+	(*
+	let fold_map f c xs =
+		let c, ys = List.fold_left ( fun (acc,ys) x ->
+			let acc, y  = f acc x in acc, (y :: ys)
+		) (c,[]) xs in
+		c, List.rev ys
+	*)
+		
+	type vt_t = (string, tclass_field * int * tclass) PMap.t
+	
+	type maps = {
+		mutable next    : int;
+		mutable cids    : ( string, int ) PMap.t;
+		mutable count   : ( int, int ) PMap.t;
+		mutable types   : ( int, tclass ) PMap.t;
+		mutable vtables : ( int, vt_t ) PMap.t;
+	}
+
+	let insert_or_inc con m id  =
+		if PMap.exists id m then PMap.add id ((PMap.find id m) + 1) m else (PMap.add id 0 m)
+
+	let get_class_id m c =
+		let s  = String.concat ""  ((snd c.cl_path) :: (fst c.cl_path)) in
+		let id = m.next in
+		if PMap.exists s m.cids
+			then (PMap.find s m.cids, m)
+			else (	m.cids <- PMap.add s id m.cids; m.next <- id +1; (id,m) )
+
+	(*
+	let filterin f i xs =
+		let rec loop i xs acc = match xs with
+		| x :: xs -> if f(x) then loop (i+1) xs ((i,x) :: acc) else loop i xs acc
+		| [] -> (i,acc)
+		in loop i xs [] *)
+
+	let get_methods c = List.filter ( fun cf -> match cf.cf_kind with
+			| Method (MethNormal) -> true
+			| _ -> false ) (List.rev c.cl_ordered_fields)
+
+	let reverse_collect c =
+		let next  = ref 0 in
+		let idmap = ref PMap.empty in
+		let get_id n =
+			if PMap.exists n !idmap then
+				PMap.find n !idmap
+			else
+				let id = !next in
+				next := !next + 1;
+				idmap := PMap.add n id !idmap;
+				id
+		in
+		let rev_chain c =
+			let rec loop c acc = match c.cl_super with
+			| Some (c,_) ->  loop c ( c :: acc)
+			| _ -> acc
+			in (loop c [c])
+		in
+		let rec collect super acc xs = match xs with
+		| []        -> super :: acc
+		| c :: tail ->
+			let methods = (get_methods c) in
+			let mm = List.fold_left ( fun  m cf ->
+				PMap.add cf.cf_name ( cf, (get_id cf.cf_name) ,c) m ) PMap.empty methods in
+			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm -> 
+				if PMap.mem k mm then 
+					(* mark overridden method *)
+					if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
+						mm
+					else (
+						scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
+						mm )
+				else PMap.add k (scf,vidx,sc) mm ) super mm 
+			in
+			collect mm (super :: acc) tail
+		in
+		let ichain = collect PMap.empty [] (rev_chain c)
+		in  ichain (*print_endline (string_of_int (List.length ichain))*)
+
+	let p_ichain xs = List.iter (fun m ->
+		(   print_endline "---";
+			(PMap.iter
+				(fun _ (cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) cf.cf_name midx) )
+			m)
+		)
+	) xs
+
+	let get_class_name cf = match cf.cf_type with
+	| TInst (c,_) -> snd c.cl_path
+	| _ -> assert false
+
+
+	let p_methods c = (
+		List.iter ( fun cf -> match cf.cf_kind with
+			| Method (MethNormal) ->
+				print_endline ( " methnormal: " ^ cf.cf_name )
+			| _ -> ()
+		) c.cl_ordered_fields;
+		List.iter ( fun cf -> match cf.cf_kind with
+			| Method (MethNormal) ->
+				print_endline ( " override: " ^ cf.cf_name  )
+			| _ -> ()
+		) c.cl_overrides )
+
+	let get_chains con tps =
+		let m = List.fold_left ( fun m tp -> match tp with
+			| TClassDecl c -> ( match c.cl_super with
+				| Some (c1,_) ->
+					let (id,m) =  (get_class_id m c)  in
+					let (id1,m) =  (get_class_id m c1) in
+						m.types <- PMap.add id c m.types;
+						m.types <- PMap.add id1 c1 m.types;
+						m.count <- (insert_or_inc con m.count id);
+						m.count <- (insert_or_inc con m.count id1);
+						m
+				| None -> m )
+			| _ -> m ) { count   = PMap.empty; 
+			             types   = PMap.empty; 
+						 cids    = PMap.empty; 
+						 vtables = PMap.empty; 
+						 next    = 0} tps in
+
+		let add_vtable con c vtable = 
+			(* 1. add global field for the vtable pointer *)
+			let clib, cstdlib = con.hxc.c_lib, con.hxc.c_cstdlib in
+			let fname   = (Expr.mk_runtime_prefix "_vtable") in
+			let c_vt    = con.hxc.c_vtable in
+			let t_vt    = (TInst(c_vt,[])) in 
+			let t_int   = con.com.basic.tint in
+			let t_voidp = con.hxc.t_pointer con.com.basic.tvoid in
+			let t_vtfp  = con.hxc.t_func_pointer (Type.tfun [con.com.basic.tvoid] con.com.basic.tvoid) in
+			let cf_vt = Type.mk_field fname (TInst(con.hxc.c_vtable,[])) null_pos in
+			
+			let mk_field c ethis n p = try
+				let cf = (PMap.find n c.cl_fields) in
+				mk (TField (ethis,(FInstance (c,cf)))) cf.cf_type p
+			with Not_found -> assert false
+			in
+			c.cl_statics <- PMap.add fname cf_vt c.cl_statics;
+			c.cl_ordered_statics <- cf_vt :: c.cl_ordered_statics;
+			
+			let e_vt = Expr.mk_static_field c cf_vt null_pos in
+			
+			(* 2. add vtable initialization to cl_init *)
+			
+			let e_slot = mk_field c_vt e_vt "slots" null_pos in
+			(* 2.1. fill vtable with function pointers*)
+			let (mx,l_easgn) = PMap.fold ( fun (cf,vidx,c2) (mx,acc) -> 
+				let e_fp = Expr.mk_cast (Expr.mk_static_field c2 cf null_pos) t_vtfp in 
+				let esetidx = Expr.mk_binop OpAssign 
+					(mk (TArray(e_slot,(Expr.mk_int con.com vidx null_pos))) t_vtfp null_pos) e_fp t_vtfp null_pos in
+				(max mx vidx, esetidx :: acc)
+			) vtable (0,[]) in
+			(* 2.2 allocate vtable struct (after 2.1 because we have the vtable size now) *)
+			let sizeof t = Expr.mk_static_call clib con.hxc.cf_sizeof [(mk (TConst TNull) t null_pos)] null_pos in
+			let vt_size = mx+1 in
+			let e_vtsize = (Expr.mk_int con.com vt_size null_pos) in
+			(* sizeof(vtable_t) + vt_size * sizeof(void ( * )())  *)
+			let e_allocsize  = 
+				Expr.mk_binop OpAdd (sizeof t_vt) (
+					Expr.mk_binop OpMult e_vtsize (sizeof t_vtfp) t_int null_pos
+				) t_int null_pos in
+			let e_alloc = Expr.mk_static_call_2 cstdlib "malloc" [e_allocsize] null_pos in 
+			let e_assign_ptr = (Expr.mk_binop OpAssign e_vt e_alloc t_voidp null_pos) in
+			let e_block = 
+				Expr.mk_block con null_pos (e_assign_ptr :: l_easgn) in
+			c.cl_init <- ( match c.cl_init with 
+			| Some code -> Some (Codegen.concat e_block code)
+			| None      -> Some e_block )
+			
+		in
+						 
+		let eochains =
+			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
+			let gcid c = 
+				let (id,m) = get_class_id m c in id
+			in
+			let ifadd c v = if PMap.exists (gcid c) m.vtables then 
+								false 
+							else 
+								let pm = PMap.add (gcid c) v m.vtables in
+								let _ = m.vtables <- pm in 
+								true
+			in
+			List.iter ( fun c -> (
+				print_endline (  " end of chain: " ^ (snd c.cl_path)   );  
+				p_methods c;
+				let ichain = (reverse_collect c) in
+				List.iter ( fun m ->
+					PMap.iter ( fun n (cf,midx,c) -> 
+						if (ifadd c m) then begin
+							print_endline ( " adding field: " ^ (snd c.cl_path)  );
+							let fname = (snd c.cl_path) in
+							let cf_hd = Type.mk_field fname
+								(TInst(con.hxc.c_vtable,[])) null_pos in
+							con.hxc.c_vtable.cl_statics <- PMap.add fname cf_hd con.hxc.c_vtable.cl_statics;
+							con.hxc.c_vtable.cl_ordered_statics <- cf_hd :: con.hxc.c_vtable.cl_ordered_statics;
+							add_vtable con c m;
+						end else () ) m 
+					 ) ichain
+				)
+			) eochains
+end
+
+		
 (* Helper *)
 
 let rec is_value_type ctx t = match follow t with
@@ -1473,6 +1535,7 @@ let rec s_type_with_name ctx t n =
 		let t = ctx.con.hxc.t_closure t in
 		add_type_dependency ctx t;
 		s_type_with_name ctx t n
+	| TAbstract({a_path = ["c"],"Pointer"},[t]) -> ( s_type_with_name ctx t ("*" ^ n))
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) (escape_name n) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
@@ -1483,7 +1546,7 @@ let rec s_type_with_name ctx t n =
 			| _ ->
 				"1"
 		in
-		(s_type ctx t) ^ " " ^ (escape_name n) ^ "["^ size ^"]"
+		(s_type_with_name ctx t ((escape_name n) ^ "["^ size ^"]"))
 	| _ ->
 		(s_type ctx t) ^ " " ^ (escape_name n)
 
@@ -1861,9 +1924,9 @@ let generate_method ctx c cf stat =
 (*let mk_class_field name t public pos kind params =*)
 let generate_header_fields ctx = 
 	let v = Var {v_read=AccNormal;v_write=AccNormal} in
-	let cf_vt = Expr.mk_class_field "__vtable" 
+	let cf_vt = Expr.mk_class_field (Expr.mk_runtime_prefix "vtable" )
 		(TInst(ctx.con.hxc.c_vtable,[])) false null_pos v [] in
-	let cf_hd = Expr.mk_class_field "__header" 
+	let cf_hd = Expr.mk_class_field (Expr.mk_runtime_prefix "header" )
 		(ctx.con.hxc.t_int64 t_dynamic) false null_pos v [] in
 	[cf_vt;cf_hd]
 	
