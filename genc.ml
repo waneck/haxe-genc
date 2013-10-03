@@ -1000,6 +1000,23 @@ module ExprTransformation = struct
 			let el = [Expr.mk_deref gen.gcon p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
 			let ejmp = Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p in
 			Codegen.concat eassign ejmp
+		| TArrayDecl [] ->
+			let c,t = match follow (gen.gcon.com.basic.tarray (mk_mono())) with
+				| TInst(c,[t]) -> c,t
+				| _ -> assert false
+			in
+			mk (TNew(c,[t],[])) gen.gcon.com.basic.tvoid e.epos
+		| TArrayDecl el ->
+			mk_array_decl gen el e.etype e.epos
+		| _ ->
+			Type.map_expr gen.map e
+
+end
+
+module ExprTransformation2 = struct
+
+	let filter gen e =
+		match e.eexpr with
 		| TFor(v,e1,e2) ->
 			let e1 = gen.map e1 in
 			let vtemp = gen.declare_temp e1.etype None in
@@ -1017,19 +1034,9 @@ module ExprTransformation = struct
 				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
 			]) gen.gcom.basic.tvoid e.epos
-		| TArrayDecl [] ->
-			let c,t = match follow (gen.gcon.com.basic.tarray (mk_mono())) with
-				| TInst(c,[t]) -> c,t
-				| _ -> assert false
-			in
-			mk (TNew(c,[t],[])) gen.gcon.com.basic.tvoid e.epos
-		| TArrayDecl el ->
-			mk_array_decl gen el e.etype e.epos
 		| _ ->
 			Type.map_expr gen.map e
-
 end
-
 
 module VTableHandler = struct
 
@@ -2404,7 +2411,8 @@ let generate com =
 		StringHandler.filter;
 		SwitchHandler.filter;
 		ClosureHandler.filter;
-		DefaultValues.filter
+		DefaultValues.filter;
+		ExprTransformation2.filter
 	] in
 	List.iter (Filters.add_filter con) filters;
 	List.iter (fun mt -> match mt with
