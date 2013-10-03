@@ -39,7 +39,7 @@ class Math {
 	static public function get_NaN() return #if C99 CMath.NAN #else CMath.sqrt(-1)#end;
 	
 	static public inline function abs(v:Float):Float {
-		return CMath.abs(v);
+		return v < 0 ? -v : v;
 	}
 
 	static public function min(a:Float, b:Float):Float {
@@ -123,8 +123,7 @@ class Math {
 	}
 
 	static public inline function isFinite( f : Float ) : Bool {
-		//return cast CMath.isfinite(f);
-		return false;
+		return f != POSITIVE_INFINITY && f != NEGATIVE_INFINITY && f == f;
 	}
 
 	static public function isNaN( f : Float ) : Bool {

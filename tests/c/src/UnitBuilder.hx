@@ -103,11 +103,11 @@ class UnitBuilder {
 		}
 		var e = switch [isFloat(e1) || isFloat(e2), e2] {
 			case [true, macro Math.POSITIVE_INFINITY | Math.NEGATIVE_INFINITY] if (Context.defined("cpp") || Context.defined("php")):
-				macro $isTrue($e1 == $e2);
+				macro @:pos(p) $isTrue($e1 == $e2);
 			case [true, _]:
-				macro $equalsFloat($e1, $e2);
+				macro @:pos(p) $equalsFloat($e1, $e2);
 			case _:
-				macro $equals($e1, $e2);
+				macro @:pos(p) $equals($e1, $e2);
 		}
 		return {
 			expr: e.expr,
@@ -150,7 +150,7 @@ class UnitBuilder {
 					var el2 = [];
 					for (e in el)
 						el2.push(macro $e1 == $e);
-					macro @:pos(e.pos) t(${ collapseToOrExpr(el2) } );
+					macro @:pos(e.pos) $isTrue(${ collapseToOrExpr(el2) } );
 				case _:
 					e;
 			}

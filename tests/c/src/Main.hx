@@ -34,12 +34,12 @@ class Main {
 		}
 	}
 
-	static public function floatEquals(f1:Float,f2:Float) {
+	static public function equalsFloat(f1:Float,f2:Float, ?p:haxe.PosInfos) {
 		var f1 = f1 < 0 ? -f1 : f1;
 		var f2 = f2 < 0 ? -f2 : f2;
 		if (f1 > f2 && f1 - f2 > 0.00001 || f2 > f1 && f2 - f1 > 0.00001) {
 			failures++;
-			haxe.Log.trace("Failure");
+			haxe.Log.trace("Failure", p);
 		}
 	}
 

@@ -61,9 +61,8 @@ type context = {
 	hxc : hxc;
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
-	mutable num_anon_types : int;
 	mutable num_identified_types : int;
-	mutable anon_types : (string,string * tclass_field list) PMap.t;
+	mutable get_anon_signature : (string,tclass_field) PMap.t -> string;
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path, texpr) PMap.t;
 	mutable init_modules : path list;
@@ -249,8 +248,9 @@ module Expr = struct
 		mk (TBlock (List.rev el)) e.etype e.epos,found
 
 	let wrap_function con ethis efunc =
-		let e = mk_obj_decl ["_this",ethis;"_func",mk_cast efunc (con.hxc.t_func_pointer efunc.etype)] efunc.epos in
-		mk_cast e (con.hxc.t_closure efunc.etype)
+		let c,t = match con.hxc.t_closure t_dynamic with TInst(c,_) as t -> c,t | _ -> assert false in
+		let cf_func = PMap.find "_func" c.cl_fields in
+		mk (TNew(c,[efunc.etype],[mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
 
 	let wrap_static_function con efunc =
 		wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
@@ -673,14 +673,40 @@ module SwitchHandler = struct
 			else
 				Codegen.concat (mk_goto_meta dt.dt_first) e1
 		| TSwitch(e1,cases,def) when StringHandler.is_string e1.etype ->
+			let length_map = Hashtbl.create 0 in
+			List.iter (fun (el,e) ->
+				List.iter (fun es ->
+					match es.eexpr with
+					| TConst (TString s) ->
+						let l = String.length s in
+						let sl = try
+							Hashtbl.find length_map l
+						with Not_found ->
+							let sl = ref [] in
+							Hashtbl.replace length_map l sl;
+							sl
+						in
+						sl := ([es],e) :: !sl;
+					| _ ->
+						()
+				) el
+			) cases;
 			let mk_eq e1 e2 = mk (TBinop(OpEq,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
 			let mk_or e1 e2 = mk (TBinop(OpOr,e1,e2)) gen.gcon.com.basic.tbool (punion e1.epos e2.epos) in
 			let mk_if (el,e) eo =
 				let eif = List.fold_left (fun eacc e -> mk_or eacc (mk_eq e1 e)) (mk_eq e1 (List.hd el)) (List.tl el) in
 				mk (TIf(Codegen.mk_parent eif,e,eo)) e.etype e.epos
 			in
-			let ifs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def cases with Some e -> e | None -> assert false in
-			gen.map ifs
+			let cases = Hashtbl.fold (fun i el acc ->
+				let eint = mk (TConst (TInt (Int32.of_int i))) gen.gcom.basic.tint e.epos in
+				let fs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def !el with Some e -> e | None -> assert false in
+				([eint],fs) :: acc
+			) length_map [] in
+ 			let c_string = match gen.gcom.basic.tstring with TInst(c,_) -> c | _ -> assert false in
+			let cf_length = PMap.find "length" c_string.cl_fields in
+			let ef = mk (TField(e1,FInstance(c_string,cf_length))) gen.gcom.basic.tint e.epos in
+			let e = mk (TSwitch(Codegen.mk_parent ef,cases,None)) t_dynamic e.epos in
+			gen.map e
 		| _ ->
 				Type.map_expr gen.map e
 end
@@ -778,7 +804,7 @@ module ClosureHandler = struct
 				true
 			| TField(_,FAnon _) ->
 				true
-			| TMeta(_,e1) | TParenthesis(e1) ->
+			| TMeta(_,e1) | TParenthesis(e1) | TCast(e1,None) ->
 				is_closure_expr e1
 			| _ ->
 				false
@@ -788,7 +814,7 @@ module ClosureHandler = struct
 		| TFunction tf ->
 			fstack := tf :: !fstack;
 			let e1 = match !fstack,gen.mtype with
-				| _ :: [],_ ->
+				| _ :: [],_ when (match gen.gfield.cf_kind with Method _ -> true | Var _ -> false) ->
 					{e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})}
 				| _,Some (TClassDecl c) ->
 					add_closure_field gen c tf None e.epos
@@ -811,7 +837,7 @@ module ClosureHandler = struct
 			is_call_expr := fst old;
 			let el = List.map gen.map el in
 			let e = if not !is_extern && is_closure_expr e1 then begin
-				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
+				let args,r = match follow e1.etype with TFun(args,r) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,r)]) -> args,r | _ -> assert false in
 				let mk_cast e = mk (TCast(e,None)) (gen.gcon.hxc.t_func_pointer e.etype) e.epos in
 				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
 				let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
@@ -868,21 +894,21 @@ module ArrayHandler = struct
 			begin try begin match follow e1.etype with
 				| TAbstract({a_path=["c"], "ConstSizeArray"},[t;_])
 				| TAbstract({a_path=["c"], "Pointer"},[t]) ->
-					e
+					{e with eexpr = TArray(gen.map e1, gen.map e2)}
 				| TInst(c,[tp]) ->
 					let suffix = get_type_size (follow tp) in
-					Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(e1,[tp])) [e2] e.epos) tp
+					Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(gen.map e1,[tp])) [gen.map e2] e.epos) tp
 				| _ ->
 					raise Not_found
 			end with Not_found ->
-				Type.map_expr gen.map e
+				Expr.mk_cast (Type.map_expr gen.map e) e.etype
 			end
 		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ ), {eexpr = TArray(e1,e2)}, ev) ->
 			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix = get_type_size (follow tp) in
-					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [e2; ev] e.epos
+					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [gen.map e2; Expr.mk_cast (gen.map ev) tp] e.epos
 				| _ ->
 					raise Not_found
 			end with Not_found ->
@@ -980,22 +1006,6 @@ module ExprTransformation = struct
 			let el = [Expr.mk_deref gen.gcon p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
 			let ejmp = Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p in
 			Codegen.concat eassign ejmp
-		| TFor(v,e1,e2) ->
-			let e1 = gen.map e1 in
-			let vtemp = gen.declare_temp e1.etype None in
-			gen.declare_var (v,None);
-			let ev = Expr.mk_local vtemp e1.epos in
-			let ehasnext = mk (TField(ev,quick_field e1.etype "hasNext")) (tfun [] gen.gcon.com.basic.tbool) e1.epos in
-			let ehasnext = Expr.mk_cast ehasnext ehasnext.etype in
-			let ehasnext = mk (TCall(ehasnext,[])) ehasnext.etype ehasnext.epos in
-			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
-			let enext = Expr.mk_cast enext enext.etype in
-			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
-			let ebody = Codegen.concat enext (gen.map e2) in
-			mk (TBlock [
-				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
-				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
-			]) gen.gcom.basic.tvoid e.epos
 		| TArrayDecl [] ->
 			let c,t = match follow (gen.gcon.com.basic.tarray (mk_mono())) with
 				| TInst(c,[t]) -> c,t
@@ -1007,6 +1017,29 @@ module ExprTransformation = struct
 		| _ ->
 			Type.map_expr gen.map e
 
+end
+
+module ExprTransformation2 = struct
+
+	let filter gen e =
+		match e.eexpr with
+		| TFor(v,e1,e2) ->
+			let e1 = gen.map e1 in
+			let vtemp = gen.declare_temp e1.etype None in
+			gen.declare_var (v,None);
+			let ev = Expr.mk_local vtemp e1.epos in
+			let ehasnext = mk (TField(ev,quick_field e1.etype "hasNext")) (tfun [] gen.gcon.com.basic.tbool) e1.epos in
+			let ehasnext = mk (TCall(ehasnext,[])) ehasnext.etype ehasnext.epos in
+			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
+			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
+			let eassign = Expr.mk_binop OpAssign (Expr.mk_local v e.epos) enext v.v_type e.epos in
+			let ebody = Codegen.concat eassign (gen.map e2) in
+			mk (TBlock [
+				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
+				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
+			]) gen.gcom.basic.tvoid e.epos
+		| _ ->
+			Type.map_expr gen.map e
 end
 
 
@@ -1131,17 +1164,6 @@ let close_type_context ctx =
 		write_if_changed (ctx.file_path_no_ext ^ ".c") (Buffer.contents buf);
 	end
 
-let anon_signature ctx fields =
-	let fields = pmap_to_list fields in
-	let fields = sort_anon_fields fields in
-	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
-	try fst (PMap.find id ctx.con.anon_types)
-	with Not_found ->
-		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
-		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
-		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
-		s
-
 
 (* Dependency handling *)
 
@@ -1193,7 +1215,7 @@ let add_type_dependency ctx t = match follow t with
 	| TEnum(en,_) ->
 		add_enum_dependency ctx en
 	| TAnon an ->
-		add_dependency ctx DFull (["c"],anon_signature ctx an.a_fields);
+		add_dependency ctx DFull (["c"],ctx.con.get_anon_signature an.a_fields);
 	| TAbstract(a,_) ->
 		add_abstract_dependency ctx a
 	| TDynamic _ ->
@@ -1429,7 +1451,12 @@ let begin_loop ctx =
 	fun () ->
 		match ctx.fctx.loop_stack with
 		| ls :: l ->
-			(match ls with None -> () | Some s -> print ctx "%s: {}" s);
+			begin match ls with
+				| None -> ()
+				| Some s ->
+					newline ctx;
+					print ctx "%s: {}" s
+			end;
 			ctx.fctx.loop_stack <- l;
 		| _ ->
 			assert false
@@ -1520,7 +1547,7 @@ let rec s_type ctx t =
 		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
 		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
 		| _ ->
-			let signature = anon_signature ctx a.a_fields in
+			let signature = ctx.con.get_anon_signature a.a_fields in
 			add_dependency ctx DFull (["c"],signature);
 			"c_" ^ signature ^ "*"
 		end
@@ -1708,7 +1735,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TObjectDecl fl ->
 		let s = match follow e.etype with
 			| TAnon an ->
-				let signature = anon_signature ctx an.a_fields in
+				let signature = ctx.con.get_anon_signature an.a_fields in
 				add_dependency ctx DFull (["c"],signature);
 				signature
 			| _ -> assert false
@@ -1995,13 +2022,12 @@ let generate_class ctx c =
 			DynArray.add methods (f,true)
 	end;
 
-	let vars = DynArray.to_list vars in
-	let vars = List.sort (fun cf1 cf2 -> compare cf1.cf_name cf2.cf_name) vars in
-	let vars = (generate_header_fields ctx) @ vars in
+	
+
 	ctx.buf <- ctx.buf_c;
 
-	spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types)));
-	newline ctx;
+	(* spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types))); *)
+	(* newline ctx; *)
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
@@ -2034,12 +2060,14 @@ let generate_class ctx c =
 	print ctx "typedef struct %s %s" path path;
 	newline ctx;
 
+	let vars = (generate_header_fields ctx) @ vars in
+	
 	(* generate member struct *)
-	if not (vars = []) then begin
+	if not (DynArray.empty vars) then begin
 		spr ctx "\n// member var structure\n";
 		print ctx "typedef struct %s {" path;
 		let b = open_block ctx in
-		List.iter (fun cf ->
+		DynArray.iter (fun cf ->
 			newline ctx;
 			spr ctx (s_type_with_name ctx cf.cf_type cf.cf_name);
 		) vars;
@@ -2070,8 +2098,8 @@ let generate_class ctx c =
 		) methods;
 	end;
 
-	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx c.cl_path);
+(* 	add_dependency ctx DForward ([],"typeref");
+	spr ctx (get_typeref_forward ctx c.cl_path); *)
 	newline ctx
 
 let generate_flat_enum ctx en =
@@ -2085,9 +2113,9 @@ let generate_flat_enum ctx en =
 
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
-	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx en.e_path);
-	newline ctx;
+(* 	add_dependency ctx DForward ([],"typeref");
+	spr ctx (get_typeref_forward ctx en.e_path); *)
+	(* newline ctx; *)
 
 	let ctors = List.map (fun s -> PMap.find s en.e_constrs) en.e_names in
 	let path = path_to_name en.e_path in
@@ -2153,8 +2181,8 @@ let generate_enum ctx en =
 	newline ctx;
 
 	ctx.buf <- ctx.buf_c;
-	spr ctx (generate_typedef_declaration ctx (TEnum(en,List.map snd en.e_types)));
-	newline ctx;
+	(* spr ctx (generate_typedef_declaration ctx (TEnum(en,List.map snd en.e_types))); *)
+	(* newline ctx; *)
 
 	(* generate constructor functions *)
 	spr ctx "// constructor functions";
@@ -2181,17 +2209,15 @@ let generate_enum ctx en =
 			assert false
 	) ctors
 
-let generate_typeref con t =
+(* let generate_typeref con t =
 	let path = Expr.t_path t in
 	let ctx = mk_type_context con path in
 	ctx.buf <- ctx.buf_c;
 	spr ctx (generate_typedef_declaration ctx t);
 	newline ctx;
 	ctx.buf <- ctx.buf_h;
-	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx path);
 	newline ctx;
-	close_type_context ctx
+	close_type_context ctx *)
 
 let generate_type con mt = match mt with
 	| TClassDecl c when not c.cl_extern ->
@@ -2208,7 +2234,10 @@ let generate_type con mt = match mt with
 	| TAbstractDecl { a_path = [],"Void" }
 	| TAbstractDecl { a_path = ["c"],"ConstSizeArray" } -> ()
 	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
-		generate_typeref con (TAbstract(a,List.map snd a.a_types))
+		let ctx = mk_type_context con a.a_path in
+		ctx.buf <- ctx.buf_c;
+		spr ctx " ";
+		close_type_context ctx
 	| _ ->
 		()
 
@@ -2450,20 +2479,38 @@ let generate com =
 		c_cstdio = null_class;
 		c_vtable = null_class;
 	} com.types in
+	let anons = ref PMap.empty in
+	let added_anons = ref PMap.empty in
+	let get_anon =
+		let num_anons = ref 0 in
+		fun fields ->
+			let fields = pmap_to_list fields in
+			let fields = sort_anon_fields fields in
+			let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (Type.s_type (print_context()) (follow cf.cf_type))) fields) in
+			let s = try
+				fst (PMap.find id !anons)
+			with Not_found ->
+				incr num_anons;
+				let s = "_hx_anon_" ^ (string_of_int !num_anons) in
+				anons := PMap.add id (s,fields) !anons;
+				added_anons := PMap.add id (s,fields) !added_anons;
+				s
+			in
+			s
+	in
 	let con = {
 		com = com;
 		hxc = hxc;
 		num_temp_funcs = 0;
 		num_labels = 0;
-		num_anon_types = -1;
 		(* this has to start at 0 so the first type id is 1 *)
 		num_identified_types = 0;
-		anon_types = PMap.empty;
 		type_ids = PMap.empty;
 		type_parameters = PMap.empty;
 		init_modules = [];
 		generated_types = [];
 		filters = [];
+		get_anon_signature = get_anon;
 	} in
 	(* ascending priority *)
 	let filters = [
@@ -2474,7 +2521,8 @@ let generate com =
 		StringHandler.filter;
 		SwitchHandler.filter;
 		ClosureHandler.filter;
-		DefaultValues.filter
+		DefaultValues.filter;
+		ExprTransformation2.filter
 	] in
 	List.iter (Filters.add_filter con) filters;
 	List.iter (fun mt -> match mt with
@@ -2488,10 +2536,10 @@ let generate com =
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
 	let rec loop () =
-		let anons = con.anon_types in
-		con.anon_types <- PMap.empty;
+		let anons = !added_anons in
+		added_anons := PMap.empty;
 		PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) anons;
-		if not (PMap.is_empty con.anon_types) then loop()
+		if not (PMap.is_empty !added_anons) then loop()
 	in
 	loop();
 	generate_init_file con;
