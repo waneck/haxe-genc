@@ -1265,7 +1265,7 @@ module VTableHandler = struct
 
 	let get_methods c = List.filter ( fun cf -> match cf.cf_kind with
 			| Method (MethNormal) -> true
-			| _ -> false ) (List.rev c.cl_ordered_fields)
+			| _ -> false ) c.cl_ordered_fields
 
 	let reverse_collect c =
 		let next  = ref 0 in
@@ -1359,7 +1359,8 @@ module VTableHandler = struct
 			let t_voidp = con.hxc.t_pointer con.com.basic.tvoid in
 			let t_vtfp  = con.hxc.t_func_pointer (Type.tfun [con.com.basic.tvoid] con.com.basic.tvoid) in
 			let cf_vt = Type.mk_field fname (TInst(con.hxc.c_vtable,[])) null_pos in
-			
+			let mk_ccode s  =
+				Expr.mk_static_call_2 con.hxc.c_lib "cCode" [mk (TConst (TString s)) con.com.basic.tstring null_pos] null_pos in
 			let mk_field c ethis n p = try
 				let cf = (PMap.find n c.cl_fields) in
 				mk (TField (ethis,(FInstance (c,cf)))) cf.cf_type p
@@ -1388,7 +1389,7 @@ module VTableHandler = struct
 			(* sizeof(vtable_t) + vt_size * sizeof(void ( * )())  *)
 			(* 2.2 allocate vtable struct (after 2.1 because we have the vtable size now) *)
 			let e_allocsize  = 
-				Expr.mk_binop OpAdd (sizeof t_vt) (
+				Expr.mk_binop OpAdd (mk_ccode "sizeof(c_VTable)") (
 					Expr.mk_binop OpMult e_vtsize (sizeof t_vtfp) t_int null_pos
 				) t_int null_pos in
 			let e_alloc = Expr.mk_static_call_2 cstdlib "malloc" [e_allocsize] null_pos in 
