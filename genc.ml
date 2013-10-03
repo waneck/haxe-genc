@@ -1006,12 +1006,13 @@ module ExprTransformation = struct
 			gen.declare_var (v,None);
 			let ev = Expr.mk_local vtemp e1.epos in
 			let ehasnext = mk (TField(ev,quick_field e1.etype "hasNext")) (tfun [] gen.gcon.com.basic.tbool) e1.epos in
-			let ehasnext = Expr.mk_cast ehasnext ehasnext.etype in
+			let ehasnext = Expr.mk_cast ehasnext (gen.gcon.hxc.t_func_pointer ehasnext.etype) in
 			let ehasnext = mk (TCall(ehasnext,[])) ehasnext.etype ehasnext.epos in
 			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
-			let enext = Expr.mk_cast enext enext.etype in
+			let enext = Expr.mk_cast enext (gen.gcon.hxc.t_func_pointer enext.etype) in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
-			let ebody = Codegen.concat enext (gen.map e2) in
+			let eassign = Expr.mk_binop OpAssign (Expr.mk_local v e.epos) enext v.v_type e.epos in
+			let ebody = Codegen.concat eassign (gen.map e2) in
 			mk (TBlock [
 				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
