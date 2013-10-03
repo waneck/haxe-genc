@@ -2060,7 +2060,7 @@ let generate_class ctx c =
 	print ctx "typedef struct %s %s" path path;
 	newline ctx;
 
-	let vars = (generate_header_fields ctx) @ vars in
+	List.iter(fun v -> DynArray.insert vars 0 v) (generate_header_fields ctx);
 	
 	(* generate member struct *)
 	if not (DynArray.empty vars) then begin
