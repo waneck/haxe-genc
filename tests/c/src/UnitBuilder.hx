@@ -150,7 +150,7 @@ class UnitBuilder {
 					var el2 = [];
 					for (e in el)
 						el2.push(macro $e1 == $e);
-					macro @:pos(e.pos) t(${ collapseToOrExpr(el2) } );
+					macro @:pos(e.pos) $isTrue(${ collapseToOrExpr(el2) } );
 				case _:
 					e;
 			}

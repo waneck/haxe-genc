@@ -27,3 +27,11 @@ for(i in -10...0)
 	a.constArray[-i-1] == i;
 }
 a._count == 10;
+
+var a1 = ["foo", "bar", "baz"];
+var a2 = [];
+for (e in a1) {
+	a2.push(e);
+}
+a1 == ["foo", "bar", "baz"];
+a2 == ["foo", "bar", "baz"];
