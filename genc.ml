@@ -801,7 +801,7 @@ module ClosureHandler = struct
 				true
 			| TField(_,FAnon _) ->
 				true
-			| TMeta(_,e1) | TParenthesis(e1) ->
+			| TMeta(_,e1) | TParenthesis(e1) | TCast(e1,None) ->
 				is_closure_expr e1
 			| _ ->
 				false
@@ -831,7 +831,7 @@ module ClosureHandler = struct
 			is_call_expr := fst old;
 			let el = List.map gen.map el in
 			let e = if not !is_extern && is_closure_expr e1 then begin
-				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
+				let args,r = match follow e1.etype with TFun(args,r) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,r)]) -> args,r | _ -> assert false in
 				let mk_cast e = mk (TCast(e,None)) (gen.gcon.hxc.t_func_pointer e.etype) e.epos in
 				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
 				let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
