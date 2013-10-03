@@ -60,9 +60,8 @@ type context = {
 	hxc : hxc;
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
-	mutable num_anon_types : int;
 	mutable num_identified_types : int;
-	mutable anon_types : (string,string * tclass_field list) PMap.t;
+	mutable get_anon_signature : (string,tclass_field) PMap.t -> string;
 	mutable type_ids : (string,int) PMap.t;
 	mutable type_parameters : (path, texpr) PMap.t;
 	mutable init_modules : path list;
@@ -1273,17 +1272,6 @@ let close_type_context ctx =
 		write_if_changed (ctx.file_path_no_ext ^ ".c") (Buffer.contents buf);
 	end
 
-let anon_signature ctx fields =
-	let fields = pmap_to_list fields in
-	let fields = sort_anon_fields fields in
-	let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (s_type (print_context()) (follow cf.cf_type))) fields) in
-	try fst (PMap.find id ctx.con.anon_types)
-	with Not_found ->
-		ctx.con.num_anon_types <- ctx.con.num_anon_types + 1;
-		let s = "_hx_anon_" ^ (string_of_int ctx.con.num_anon_types) in
-		ctx.con.anon_types <- PMap.add id (s,fields) ctx.con.anon_types;
-		s
-
 
 (* Dependency handling *)
 
@@ -1335,7 +1323,7 @@ let add_type_dependency ctx t = match follow t with
 	| TEnum(en,_) ->
 		add_enum_dependency ctx en
 	| TAnon an ->
-		add_dependency ctx DFull (["c"],anon_signature ctx an.a_fields);
+		add_dependency ctx DFull (["c"],ctx.con.get_anon_signature an.a_fields);
 	| TAbstract(a,_) ->
 		add_abstract_dependency ctx a
 	| TDynamic _ ->
@@ -1459,7 +1447,7 @@ let rec s_type ctx t =
 		| EnumStatics en -> "Enum_" ^ (path_to_name en.e_path) ^ "*"
 		| AbstractStatics a -> "Anon_" ^ (path_to_name a.a_path) ^ "*"
 		| _ ->
-			let signature = anon_signature ctx a.a_fields in
+			let signature = ctx.con.get_anon_signature a.a_fields in
 			add_dependency ctx DFull (["c"],signature);
 			"c_" ^ signature ^ "*"
 		end
@@ -1646,7 +1634,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TObjectDecl fl ->
 		let s = match follow e.etype with
 			| TAnon an ->
-				let signature = anon_signature ctx an.a_fields in
+				let signature = ctx.con.get_anon_signature an.a_fields in
 				add_dependency ctx DFull (["c"],signature);
 				signature
 			| _ -> assert false
@@ -2372,20 +2360,38 @@ let generate com =
 		c_cstdlib = null_class;
 		c_cstdio = null_class;
 	} com.types in
+	let anons = ref PMap.empty in
+	let added_anons = ref PMap.empty in
+	let get_anon =
+		let num_anons = ref 0 in
+		fun fields ->
+			let fields = pmap_to_list fields in
+			let fields = sort_anon_fields fields in
+			let id = String.concat "," (List.map (fun cf -> cf.cf_name ^ (Type.s_type (print_context()) (follow cf.cf_type))) fields) in
+			let s = try
+				fst (PMap.find id !anons)
+			with Not_found ->
+				incr num_anons;
+				let s = "_hx_anon_" ^ (string_of_int !num_anons) in
+				anons := PMap.add id (s,fields) !anons;
+				added_anons := PMap.add id (s,fields) !added_anons;
+				s
+			in
+			s
+	in
 	let con = {
 		com = com;
 		hxc = hxc;
 		num_temp_funcs = 0;
 		num_labels = 0;
-		num_anon_types = -1;
 		(* this has to start at 0 so the first type id is 1 *)
 		num_identified_types = 0;
-		anon_types = PMap.empty;
 		type_ids = PMap.empty;
 		type_parameters = PMap.empty;
 		init_modules = [];
 		generated_types = [];
 		filters = [];
+		get_anon_signature = get_anon;
 	} in
 	(* ascending priority *)
 	let filters = [
@@ -2410,10 +2416,10 @@ let generate com =
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
 	List.iter (generate_type con) com.types;
 	let rec loop () =
-		let anons = con.anon_types in
-		con.anon_types <- PMap.empty;
+		let anons = !added_anons in
+		added_anons := PMap.empty;
 		PMap.iter (fun _ (s,cfl) -> generate_anon con s cfl) anons;
-		if not (PMap.is_empty con.anon_types) then loop()
+		if not (PMap.is_empty !added_anons) then loop()
 	in
 	loop();
 	generate_init_file con;
