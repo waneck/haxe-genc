@@ -1328,7 +1328,7 @@ module VTableHandler = struct
 						 next    = 0} tps in
 
 		let add_vtable con c vtable = 
-			(* 1. add global field for the vtable pointer *)
+			(* helpers *)
 			let clib, cstdlib = con.hxc.c_lib, con.hxc.c_cstdlib in
 			let fname   = (Expr.mk_runtime_prefix "_vtable") in
 			let c_vt    = con.hxc.c_vtable in
@@ -1346,6 +1346,7 @@ module VTableHandler = struct
 			c.cl_statics <- PMap.add fname cf_vt c.cl_statics;
 			c.cl_ordered_statics <- cf_vt :: c.cl_ordered_statics;
 			
+			(* 1. add global field for the vtable pointer *)
 			let e_vt = Expr.mk_static_field c cf_vt null_pos in
 			
 			(* 2. add vtable initialization to cl_init *)
@@ -1358,19 +1359,19 @@ module VTableHandler = struct
 					(mk (TArray(e_slot,(Expr.mk_int con.com vidx null_pos))) t_vtfp null_pos) e_fp t_vtfp null_pos in
 				(max mx vidx, esetidx :: acc)
 			) vtable (0,[]) in
-			(* 2.2 allocate vtable struct (after 2.1 because we have the vtable size now) *)
+			
 			let sizeof t = Expr.mk_static_call clib con.hxc.cf_sizeof [(mk (TConst TNull) t null_pos)] null_pos in
 			let vt_size = mx+1 in
 			let e_vtsize = (Expr.mk_int con.com vt_size null_pos) in
 			(* sizeof(vtable_t) + vt_size * sizeof(void ( * )())  *)
+			(* 2.2 allocate vtable struct (after 2.1 because we have the vtable size now) *)
 			let e_allocsize  = 
 				Expr.mk_binop OpAdd (sizeof t_vt) (
 					Expr.mk_binop OpMult e_vtsize (sizeof t_vtfp) t_int null_pos
 				) t_int null_pos in
 			let e_alloc = Expr.mk_static_call_2 cstdlib "malloc" [e_allocsize] null_pos in 
 			let e_assign_ptr = (Expr.mk_binop OpAssign e_vt e_alloc t_voidp null_pos) in
-			let e_block = 
-				Expr.mk_block con null_pos (e_assign_ptr :: l_easgn) in
+			let e_block =  Expr.mk_block con null_pos (e_assign_ptr :: l_easgn) in
 			c.cl_init <- ( match c.cl_init with 
 			| Some code -> Some (Codegen.concat e_block code)
 			| None      -> Some e_block )
