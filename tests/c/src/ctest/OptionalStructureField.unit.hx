@@ -14,25 +14,20 @@ takeTypedef({given: "foo", maybeGiven:"bar"}) == "bar";
 
 var td:MyTypedef = { given: "foo" };
 td.given == "foo";
-var s:Int = cast td.maybeGiven;
-s == 0;
+td.maybeGiven == null;
 
 td = { given: "foo" };
 td.given == "foo";
-var s:Int = cast td.maybeGiven;
-s == 0;
+td.maybeGiven == null;
 
 var a:Array<MyTypedef> = [ {given: "foo" }];
 a[0].given == "foo";
-var s:Int = cast a[0].maybeGiven;
-s == 0;
+a[0].maybeGiven == null;
 
 var o:{f:MyTypedef} = { f: { given: "foo" }};
 o.f.given == "foo";
-var s:Int = cast o.f.maybeGiven;
-s == 0;
+o.f.maybeGiven == null;
 
 var td = giveTypedef();
 td.given == "foo";
-var s:Int = cast td.maybeGiven;
-s == 0;
+td.maybeGiven == null;
