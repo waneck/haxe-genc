@@ -246,7 +246,8 @@ module Expr = struct
 
 	let wrap_function con ethis efunc =
 		let c,t = match con.hxc.t_closure t_dynamic with TInst(c,_) as t -> c,t | _ -> assert false in
-		mk (TNew(c,[efunc.etype],[efunc;ethis])) t efunc.epos
+		let cf_func = PMap.find "_func" c.cl_fields in
+		mk (TNew(c,[efunc.etype],[mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
 
 	let wrap_static_function con efunc =
 		wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
