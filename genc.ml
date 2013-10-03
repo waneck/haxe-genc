@@ -888,21 +888,21 @@ module ArrayHandler = struct
 			begin try begin match follow e1.etype with
 				| TAbstract({a_path=["c"], "ConstSizeArray"},[t;_])
 				| TAbstract({a_path=["c"], "Pointer"},[t]) ->
-					e
+					{e with eexpr = TArray(gen.map e1, gen.map e2)}
 				| TInst(c,[tp]) ->
 					let suffix = get_type_size (follow tp) in
-					Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(e1,[tp])) [e2] e.epos) tp
+					Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(gen.map e1,[tp])) [gen.map e2] e.epos) tp
 				| _ ->
 					raise Not_found
 			end with Not_found ->
-				Type.map_expr gen.map e
+				Expr.mk_cast (Type.map_expr gen.map e) e.etype
 			end
 		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ ), {eexpr = TArray(e1,e2)}, ev) ->
 			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix = get_type_size (follow tp) in
-					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [e2; Expr.mk_cast ev tp] e.epos
+					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [gen.map e2; Expr.mk_cast (gen.map ev) tp] e.epos
 				| _ ->
 					raise Not_found
 			end with Not_found ->
