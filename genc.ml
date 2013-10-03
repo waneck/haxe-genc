@@ -902,7 +902,7 @@ module ArrayHandler = struct
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix = get_type_size (follow tp) in
-					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [e2; ev] e.epos
+					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [e2; Expr.mk_cast ev tp] e.epos
 				| _ ->
 					raise Not_found
 			end with Not_found ->
