@@ -811,7 +811,7 @@ module ClosureHandler = struct
 		| TFunction tf ->
 			fstack := tf :: !fstack;
 			let e1 = match !fstack,gen.mtype with
-				| _ :: [],_ ->
+				| _ :: [],_ when (match gen.gfield.cf_kind with Method _ -> true | Var _ -> false) ->
 					{e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})}
 				| _,Some (TClassDecl c) ->
 					add_closure_field gen c tf None e.epos
