@@ -3,7 +3,7 @@ import c.Pointer;
 
 @:keep
 class Closure<F> {
-	var _func:FunctionPointer<Void->Void>;
+	var _func:FunctionPointer<Void->Pointer<Void>>;
 	var _this:Dynamic;
 	
 	public function new(func, _this) {
