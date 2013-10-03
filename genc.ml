@@ -1363,7 +1363,12 @@ let begin_loop ctx =
 	fun () ->
 		match ctx.fctx.loop_stack with
 		| ls :: l ->
-			(match ls with None -> () | Some s -> print ctx "%s: {}" s);
+			begin match ls with
+				| None -> ()
+				| Some s ->
+					newline ctx;
+					print ctx "%s: {}" s
+			end;
 			ctx.fctx.loop_stack <- l;
 		| _ ->
 			assert false
