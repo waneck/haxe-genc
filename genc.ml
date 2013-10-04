@@ -1425,10 +1425,10 @@ module VTableHandler = struct
 								true
 			in
 			List.iter ( fun c -> (
-				print_endline (  " end of chain: " ^ (snd c.cl_path)   );
-				p_methods c;
+				(*print_endline (  " end of chain: " ^ (snd c.cl_path)   );*)
+				(*p_methods c;*)
 				let ichain = (reverse_collect c) in
-				p_ichain ichain;
+				(*p_ichain ichain;*)
 				List.iter ( fun (c,m) -> if (ifadd c m) then  add_vtable con c m else () ) ichain
 				)
 			) eochains
