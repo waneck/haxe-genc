@@ -1651,6 +1651,8 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
+	| TField({eexpr = TConst TSuper} as e1, FInstance(c,cf)),el ->
+		generate_expr ctx need_val (Expr.mk_static_call c cf (e1 :: el) e.epos)
 	| TField(e1,FInstance(c,cf)), el ->
 		add_class_dependency ctx c;
 		let _ = if not (Meta.has (Meta.Custom ":overridden") cf.cf_meta) then
@@ -1708,8 +1710,7 @@ and generate_constant ctx e = function
 	| TNull ->
 		spr ctx "NULL"
 	| TSuper ->
-		(* TODO: uhm... *)
-		()
+		spr ctx "this"
 	| TBool true ->
 		spr ctx "1"
 	| TBool false ->
