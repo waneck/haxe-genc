@@ -34,19 +34,19 @@ class TestVTable {
 		Main.equals("C.b (this=D)", d.b()); // FAILS if E is compiled
 		Main.equals("B.c (this=D)", d.c());
 		Main.equals("D.d (this=D)", d.d());
-		
+
 		var d:A = new D();
 		Main.equals("A.a (this=D)", d.a());
 		Main.equals("C.b (this=D)", d.b()); // FAILS if E is compiled
-		
+
 		var c = new C();
 		Main.equals("A.a (this=C)", c.a());
 		Main.equals("C.b (this=C)", c.b());
 		Main.equals("B.c (this=C)", c.c());
-		
+
 		var e = new E();
 		Main.equals("E.b (this=E) C.b (this=E)", e.b());
-		
+
 		var e:B = new E();
 		Main.equals("E.b (this=E) C.b (this=E)", e.b());
 	}

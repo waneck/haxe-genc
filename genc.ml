@@ -1285,8 +1285,8 @@ module VTableHandler = struct
 			| _ -> acc
 			in (loop c [c])
 		in
-		let rec collect super acc xs = match xs with
-		| []        -> super :: acc
+		let rec collect sc super acc xs = match xs with
+		| []        ->  (sc,super) :: acc
 		| c :: tail ->
 			let methods = (get_methods c) in
 			let add_meta cf meta vidx =
@@ -1312,13 +1312,13 @@ module VTableHandler = struct
 				if PMap.mem k mm then mm
 				else PMap.add k (scf,vidx,sc) mm ) super mm
 			in
-			collect mm (super :: acc) tail
+			collect c mm ( (sc,super) :: acc) tail
 		in
-		let ichain = collect PMap.empty [] (rev_chain c)
+		let ichain = collect null_class PMap.empty [] (rev_chain c)
 		in  ichain (*print_endline (string_of_int (List.length ichain))*)
 
-	let p_ichain xs = List.iter (fun m ->
-		(   print_endline "---";
+	let p_ichain xs = List.iter (fun (c,m) ->
+		(   print_endline ( "---" ^ (snd c.cl_path));
 			(PMap.iter
 				(fun _ (cf,midx,c) -> (Printf.printf "class: %s func: %s idx:%d\n" (snd c.cl_path) cf.cf_name midx) )
 			m)
@@ -1428,18 +1428,8 @@ module VTableHandler = struct
 				print_endline (  " end of chain: " ^ (snd c.cl_path)   );
 				p_methods c;
 				let ichain = (reverse_collect c) in
-				List.iter ( fun m ->
-					PMap.iter ( fun n (cf,midx,c) ->
-						if (ifadd c m) then begin
-							print_endline ( " adding field: " ^ (snd c.cl_path)  );
-							let fname = (snd c.cl_path) in
-							let cf_hd = Type.mk_field fname
-								(TInst(con.hxc.c_vtable,[])) null_pos in
-							con.hxc.c_vtable.cl_statics <- PMap.add fname cf_hd con.hxc.c_vtable.cl_statics;
-							con.hxc.c_vtable.cl_ordered_statics <- cf_hd :: con.hxc.c_vtable.cl_ordered_statics;
-							add_vtable con c m;
-						end else () ) m
-					 ) ichain
+				p_ichain ichain;
+				List.iter ( fun (c,m) -> if (ifadd c m) then  add_vtable con c m else () ) ichain
 				)
 			) eochains
 end
