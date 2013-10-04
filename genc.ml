@@ -2040,27 +2040,29 @@ let generate_class ctx c =
 					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx.con.com 1 p;esize] p)
 				in
 				let loc = alloc_var "this" t_class in
-				
-				let e_vt = if (Meta.has (Meta.Custom ":hasvtable") c.cl_meta ) then 
+
+				let e_vt = if (Meta.has (Meta.Custom ":hasvtable") c.cl_meta ) then
 					let cf_vt = try PMap.find (Expr.mk_runtime_prefix "vtable") c.cl_fields with
-					Not_found -> 
+					Not_found ->
 					(print_endline (" >>>> " ^ ( String.concat "," (PMap.foldi ( fun k _ acc -> k :: acc ) c.cl_fields []))));
 					assert false in
 					let e_vt = mk (TField(Expr.mk_local loc cf.cf_pos,FInstance(c,cf_vt))) cf_vt.cf_type null_pos in
 					let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (Expr.mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
 					[easgn]
 				else [] in
-				
+
+				let cf_ctor = Expr.mk_class_field (Expr.mk_runtime_prefix "ctor") (TFun((loc.v_name,false,loc.v_type) :: args,ctx.con.com.basic.tvoid)) false cf.cf_pos (Method MethNormal) [] in
+				cf_ctor.cf_expr <- Some e;
 				let einit = mk (TVars [loc,einit]) ctx.con.com.basic.tvoid cf.cf_pos in
-				let ereturn = mk (TReturn (Some (Expr.mk_local loc cf.cf_pos))) t_dynamic cf.cf_pos in
-				let e = match e.eexpr with
-					| TFunction({tf_expr = ({eexpr = TBlock el } as ef) } as tf) ->
-						{e with eexpr = TFunction ({tf with tf_expr = {ef with eexpr = TBlock(einit :: e_vt @ el @ [ereturn])}})}
-					| _ -> assert false
-				in
+				let eloc = Expr.mk_local loc cf.cf_pos in
+				let ereturn = mk (TReturn (Some eloc)) t_dynamic cf.cf_pos in
+				let ectorcall = Expr.mk_static_call c cf_ctor (eloc :: (List.map(fun (n,_,t) -> Expr.mk_local (alloc_var n t) cf.cf_pos) args)) e.epos in
+				let e = mk (TBlock (einit :: e_vt @ [ectorcall;ereturn])) eloc.etype e.epos in
 				cf.cf_expr <- Some e;
 				cf.cf_type <- TFun(args, monofy_class c);
-				DynArray.add methods (cf,true)
+				DynArray.add methods (cf,true);
+				DynArray.add methods(cf_ctor,true);
+				c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
 			| _ -> ()
 	end;
 
