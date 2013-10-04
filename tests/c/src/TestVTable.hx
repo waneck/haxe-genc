@@ -31,13 +31,13 @@ class TestVTable {
 	public static function run(){
 		var d = new D();
 		Main.equals("A.a (this=D)", d.a());
-		Main.equals("C.b (this=D)", d.b()); // FAILS if E is compiled
+		Main.equals("C.b (this=D)", d.b());
 		Main.equals("B.c (this=D)", d.c());
 		Main.equals("D.d (this=D)", d.d());
 
 		var d:A = new D();
 		Main.equals("A.a (this=D)", d.a());
-		Main.equals("C.b (this=D)", d.b()); // FAILS if E is compiled
+		Main.equals("C.b (this=D)", d.b());
 
 		var c = new C();
 		Main.equals("A.a (this=C)", c.a());
