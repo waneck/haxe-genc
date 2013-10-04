@@ -1684,6 +1684,14 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		print ctx "new_%s(" (full_enum_field_name en ef);
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")"
+	| TConst (TSuper),el ->
+		let csup = match follow e1.etype with
+			| TInst(c,_) -> c
+			| _ -> assert false
+		in
+		let n = (Expr.mk_runtime_prefix "ctor") in
+		let e = Expr.mk_static_call_2 csup n ((Expr.mk_local (alloc_var "this" t_dynamic) e1.epos) :: el) e1.epos in
+		generate_expr ctx false e
 	| _ ->
 		generate_expr ctx true e1;
 		spr ctx "(";
