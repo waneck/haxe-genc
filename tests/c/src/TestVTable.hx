@@ -18,26 +18,36 @@ class C extends B {
 }
 
 class D extends C {
-	public function new() super("D");
+	public function new(id = "D") super(id);
 	public function d() return 'D.d (this=$id)';
 }
 
+class E extends D {
+	public function new() super("E");
+	public override function b() return 'E.b (this=$id) ' + super.b();
+}
 
 class TestVTable {
 	public static function run(){
 		var d = new D();
 		Main.equals("A.a (this=D)", d.a());
-		Main.equals("C.b (this=D)", d.b());
+		Main.equals("C.b (this=D)", d.b()); // FAILS if E is compiled
 		Main.equals("B.c (this=D)", d.c());
 		Main.equals("D.d (this=D)", d.d());
 		
 		var d:A = new D();
 		Main.equals("A.a (this=D)", d.a());
-		Main.equals("C.b (this=D)", d.b());
+		Main.equals("C.b (this=D)", d.b()); // FAILS if E is compiled
 		
 		var c = new C();
 		Main.equals("A.a (this=C)", c.a());
 		Main.equals("C.b (this=C)", c.b());
 		Main.equals("B.c (this=C)", c.c());
+		
+		var e = new E();
+		Main.equals("E.b (this=E) C.b (this=E)", e.b());
+		
+		var e:B = new E();
+		Main.equals("E.b (this=E) C.b (this=E)", e.b());
 	}
 }
