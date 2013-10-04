@@ -1998,7 +1998,7 @@ let generate_class ctx c =
 
 	(* split fields into member vars, static vars and functions *)
 	List.iter (fun cf -> match cf.cf_kind with
-		| Var _ -> DynArray.add vars cf
+		| Var _ -> ()
 		| Method m ->  DynArray.add methods (cf,false)
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with
@@ -2006,14 +2006,25 @@ let generate_class ctx c =
 		| Method _ -> DynArray.add methods (cf,true)
 	) c.cl_ordered_statics;
 
+	let rec loop c =
+		List.iter (fun cf -> match cf.cf_kind with
+			| Var _ -> DynArray.add vars cf
+			| Method m ->  ()
+		) c.cl_ordered_fields;
+		match c.cl_super with
+		| None -> ()
+		| Some (csup,_) -> loop csup
+	in
+	loop c;
+
 	let path = path_to_name c.cl_path in
 	let t_class = monofy_class c in
 
-	List.iter(fun v -> 
+	List.iter(fun v ->
 		DynArray.insert vars 0 v;
 		c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
 	) (generate_header_fields ctx);
-	
+
 	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
