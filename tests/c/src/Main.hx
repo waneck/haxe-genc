@@ -9,6 +9,7 @@ class Main {
 	static public function main() {
 		trace("Beginning unit tests");
 		new Main();
+		TestVTable.run();
 		c.CStdio.printf("Done %i tests (%i failed)\\n", [count, failures]);
 	}
 

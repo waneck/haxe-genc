@@ -164,9 +164,9 @@ module Expr = struct
 		| TEnum(e,_) -> e.e_path
 		| TAbstract(a,_) -> a.a_path
 		| _ -> [],"Dynamic"
-	
+
 	let mk_runtime_prefix n = "_hx_" ^ n
-		
+
 	let mk_static_field c cf p =
 		let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
 		let ethis = mk (TTypeExpr (TClassDecl c)) ta p in
@@ -823,9 +823,9 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
-		| _ when (match follow e.etype with 
-				| TInst({cl_path=["c"],"Closure"},_) 
-				| TAbstract( { a_path = ["c"],"FunctionPointer" }, _ ) -> true 
+		| _ when (match follow e.etype with
+				| TInst({cl_path=["c"],"Closure"},_)
+				| TAbstract( { a_path = ["c"],"FunctionPointer" }, _ ) -> true
 				| _ -> false) ->
 			(* skip previously creates closures *)
 			e
@@ -1235,9 +1235,9 @@ module VTableHandler = struct
 		) (c,[]) xs in
 		c, List.rev ys
 	*)
-		
+
 	type vt_t = (string, tclass_field * int * tclass) PMap.t
-	
+
 	type maps = {
 		mutable next    : int;
 		mutable cids    : ( string, int ) PMap.t;
@@ -1300,17 +1300,17 @@ module VTableHandler = struct
 			let mm = List.fold_left ( fun  m cf ->
 				let vidx = (get_id cf.cf_name) in
 				(add_meta_c c ":hasvtable" vidx;add_meta cf ":overridden" vidx; PMap.add cf.cf_name ( cf, vidx ,c) m )) PMap.empty methods in
-			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm -> 
-				
-				(* if PMap.mem k mm then 
+			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm ->
+
+				(* if PMap.mem k mm then
 					(* mark overridden method *)
-					if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
+					if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then
 						mm
 					else (
 						scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
 						mm ) *)
 				if PMap.mem k mm then mm
-				else PMap.add k (scf,vidx,sc) mm ) super mm 
+				else PMap.add k (scf,vidx,sc) mm ) super mm
 			in
 			collect mm (super :: acc) tail
 		in
@@ -1354,18 +1354,18 @@ module VTableHandler = struct
 						m.count <- (insert_or_inc con m.count id1);
 						m
 				| None -> m )
-			| _ -> m ) { count   = PMap.empty; 
-			             types   = PMap.empty; 
-						 cids    = PMap.empty; 
-						 vtables = PMap.empty; 
+			| _ -> m ) { count   = PMap.empty;
+			             types   = PMap.empty;
+						 cids    = PMap.empty;
+						 vtables = PMap.empty;
 						 next    = 0} tps in
 
-		let add_vtable con c vtable = 
+		let add_vtable con c vtable =
 			(* helpers *)
 			let clib, cstdlib = con.hxc.c_lib, con.hxc.c_cstdlib in
 			let fname   = (Expr.mk_runtime_prefix "_vtable") in
 			let c_vt    = con.hxc.c_vtable in
-			let t_vt    = (TInst(c_vt,[])) in 
+			(* let t_vt    = (TInst(c_vt,[])) in *)
 			let t_int   = con.com.basic.tint in
 			let t_voidp = con.hxc.t_pointer con.com.basic.tvoid in
 			let t_vtfp  = con.hxc.t_func_pointer (Type.tfun [con.com.basic.tvoid] con.com.basic.tvoid) in
@@ -1379,57 +1379,57 @@ module VTableHandler = struct
 			in
 			c.cl_statics <- PMap.add fname cf_vt c.cl_statics;
 			c.cl_ordered_statics <- cf_vt :: c.cl_ordered_statics;
-			
+
 			(* 1. add global field for the vtable pointer *)
 			let e_vt = Expr.mk_static_field c cf_vt null_pos in
-			
+
 			(* 2. add vtable initialization to cl_init *)
-			
+
 			let e_slot = mk_field c_vt e_vt "slots" null_pos in
 			(* 2.1. fill vtable with function pointers*)
-			let (mx,l_easgn) = PMap.fold ( fun (cf,vidx,c2) (mx,acc) -> 
-				let e_fp = Expr.mk_cast (Expr.mk_static_field c2 cf null_pos) t_vtfp in 
-				let esetidx = Expr.mk_binop OpAssign 
+			let (mx,l_easgn) = PMap.fold ( fun (cf,vidx,c2) (mx,acc) ->
+				let e_fp = Expr.mk_cast (Expr.mk_static_field c2 cf null_pos) t_vtfp in
+				let esetidx = Expr.mk_binop OpAssign
 					(mk (TArray(e_slot,(Expr.mk_int con.com vidx null_pos))) t_vtfp null_pos) e_fp t_vtfp null_pos in
 				(max mx vidx, esetidx :: acc)
 			) vtable (0,[]) in
-			
+
 			let sizeof t = Expr.mk_static_call clib con.hxc.cf_sizeof [(mk (TConst TNull) t null_pos)] null_pos in
 			let vt_size = mx+1 in
 			let e_vtsize = (Expr.mk_int con.com vt_size null_pos) in
 			(* sizeof(vtable_t) + vt_size * sizeof(void ( * )())  *)
 			(* 2.2 allocate vtable struct (after 2.1 because we have the vtable size now) *)
-			let e_allocsize  = 
+			let e_allocsize  =
 				Expr.mk_binop OpAdd (mk_ccode "sizeof(c_VTable)") (
 					Expr.mk_binop OpMult e_vtsize (sizeof t_vtfp) t_int null_pos
 				) t_int null_pos in
-			let e_alloc = Expr.mk_static_call_2 cstdlib "malloc" [e_allocsize] null_pos in 
+			let e_alloc = Expr.mk_static_call_2 cstdlib "malloc" [e_allocsize] null_pos in
 			let e_assign_ptr = (Expr.mk_binop OpAssign e_vt e_alloc t_voidp null_pos) in
 			let e_block =  Expr.mk_block con null_pos (e_assign_ptr :: l_easgn) in
-			c.cl_init <- ( match c.cl_init with 
+			c.cl_init <- ( match c.cl_init with
 			| Some code -> Some (Codegen.concat e_block code)
 			| None      -> Some e_block )
-			
+
 		in
-						 
+
 		let eochains =
 			PMap.foldi (fun  k v acc -> if v = 0 then (PMap.find k m.types) :: acc else acc) m.count [] in
-			let gcid c = 
+			let gcid c =
 				let (id,m) = get_class_id m c in id
 			in
-			let ifadd c v = if PMap.exists (gcid c) m.vtables then 
-								false 
-							else 
+			let ifadd c v = if PMap.exists (gcid c) m.vtables then
+								false
+							else
 								let pm = PMap.add (gcid c) v m.vtables in
-								let _ = m.vtables <- pm in 
+								let _ = m.vtables <- pm in
 								true
 			in
 			List.iter ( fun c -> (
-				print_endline (  " end of chain: " ^ (snd c.cl_path)   );  
+				print_endline (  " end of chain: " ^ (snd c.cl_path)   );
 				p_methods c;
 				let ichain = (reverse_collect c) in
 				List.iter ( fun m ->
-					PMap.iter ( fun n (cf,midx,c) -> 
+					PMap.iter ( fun n (cf,midx,c) ->
 						if (ifadd c m) then begin
 							print_endline ( " adding field: " ^ (snd c.cl_path)  );
 							let fname = (snd c.cl_path) in
@@ -1438,13 +1438,13 @@ module VTableHandler = struct
 							con.hxc.c_vtable.cl_statics <- PMap.add fname cf_hd con.hxc.c_vtable.cl_statics;
 							con.hxc.c_vtable.cl_ordered_statics <- cf_hd :: con.hxc.c_vtable.cl_ordered_statics;
 							add_vtable con c m;
-						end else () ) m 
+						end else () ) m
 					 ) ichain
 				)
 			) eochains
 end
 
-		
+
 (* Helper *)
 
 let rec is_value_type ctx t = match follow t with
@@ -1658,14 +1658,14 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		else
 			let (meta,el,epos) = Meta.get (Meta.Custom ":overridden") cf.cf_meta in
 			(match (meta,el,pos) with
-			| (_,[EConst(Int idx),p],_) -> 
+			| (_,[EConst(Int idx),p],_) ->
 				let oldbuf = ctx.buf in
 				let buf = Buffer.create 0 in ctx.buf <- buf; generate_expr ctx true e1; (*TODO don't be lazy*)
 				let s = Buffer.contents buf in
-				let _ = ctx.buf <- oldbuf in 
+				let _ = ctx.buf <- oldbuf in
 				let s = s ^ "->" ^ (Expr.mk_runtime_prefix "vtable") ^ "->slots["^idx^"]" in
 				let ecode = Expr.mk_ccode ctx s null_pos in
-				let t_this = match cf.cf_type with 
+				let t_this = match cf.cf_type with
 				| TFun (ts, r) -> TFun ( ("",false,(e1.etype))  :: ts, r )
 				| _ -> assert false
 				in
@@ -1684,6 +1684,14 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		print ctx "new_%s(" (full_enum_field_name en ef);
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")"
+	| TConst (TSuper),el ->
+		let csup = match follow e1.etype with
+			| TInst(c,_) -> c
+			| _ -> assert false
+		in
+		let n = (Expr.mk_runtime_prefix "ctor") in
+		let e = Expr.mk_static_call_2 csup n ((Expr.mk_local (alloc_var "this" t_dynamic) e1.epos) :: el) e1.epos in
+		generate_expr ctx false e
 	| _ ->
 		generate_expr ctx true e1;
 		spr ctx "(";
@@ -1979,18 +1987,18 @@ let generate_method ctx c cf stat =
 	newline ctx;
 	spr ctx "\n"
 
-	
+
 (*let mk_class_field name t public pos kind params =*)
-let generate_header_fields ctx = 
+let generate_header_fields ctx =
 	let v = Var {v_read=AccNormal;v_write=AccNormal} in
 	let cf_vt = Expr.mk_class_field (Expr.mk_runtime_prefix "vtable" )
 		(TInst(ctx.con.hxc.c_vtable,[])) false null_pos v [] in
 	let cf_hd = Expr.mk_class_field (Expr.mk_runtime_prefix "header" )
 		(ctx.con.hxc.t_int64 t_dynamic) false null_pos v [] in
 	[cf_vt;cf_hd]
-	
 
-	
+
+
 let generate_class ctx c =
 	let vars = DynArray.create () in
 	let svars = DynArray.create () in
@@ -1998,7 +2006,7 @@ let generate_class ctx c =
 
 	(* split fields into member vars, static vars and functions *)
 	List.iter (fun cf -> match cf.cf_kind with
-		| Var _ -> DynArray.add vars cf
+		| Var _ -> ()
 		| Method m ->  DynArray.add methods (cf,false)
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with
@@ -2006,14 +2014,25 @@ let generate_class ctx c =
 		| Method _ -> DynArray.add methods (cf,true)
 	) c.cl_ordered_statics;
 
+	let rec loop c =
+		List.iter (fun cf -> match cf.cf_kind with
+			| Var _ -> DynArray.add vars cf
+			| Method m ->  ()
+		) c.cl_ordered_fields;
+		match c.cl_super with
+		| None -> ()
+		| Some (csup,_) -> loop csup
+	in
+	loop c;
+
 	let path = path_to_name c.cl_path in
 	let t_class = monofy_class c in
 
-	List.iter(fun v -> 
+	List.iter(fun v ->
 		DynArray.insert vars 0 v;
 		c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
 	) (generate_header_fields ctx);
-	
+
 	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
@@ -2029,27 +2048,29 @@ let generate_class ctx c =
 					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx.con.com 1 p;esize] p)
 				in
 				let loc = alloc_var "this" t_class in
-				
-				let e_vt = if (Meta.has (Meta.Custom ":hasvtable") c.cl_meta ) then 
+
+				let e_vt = if (Meta.has (Meta.Custom ":hasvtable") c.cl_meta ) then
 					let cf_vt = try PMap.find (Expr.mk_runtime_prefix "vtable") c.cl_fields with
-					Not_found -> 
+					Not_found ->
 					(print_endline (" >>>> " ^ ( String.concat "," (PMap.foldi ( fun k _ acc -> k :: acc ) c.cl_fields []))));
 					assert false in
 					let e_vt = mk (TField(Expr.mk_local loc cf.cf_pos,FInstance(c,cf_vt))) cf_vt.cf_type null_pos in
 					let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (Expr.mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
 					[easgn]
 				else [] in
-				
+
+				let cf_ctor = Expr.mk_class_field (Expr.mk_runtime_prefix "ctor") (TFun((loc.v_name,false,loc.v_type) :: args,ctx.con.com.basic.tvoid)) false cf.cf_pos (Method MethNormal) [] in
+				cf_ctor.cf_expr <- Some e;
 				let einit = mk (TVars [loc,einit]) ctx.con.com.basic.tvoid cf.cf_pos in
-				let ereturn = mk (TReturn (Some (Expr.mk_local loc cf.cf_pos))) t_dynamic cf.cf_pos in
-				let e = match e.eexpr with
-					| TFunction({tf_expr = ({eexpr = TBlock el } as ef) } as tf) ->
-						{e with eexpr = TFunction ({tf with tf_expr = {ef with eexpr = TBlock(einit :: e_vt @ el @ [ereturn])}})}
-					| _ -> assert false
-				in
+				let eloc = Expr.mk_local loc cf.cf_pos in
+				let ereturn = mk (TReturn (Some eloc)) t_dynamic cf.cf_pos in
+				let ectorcall = Expr.mk_static_call c cf_ctor (eloc :: (List.map(fun (n,_,t) -> Expr.mk_local (alloc_var n t) cf.cf_pos) args)) e.epos in
+				let e = mk (TBlock (einit :: e_vt @ [ectorcall;ereturn])) eloc.etype e.epos in
 				cf.cf_expr <- Some e;
 				cf.cf_type <- TFun(args, monofy_class c);
-				DynArray.add methods (cf,true)
+				DynArray.add methods (cf,true);
+				DynArray.add methods(cf_ctor,true);
+				c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
 			| _ -> ()
 	end;
 
@@ -2069,7 +2090,7 @@ let generate_class ctx c =
 			DynArray.add methods (f,true)
 	end;
 
-	
+
 
 	ctx.buf <- ctx.buf_c;
 
@@ -2107,8 +2128,8 @@ let generate_class ctx c =
 	print ctx "typedef struct %s %s" path path;
 	newline ctx;
 
-	
-	
+
+
 	(* generate member struct *)
 	if not (DynArray.empty vars) then begin
 		spr ctx "\n// member var structure\n";
