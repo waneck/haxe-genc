@@ -1666,7 +1666,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 				let s = s ^ "->" ^ (Expr.mk_runtime_prefix "vtable") ^ "->slots["^idx^"]" in
 				let ecode = Expr.mk_ccode ctx s null_pos in
 				let t_this = match cf.cf_type with 
-				| TFun (ts, r) -> TFun ( ("",false,(ctx.con.hxc.t_pointer e1.etype))  :: ts, r )
+				| TFun (ts, r) -> TFun ( ("",false,(e1.etype))  :: ts, r )
 				| _ -> assert false
 				in
 				let cast = Expr.mk_cast ecode (ctx.con.hxc.t_func_pointer t_this) in
