@@ -203,8 +203,8 @@ module Expr = struct
 	let mk_deref con p e =
 		mk_static_call con.hxc.c_lib con.hxc.cf_deref [e] p
 
-	let mk_ccode ctx s p =
-		mk_static_call_2 ctx.con.hxc.c_lib "cCode" [mk (TConst (TString s)) ctx.con.com.basic.tstring p] p
+	let mk_ccode con s p =
+		mk_static_call_2 con.hxc.c_lib "cCode" [mk (TConst (TString s)) con.com.basic.tstring p] p
 
 	let mk_int com i p =
 		mk (TConst (TInt (Int32.of_int i))) com.basic.tint p
@@ -388,6 +388,8 @@ module VarDeclarations = struct
 
 	let filter gen = function e ->
 		match e.eexpr with
+		| TVars [{v_name = "this"},_] ->
+			e
 		| TVars tvars ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
 				gen.declare_var (v,None);
@@ -705,7 +707,7 @@ module SwitchHandler = struct
  			let c_string = match gen.gcom.basic.tstring with TInst(c,_) -> c | _ -> assert false in
 			let cf_length = PMap.find "length" c_string.cl_fields in
 			let ef = mk (TField(e1,FInstance(c_string,cf_length))) gen.gcom.basic.tint e.epos in
-			let e = mk (TSwitch(Codegen.mk_parent ef,cases,None)) t_dynamic e.epos in
+			let e = mk (TSwitch(Codegen.mk_parent ef,cases,def)) t_dynamic e.epos in
 			gen.map e
 		| _ ->
 				Type.map_expr gen.map e
@@ -780,7 +782,7 @@ module ClosureHandler = struct
 		let t = TFun((ctx_name,false,eobj.etype) :: List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args,tf.tf_type) in
 		let cf = Expr.mk_class_field name t true p (Method MethNormal) [] in
 		let tf = {
-			tf_args = (v_ctx,None) :: List.map (fun v -> v,None) vars;
+			tf_args = (v_ctx,None) :: tf.tf_args;
 			tf_type = tf.tf_type;
 			tf_expr = e;
 		} in
@@ -1437,7 +1439,7 @@ end
 
 (* Helper *)
 
-let rec is_value_type ctx t = match follow t with
+let rec is_value_type t = match follow t with
 	| TAbstract({ a_impl = None }, _) -> true
 	| TInst(c,_) -> has_meta Meta.Struct c.cl_meta
 	| TEnum(en,_) -> Meta.has Meta.FlatEnum en.e_meta
@@ -1445,7 +1447,7 @@ let rec is_value_type ctx t = match follow t with
 		if has_meta Meta.NotNull a.a_meta then
 			true
 		else
-			is_value_type ctx (Codegen.Abstract.get_underlying_type a tl)
+			is_value_type (Codegen.Abstract.get_underlying_type a tl)
 	| _ -> false
 
 let begin_loop ctx =
@@ -1533,15 +1535,15 @@ let rec s_type ctx t =
 		if c.cl_path = (["c";"TypeReference"],"T") then "const void*"
 		else "void*"
 	| TInst(c,_) ->
-		let ptr = if is_value_type ctx t then "" else "*" in
+		let ptr = if is_value_type t then "" else "*" in
 		add_class_dependency ctx c;
 		(path_to_name c.cl_path) ^ ptr
 	| TEnum(en,_) ->
-		let ptr = if is_value_type ctx t then "" else "*" in
+		let ptr = if is_value_type t then "" else "*" in
 		add_enum_dependency ctx en;
 		(path_to_name en.e_path) ^ ptr
 	| TAbstract(a,_) when Meta.has Meta.Native a.a_meta ->
-		let ptr = if is_value_type ctx t then "" else "*" in
+		let ptr = if is_value_type t then "" else "*" in
 		(path_to_name a.a_path) ^ ptr
 	| TAnon a ->
 		begin match !(a.a_status) with
@@ -1656,7 +1658,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 				let s = Buffer.contents buf in
 				let _ = ctx.buf <- oldbuf in
 				let s = s ^ "->" ^ (mk_runtime_prefix "vtable") ^ "->slots["^idx^"]" in
-				let ecode = Expr.mk_ccode ctx s null_pos in
+				let ecode = Expr.mk_ccode ctx.con s null_pos in
 				let t_this = match cf.cf_type with
 				| TFun (ts, r) -> TFun ( ("",false,(e1.etype))  :: ts, r )
 				| _ -> assert false
@@ -1756,7 +1758,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 		let n = field_name fa in
 		spr ctx "(";
 		generate_expr ctx true e1;
-		if is_value_type ctx e1.etype then
+		if is_value_type e1.etype then
 			print ctx ").%s" (escape_name n)
 		else
 			print ctx ")->%s" (escape_name n)
@@ -1925,25 +1927,24 @@ and generate_expr ctx need_val e = match e.eexpr with
 (* Type generation *)
 
 let generate_function_header ctx c cf stat =
-	let args,ret,s = match follow cf.cf_type with
-		| TFun(args,ret) -> args,ret,full_field_name c cf
-		| TAbstract({a_path = ["c"],"Pointer"},[t]) ->
-			begin match follow t with
-				| TFun(args,ret) -> args,ret,"(*" ^ (full_field_name c cf) ^ ")"
-				| _ -> assert false
-			end
-		| _ -> assert false
+	let tf = match cf.cf_expr with
+		| Some ({eexpr = TFunction tf}) -> tf
+		| None ->
+			assert false
+		| Some e ->
+			print_endline ((s_type_path c.cl_path) ^ "." ^ cf.cf_name ^ ": " ^ (s_expr_pretty "" (Type.s_type (print_context())) e));
+			assert false
 	in
-	let sargs = List.map (fun (n,_,t) -> s_type_with_name ctx t n) args in
+	let sargs = List.map (fun (v,_) -> s_type_with_name ctx v.v_type v.v_name) tf.tf_args in
 	let sargs = if stat then sargs else (s_type_with_name ctx (monofy_class c) "this") :: sargs in
-	print ctx "%s(%s)" (s_type_with_name ctx ret s) (String.concat "," sargs)
+	print ctx "%s(%s)" (s_type_with_name ctx tf.tf_type (full_field_name c cf)) (String.concat "," sargs)
 
 let get_typeref_forward ctx path =
 	Printf.sprintf "extern const typeref %s__typeref" (path_to_name path)
 
 let generate_typedef_declaration ctx t =
 	let path = Expr.t_path t in
-	if is_value_type ctx t then
+	if is_value_type t then
 		print ctx "const %s %s__default = { 0 }; //default" (s_type ctx t) (path_to_name path)
 	else
 		print ctx "const void* %s__default = NULL; //default" (path_to_name path);
@@ -1978,6 +1979,18 @@ let generate_method ctx c cf stat =
 	newline ctx;
 	spr ctx "\n"
 
+
+(*let mk_class_field name t public pos kind params =*)
+let generate_header_fields ctx =
+	let v = Var {v_read=AccNormal;v_write=AccNormal} in
+	let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable" )
+		(TInst(ctx.con.hxc.c_vtable,[])) false null_pos v [] in
+	let cf_hd = Expr.mk_class_field (mk_runtime_prefix "header" )
+		(ctx.con.hxc.t_int64 t_dynamic) false null_pos v [] in
+	[cf_vt;cf_hd]
+
+
+
 let generate_class ctx c =
 	let vars = DynArray.create () in
 	let svars = DynArray.create () in
@@ -1985,7 +1998,7 @@ let generate_class ctx c =
 
 	(* split fields into member vars, static vars and functions *)
 	List.iter (fun cf -> match cf.cf_kind with
-		| Var _ -> DynArray.add vars cf;
+		| Var _ -> ()
 		| Method m ->  DynArray.add methods (cf,false)
 	) c.cl_ordered_fields;
 	List.iter (fun cf -> match cf.cf_kind with
@@ -2003,50 +2016,19 @@ let generate_class ctx c =
 		| None -> ()
 		| Some (csup,_) -> loop csup
 	in
-	(match c.cl_super with None -> () | Some (csup,_) -> loop csup);
+	loop c;
 
 	let path = path_to_name c.cl_path in
-	let t_class = monofy_class c in
+
+	List.iter(fun v ->
+		DynArray.insert vars 0 v;
+		c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
+	) (generate_header_fields ctx);
 
 	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
-		| Some cf ->
-			match follow cf.cf_type, cf.cf_expr with
-			| TFun(args,_), Some e ->
-				let einit = if is_value_type ctx t_class then
-					Some (Expr.mk_ccode ctx ("{0}; //semicolon") cf.cf_pos)
-				else
-					let p = cf.cf_pos in
-					(* TODO: get rid of this *)
-					let esize = Expr.mk_ccode ctx (Printf.sprintf "sizeof(%s)" path) p in
-					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx.con.com 1 p;esize] p)
-				in
-				let loc = alloc_var "this" t_class in
-
-				let e_vt = if (Meta.has (Meta.Custom ":hasvtable") c.cl_meta ) then
-					let cf_vt = try PMap.find (mk_runtime_prefix "vtable") c.cl_fields with
-					Not_found ->
-					(print_endline (" >>>> " ^ ( String.concat "," (PMap.foldi ( fun k _ acc -> k :: acc ) c.cl_fields []))));
-					assert false in
-					let e_vt = mk (TField(Expr.mk_local loc cf.cf_pos,FInstance(c,cf_vt))) cf_vt.cf_type null_pos in
-					let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
-					[easgn]
-				else [] in
-
-				let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((loc.v_name,false,loc.v_type) :: args,ctx.con.com.basic.tvoid)) false cf.cf_pos (Method MethNormal) [] in
-				cf_ctor.cf_expr <- Some e;
-				let einit = mk (TVars [loc,einit]) ctx.con.com.basic.tvoid cf.cf_pos in
-				let eloc = Expr.mk_local loc cf.cf_pos in
-				let ereturn = mk (TReturn (Some eloc)) t_dynamic cf.cf_pos in
-				let ectorcall = Expr.mk_static_call c cf_ctor (eloc :: (List.map(fun (n,_,t) -> Expr.mk_local (alloc_var n t) cf.cf_pos) args)) e.epos in
-				let e = mk (TBlock (einit :: e_vt @ [ectorcall;ereturn])) eloc.etype e.epos in
-				cf.cf_expr <- Some e;
-				cf.cf_type <- TFun(args, monofy_class c);
-				DynArray.add methods (cf,true);
-				DynArray.add methods(cf_ctor,true);
-				c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
-			| _ -> ()
+		| Some cf -> DynArray.add methods (cf,true);
 	end;
 
 	(* add init field as function *)
@@ -2455,6 +2437,55 @@ let initialize_class con c =
 	c.cl_ordered_fields <- cf_vt :: cf_hd :: c.cl_ordered_fields;
 	c.cl_fields <- PMap.add cf_vt.cf_name cf_vt (PMap.add cf_hd.cf_name cf_hd c.cl_fields)
 
+let initialize_constructor con c cf =
+	match cf.cf_expr with
+	| Some ({eexpr = TFunction tf} as e) ->
+		let p = e.epos in
+		let t_class = monofy_class c in
+		let e_alloc = if is_value_type t_class then
+			Expr.mk_ccode con ("{0}; //semicolon") p
+		else
+			let e_size = Expr.mk_ccode con (Printf.sprintf "sizeof(%s)" (path_to_name c.cl_path)) p in
+			Expr.mk_static_call_2 con.hxc.c_cstdlib "calloc" [Expr.mk_int con.com 1 p;e_size] p
+		in
+		let v_this = alloc_var "this" t_class in
+		let e_this = Expr.mk_local v_this p in
+		let el_vt = try
+			let cf_vt = PMap.find (mk_runtime_prefix "vtable") c.cl_fields in
+			let e_vt = mk (TField(e_this,FInstance(c,cf_vt))) cf_vt.cf_type null_pos in
+			let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
+			[easgn]
+		with Not_found ->
+			[]
+		in
+		let args = List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args in
+		let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((v_this.v_name,false,v_this.v_type) :: args,con.com.basic.tvoid)) false p (Method MethNormal) [] in
+		let rec map_this e = match e.eexpr with
+			| TConst TThis -> e_this
+			| _ -> Type.map_expr map_this e
+		in
+		let tf_ctor = {
+			tf_args = (v_this,None) :: tf.tf_args;
+			tf_type = con.com.basic.tvoid;
+			tf_expr = map_this tf.tf_expr;
+		} in
+		cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) t_dynamic p);
+		c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
+		c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
+		let e_vars = mk (TVars [v_this,Some e_alloc]) con.com.basic.tvoid p in
+		let e_return = mk (TReturn (Some e_this)) t_dynamic p in
+		let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
+		let e_ctor_call = Expr.mk_static_call c cf_ctor (e_this :: ctor_args) p in
+		let tf = {
+			tf_args = List.map (fun (v,_) -> v,None) tf.tf_args;
+			tf_type = t_class;
+			tf_expr = Expr.mk_block con p (e_vars :: el_vt @ [e_ctor_call;e_return]);
+		} in
+		cf.cf_expr <- Some {e with eexpr = TFunction tf};
+		cf.cf_type <- TFun(args, t_class)
+	| _ ->
+		()
+
 let generate com =
 	let rec find_class path mtl = match mtl with
 		| TClassDecl c :: _ when c.cl_path = path -> c
@@ -2578,8 +2609,11 @@ let generate com =
 		| TClassDecl c -> initialize_class con c
 		| _ -> ()
 	) com.types;
-
 	VTableHandler.get_chains con com.types;
+	List.iter (fun mt -> match mt with
+		| TClassDecl ({cl_constructor = Some cf} as c) -> initialize_constructor con c cf
+		| _ -> ()
+	) com.types;
 
 	let gen = Filters.run_filters_types con in
 	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)

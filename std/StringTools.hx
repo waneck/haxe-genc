@@ -358,6 +358,8 @@ class StringTools {
 			#else
 		return (untyped s).charCodeAt(index);
 			#end
+		#elseif c
+		return s.charCodeAt(index);
 		#else
 		return s.cca(index);
 		#end
