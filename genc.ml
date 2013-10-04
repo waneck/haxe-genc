@@ -705,7 +705,7 @@ module SwitchHandler = struct
  			let c_string = match gen.gcom.basic.tstring with TInst(c,_) -> c | _ -> assert false in
 			let cf_length = PMap.find "length" c_string.cl_fields in
 			let ef = mk (TField(e1,FInstance(c_string,cf_length))) gen.gcom.basic.tint e.epos in
-			let e = mk (TSwitch(Codegen.mk_parent ef,cases,None)) t_dynamic e.epos in
+			let e = mk (TSwitch(Codegen.mk_parent ef,cases,def)) t_dynamic e.epos in
 			gen.map e
 		| _ ->
 				Type.map_expr gen.map e
