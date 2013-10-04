@@ -1289,16 +1289,27 @@ module VTableHandler = struct
 		| []        -> super :: acc
 		| c :: tail ->
 			let methods = (get_methods c) in
+			let add_meta cf meta vidx =
+				if (Meta.has (Meta.Custom meta) cf.cf_meta) then ()
+				else (cf.cf_meta <- (Meta.Custom meta, [EConst(Int (string_of_int vidx)),cf.cf_pos], cf.cf_pos) :: cf.cf_meta)
+			    in
+			let add_meta_c c meta vidx = (*OMG FIXME*)
+				if (Meta.has (Meta.Custom meta) c.cl_meta) then ()
+				else (c.cl_meta <- (Meta.Custom meta, [EConst(Int (string_of_int vidx)),c.cl_pos], c.cl_pos) :: c.cl_meta)
+			    in
 			let mm = List.fold_left ( fun  m cf ->
-				PMap.add cf.cf_name ( cf, (get_id cf.cf_name) ,c) m ) PMap.empty methods in
+				let vidx = (get_id cf.cf_name) in
+				(add_meta_c c ":hasvtable" vidx;add_meta cf ":overridden" vidx; PMap.add cf.cf_name ( cf, vidx ,c) m )) PMap.empty methods in
 			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm -> 
-				if PMap.mem k mm then 
+				
+				(* if PMap.mem k mm then 
 					(* mark overridden method *)
 					if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then 
 						mm
 					else (
 						scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
-						mm )
+						mm ) *)
+				if PMap.mem k mm then mm
 				else PMap.add k (scf,vidx,sc) mm ) super mm 
 			in
 			collect mm (super :: acc) tail
@@ -1640,9 +1651,24 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
-	| TField(e1,FInstance(c,cf)),el ->
+	| TField(e1,FInstance(c,cf)), el ->
 		add_class_dependency ctx c;
-		spr ctx (full_field_name c cf);
+		let _ = if not (Meta.has (Meta.Custom ":overridden") cf.cf_meta) then
+			spr ctx (full_field_name c cf)
+		else
+			let (meta,el,epos) = Meta.get (Meta.Custom ":overridden") cf.cf_meta in
+			(match (meta,el,pos) with
+			| (_,[EConst(Int idx),p],_) -> 
+				let oldbuf = ctx.buf in
+				let buf = Buffer.create 0 in ctx.buf <- buf; generate_expr ctx true e1; (*TODO don't be lazy*)
+				let s = Buffer.contents buf in
+				let _ = ctx.buf <- oldbuf in 
+				let s = s ^ "->" ^ (Expr.mk_runtime_prefix "vtable") ^ "->slots["^idx^"]" in
+				let ecode = Expr.mk_ccode ctx s null_pos in
+				let cast = Expr.mk_cast ecode (ctx.con.hxc.t_func_pointer cf.cf_type) in
+				generate_expr ctx true cast
+			| _ -> assert false )
+		in
 		spr ctx "(";
 		generate_expr ctx true e1;
 		List.iter (fun e ->
@@ -1979,6 +2005,11 @@ let generate_class ctx c =
 	let path = path_to_name c.cl_path in
 	let t_class = monofy_class c in
 
+	List.iter(fun v -> 
+		DynArray.insert vars 0 v;
+		c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
+	) (generate_header_fields ctx);
+	
 	(* add constructor as function *)
 	begin match c.cl_constructor with
 		| None -> ()
@@ -1994,11 +2025,22 @@ let generate_class ctx c =
 					Some (Expr.mk_static_call_2 ctx.con.hxc.c_cstdlib "calloc" [Expr.mk_int ctx.con.com 1 p;esize] p)
 				in
 				let loc = alloc_var "this" t_class in
+				
+				let e_vt = if (Meta.has (Meta.Custom ":hasvtable") c.cl_meta ) then 
+					let cf_vt = try PMap.find (Expr.mk_runtime_prefix "vtable") c.cl_fields with
+					Not_found -> 
+					(print_endline (" >>>> " ^ ( String.concat "," (PMap.foldi ( fun k _ acc -> k :: acc ) c.cl_fields []))));
+					assert false in
+					let e_vt = mk (TField(Expr.mk_local loc cf.cf_pos,FInstance(c,cf_vt))) cf_vt.cf_type null_pos in
+					let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (Expr.mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
+					[easgn]
+				else [] in
+				
 				let einit = mk (TVars [loc,einit]) ctx.con.com.basic.tvoid cf.cf_pos in
 				let ereturn = mk (TReturn (Some (Expr.mk_local loc cf.cf_pos))) t_dynamic cf.cf_pos in
 				let e = match e.eexpr with
 					| TFunction({tf_expr = ({eexpr = TBlock el } as ef) } as tf) ->
-						{e with eexpr = TFunction ({tf with tf_expr = {ef with eexpr = TBlock(einit :: el @ [ereturn])}})}
+						{e with eexpr = TFunction ({tf with tf_expr = {ef with eexpr = TBlock(einit :: e_vt @ el @ [ereturn])}})}
 					| _ -> assert false
 				in
 				cf.cf_expr <- Some e;
@@ -2061,7 +2103,7 @@ let generate_class ctx c =
 	print ctx "typedef struct %s %s" path path;
 	newline ctx;
 
-	List.iter(fun v -> DynArray.insert vars 0 v) (generate_header_fields ctx);
+	
 	
 	(* generate member struct *)
 	if not (DynArray.empty vars) then begin
