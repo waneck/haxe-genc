@@ -151,10 +151,12 @@ let sort_anon_fields fields =
 
 let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 
+let mk_runtime_prefix n = "_wnck_" ^ n
+
 let alloc_temp_func con =
 	let id = con.num_temp_funcs in
 	con.num_temp_funcs <- con.num_temp_funcs + 1;
-	let name = "_hx_func_" ^ (string_of_int id) in
+	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
 	name, id
 
 module Expr = struct
@@ -164,8 +166,6 @@ module Expr = struct
 		| TEnum(e,_) -> e.e_path
 		| TAbstract(a,_) -> a.a_path
 		| _ -> [],"Dynamic"
-
-	let mk_runtime_prefix n = "_hx_" ^ n
 
 	let mk_static_field c cf p =
 		let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
@@ -721,7 +721,7 @@ end
 module ClosureHandler = struct
 	let fstack = ref []
 
-	let ctx_name = "_ctx"
+	let ctx_name = mk_runtime_prefix "ctx"
 
 	let mk_closure_field gen tf ethis p =
 		let locals = ref PMap.empty in
@@ -1363,7 +1363,7 @@ module VTableHandler = struct
 		let add_vtable con c vtable =
 			(* helpers *)
 			let clib, cstdlib = con.hxc.c_lib, con.hxc.c_cstdlib in
-			let fname   = (Expr.mk_runtime_prefix "_vtable") in
+			let fname   = (mk_runtime_prefix "_vtable") in
 			let c_vt    = con.hxc.c_vtable in
 			(* let t_vt    = (TInst(c_vt,[])) in *)
 			let t_int   = con.com.basic.tint in
@@ -1492,7 +1492,7 @@ let keywords =
 	h
 
 let escape_name n =
-	if Hashtbl.mem keywords n then "hx_" ^ n else n
+	if Hashtbl.mem keywords n then mk_runtime_prefix n else n
 
 (* Type signature *)
 
@@ -1655,7 +1655,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 				let buf = Buffer.create 0 in ctx.buf <- buf; generate_expr ctx true e1; (*TODO don't be lazy*)
 				let s = Buffer.contents buf in
 				let _ = ctx.buf <- oldbuf in
-				let s = s ^ "->" ^ (Expr.mk_runtime_prefix "vtable") ^ "->slots["^idx^"]" in
+				let s = s ^ "->" ^ (mk_runtime_prefix "vtable") ^ "->slots["^idx^"]" in
 				let ecode = Expr.mk_ccode ctx s null_pos in
 				let t_this = match cf.cf_type with
 				| TFun (ts, r) -> TFun ( ("",false,(e1.etype))  :: ts, r )
@@ -1681,7 +1681,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			| TInst(c,_) -> c
 			| _ -> assert false
 		in
-		let n = (Expr.mk_runtime_prefix "ctor") in
+		let n = (mk_runtime_prefix "ctor") in
 		let e = Expr.mk_static_call_2 csup n ((Expr.mk_local (alloc_var "this" t_dynamic) e1.epos) :: el) e1.epos in
 		generate_expr ctx false e
 	| _ ->
@@ -1813,14 +1813,14 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TMeta((Meta.Custom ":really",_,_), {eexpr = TBreak}) ->
 		spr ctx "break";
 	| TMeta((Meta.Custom ":goto",_,_), {eexpr = TConst (TInt i)}) ->
-		print ctx "goto hx_label_%ld" i
+		print ctx "goto %s_%ld" (mk_runtime_prefix "label") i
 	| TMeta((Meta.Custom ":label",_,_), {eexpr = TConst (TInt i)}) ->
-		print ctx "hx_label_%ld: {}" i
+		print ctx "%s_%ld: {}" (mk_runtime_prefix "label") i
 	| TBreak ->
 		let label = match ctx.fctx.loop_stack with
 			| (Some s) :: _ -> s
 			| None :: l ->
-				let s = Printf.sprintf "_hx_label%i" ctx.con.num_labels in
+				let s = Printf.sprintf "%s_%i" (mk_runtime_prefix "label") ctx.con.num_labels in
 				ctx.con.num_labels <- ctx.con.num_labels + 1;
 				ctx.fctx.loop_stack <- (Some s) :: l;
 				s
@@ -1996,7 +1996,7 @@ let generate_class ctx c =
 	let rec loop c =
 		List.iter (fun cf -> match cf.cf_kind with
 			| Var _ ->
-				if cf.cf_name <> (Expr.mk_runtime_prefix "header") && cf.cf_name <> (Expr.mk_runtime_prefix "vtable") then DynArray.add vars cf
+				if cf.cf_name <> (mk_runtime_prefix "header") && cf.cf_name <> (mk_runtime_prefix "vtable") then DynArray.add vars cf
 			| Method m ->  ()
 		) c.cl_ordered_fields;
 		match c.cl_super with
@@ -2025,16 +2025,16 @@ let generate_class ctx c =
 				let loc = alloc_var "this" t_class in
 
 				let e_vt = if (Meta.has (Meta.Custom ":hasvtable") c.cl_meta ) then
-					let cf_vt = try PMap.find (Expr.mk_runtime_prefix "vtable") c.cl_fields with
+					let cf_vt = try PMap.find (mk_runtime_prefix "vtable") c.cl_fields with
 					Not_found ->
 					(print_endline (" >>>> " ^ ( String.concat "," (PMap.foldi ( fun k _ acc -> k :: acc ) c.cl_fields []))));
 					assert false in
 					let e_vt = mk (TField(Expr.mk_local loc cf.cf_pos,FInstance(c,cf_vt))) cf_vt.cf_type null_pos in
-					let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (Expr.mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
+					let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
 					[easgn]
 				else [] in
 
-				let cf_ctor = Expr.mk_class_field (Expr.mk_runtime_prefix "ctor") (TFun((loc.v_name,false,loc.v_type) :: args,ctx.con.com.basic.tvoid)) false cf.cf_pos (Method MethNormal) [] in
+				let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((loc.v_name,false,loc.v_type) :: args,ctx.con.com.basic.tvoid)) false cf.cf_pos (Method MethNormal) [] in
 				cf_ctor.cf_expr <- Some e;
 				let einit = mk (TVars [loc,einit]) ctx.con.com.basic.tvoid cf.cf_pos in
 				let eloc = Expr.mk_local loc cf.cf_pos in
@@ -2324,13 +2324,13 @@ let generate_anon con name fields =
 	print ctx "%s* new_%s(%s) {" name name (String.concat "," (List.map (fun cf -> s_type_with_name ctx cf.cf_type cf.cf_name) fields));
 	let b = open_block ctx in
 	newline ctx;
-	print ctx "%s* _hx_this = (%s*) malloc(sizeof(%s))" name name name;
+	print ctx "%s* %s = (%s*) malloc(sizeof(%s))" name (mk_runtime_prefix "this") name name;
 	List.iter (fun cf ->
 		newline ctx;
-		print ctx "_hx_this->%s = %s" cf.cf_name cf.cf_name;
+		print ctx "%s->%s = %s" (mk_runtime_prefix "this") cf.cf_name cf.cf_name;
 	) fields;
 	newline ctx;
-	spr ctx "return _hx_this";
+	print ctx "return %s" (mk_runtime_prefix "this");
 	b();
 	newline ctx;
 	spr ctx "}";
@@ -2397,7 +2397,7 @@ let initialize_class con c =
 	let check_dynamic cf stat = match cf.cf_kind with
 		| Method MethDynamic ->
 			(* create implementation field *)
-			let cf2 = {cf with cf_name = cf.cf_name ^ "_hx_impl"; cf_kind = Method MethNormal } in
+			let cf2 = {cf with cf_name = mk_runtime_prefix cf.cf_name; cf_kind = Method MethNormal } in
 			if stat then begin
 				c.cl_ordered_statics <- cf2 :: c.cl_ordered_statics;
 				c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
@@ -2450,8 +2450,8 @@ let initialize_class con c =
 	) c.cl_ordered_statics;
 
 	let v = Var {v_read=AccNormal;v_write=AccNormal} in
-	let cf_vt = Expr.mk_class_field (Expr.mk_runtime_prefix "vtable") (TInst(con.hxc.c_vtable,[])) false null_pos v [] in
-	let cf_hd = Expr.mk_class_field (Expr.mk_runtime_prefix "header") (con.hxc.t_int64 t_dynamic) false null_pos v [] in
+	let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable") (TInst(con.hxc.c_vtable,[])) false null_pos v [] in
+	let cf_hd = Expr.mk_class_field (mk_runtime_prefix "header") (con.hxc.t_int64 t_dynamic) false null_pos v [] in
 	c.cl_ordered_fields <- cf_vt :: cf_hd :: c.cl_ordered_fields;
 	c.cl_fields <- PMap.add cf_vt.cf_name cf_vt (PMap.add cf_hd.cf_name cf_hd c.cl_fields)
 
@@ -2540,7 +2540,7 @@ let generate com =
 				fst (PMap.find id !anons)
 			with Not_found ->
 				incr num_anons;
-				let s = "_hx_anon_" ^ (string_of_int !num_anons) in
+				let s = mk_runtime_prefix  ("anon_" ^ (string_of_int !num_anons)) in
 				anons := PMap.add id (s,fields) !anons;
 				added_anons := PMap.add id (s,fields) !added_anons;
 				s
