@@ -285,11 +285,28 @@ module Filters = struct
 		);
 
 		let ret = List.fold_left (fun e f ->
+			let found_block = ref false in
 			let run = f gen in
 			let process_next_block = ref true in
 			let rec map e = match e.eexpr with
+				| TFunction tf when not !found_block ->
+					(* if there were no blocks yet, declare inside the top-level TFunction *)
+					let ret = run { e with eexpr = TFunction { tf with tf_expr = mk_block tf.tf_expr } } in
+					(match !declared_vars with
+					| [] -> ret
+					| vars ->
+						let expr = { eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = ret.epos } in
+						declared_vars := [];
+						match ret.eexpr with
+						| TFunction tf ->
+							let tf_expr = Codegen.concat expr tf.tf_expr in
+							{ ret with eexpr = TFunction { tf with tf_expr = tf_expr } }
+						| _ ->
+							let expr = Codegen.concat expr ret in
+							expr)
 				| TBlock(el) when !process_next_block ->
 					let old_declared = !declared_vars in
+					found_block := true;
 					declared_vars := [];
 					(* run loop *)
 					let el = match (mk_block (run e)).eexpr with
