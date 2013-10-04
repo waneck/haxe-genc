@@ -388,9 +388,8 @@ module VarDeclarations = struct
 
 	let filter gen = function e ->
 		match e.eexpr with
-		| TVars [{v_name = "this"} as v,eo] ->
-			gen.declare_var (v,eo);
-			Expr.mk_local v e.epos
+		| TVars [{v_name = "this"},_] ->
+			e
 		| TVars tvars ->
 			let el = ExtList.List.filter_map (fun (v,eo) ->
 				gen.declare_var (v,None);
