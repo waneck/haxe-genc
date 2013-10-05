@@ -2459,27 +2459,34 @@ let initialize_constructor con c cf =
 			[]
 		in
 		let args = List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args in
-		let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((v_this.v_name,false,v_this.v_type) :: args,con.com.basic.tvoid)) false p (Method MethNormal) [] in
-		let rec map_this e = match e.eexpr with
-			| TConst TThis -> e_this
-			| _ -> Type.map_expr map_this e
+		let mk_ctor_init () =
+			let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((v_this.v_name,false,v_this.v_type) :: args,con.com.basic.tvoid)) false p (Method MethNormal) [] in
+			let rec map_this e = match e.eexpr with
+				| TConst TThis -> e_this
+				| _ -> Type.map_expr map_this e
+			in
+			let tf_ctor = {
+				tf_args = (v_this,None) :: tf.tf_args;
+				tf_type = con.com.basic.tvoid;
+				tf_expr = map_this tf.tf_expr;
+			} in
+			cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) t_dynamic p);
+			c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
+			c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
+			let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
+			Expr.mk_static_call c cf_ctor (e_this :: ctor_args) p
 		in
-		let tf_ctor = {
-			tf_args = (v_this,None) :: tf.tf_args;
-			tf_type = con.com.basic.tvoid;
-			tf_expr = map_this tf.tf_expr;
-		} in
-		cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) t_dynamic p);
-		c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
-		c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
 		let e_vars = mk (TVars [v_this,Some e_alloc]) con.com.basic.tvoid p in
 		let e_return = mk (TReturn (Some e_this)) t_dynamic p in
-		let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
-		let e_ctor_call = Expr.mk_static_call c cf_ctor (e_this :: ctor_args) p in
+		let e_init = if is_value_type t_class then
+			tf.tf_expr
+		else
+			mk_ctor_init ()
+		in
 		let tf = {
 			tf_args = List.map (fun (v,_) -> v,None) tf.tf_args;
 			tf_type = t_class;
-			tf_expr = Expr.mk_block con p (e_vars :: el_vt @ [e_ctor_call;e_return]);
+			tf_expr = Expr.mk_block con p (e_vars :: el_vt @ [e_init;e_return]);
 		} in
 		cf.cf_expr <- Some {e with eexpr = TFunction tf};
 		cf.cf_type <- TFun(args, t_class)
