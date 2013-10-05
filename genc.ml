@@ -2245,7 +2245,9 @@ let generate_enum ctx en =
 	close_type_context ctx *)
 
 let generate_type con mt = match mt with
-	| TClassDecl c when not c.cl_extern ->
+	| TClassDecl {cl_kind = KAbstractImpl a} when Meta.has Meta.MultiType a.a_meta ->
+		()
+	| TClassDecl c when not c.cl_extern && not c.cl_interface ->
 		let ctx = mk_type_context con c.cl_path  in
 		generate_class ctx c;
 		close_type_context ctx;
