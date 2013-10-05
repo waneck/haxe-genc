@@ -1887,7 +1887,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 		generate_expr ctx true e2;
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx true e1;
-		print ctx " %s " (match op with OpUShr -> ">>" | _ -> s_binop op);
+		print ctx " %s " (match op with OpUShr -> ">>" | OpAssignOp OpUShr -> ">>=" | _ -> s_binop op);
 		generate_expr ctx true e2;
 	| TUnop(op,Prefix,e1) ->
 		spr ctx (s_unop op);
