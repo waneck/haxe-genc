@@ -1023,7 +1023,7 @@ module ExprTransformation = struct
 			in
 			mk (TNew(c,[t],[])) gen.gcon.com.basic.tvoid e.epos
 		| TArrayDecl el ->
-			mk_array_decl gen el e.etype e.epos
+			mk_array_decl gen (List.map gen.map el) e.etype e.epos
 		| _ ->
 			Type.map_expr gen.map e
 
