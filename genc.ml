@@ -1228,6 +1228,7 @@ let add_type_dependency ctx t = match follow t with
 
 
 
+
 module VTableHandler = struct
 
 	(*
@@ -1287,32 +1288,25 @@ module VTableHandler = struct
 			| _ -> acc
 			in (loop c [c])
 		in
+		let add_meta meta meta_item el p =
+				if (Meta.has (Meta.Custom meta_item) meta) then meta
+				else (Meta.Custom meta_item, el, p) :: meta
+		in
 		let rec collect sc super acc xs = match xs with
 		| []        ->  (sc,super) :: acc
 		| c :: tail ->
 			let methods = (get_methods c) in
-			let add_meta cf meta vidx =
-				if (Meta.has (Meta.Custom meta) cf.cf_meta) then ()
-				else (cf.cf_meta <- (Meta.Custom meta, [EConst(Int (string_of_int vidx)),cf.cf_pos], cf.cf_pos) :: cf.cf_meta)
-			    in
-			let add_meta_c c meta vidx = (*OMG FIXME*)
-				if (Meta.has (Meta.Custom meta) c.cl_meta) then ()
-				else (c.cl_meta <- (Meta.Custom meta, [EConst(Int (string_of_int vidx)),c.cl_pos], c.cl_pos) :: c.cl_meta)
-			    in
+			c.cl_meta <- add_meta c.cl_meta ":hasvtable" [] null_pos;
 			let mm = List.fold_left ( fun  m cf ->
 				let vidx = (get_id cf.cf_name) in
-				(add_meta_c c ":hasvtable" vidx;add_meta cf ":overridden" vidx; PMap.add cf.cf_name ( cf, vidx ,c) m )) PMap.empty methods in
+					( cf.cf_meta <- add_meta cf.cf_meta ":overridden" [EConst(Int (string_of_int vidx)),cf.cf_pos] cf.cf_pos;
+					PMap.add cf.cf_name ( cf, vidx ,c) m )
+				) PMap.empty methods
+			in
 			let mm = PMap.foldi ( fun k (scf,vidx,sc) mm ->
-
-				(* if PMap.mem k mm then
-					(* mark overridden method *)
-					if (Meta.has (Meta.Custom ":overridden") scf.cf_meta) then
-						mm
-					else (
-						scf.cf_meta <- (Meta.Custom ":overridden", [EConst(Int (string_of_int vidx)),scf.cf_pos], scf.cf_pos) :: scf.cf_meta;
-						mm ) *)
 				if PMap.mem k mm then mm
-				else PMap.add k (scf,vidx,sc) mm ) super mm
+				else PMap.add k (scf,vidx,sc) mm
+			) super mm
 			in
 			collect c mm ( (sc,super) :: acc) tail
 		in
