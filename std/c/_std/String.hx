@@ -56,7 +56,7 @@ import c.CString.memcmp;
 	 * we need a static string of size 0, and for this implementation all strings of size 1, too
 	 */
 	public function charAt(index : Int):String {
-		if (index > 0 && index < length){
+		if (index >= 0 && index < length){
 			var ret = stringOfSize(1);
 			ret.__a[0] = __a[index];
 			return ret;
@@ -66,7 +66,7 @@ import c.CString.memcmp;
 	}
 
 	public function charCodeAt( index : Int):Null<Int> {
-		if (index > 0 && index < length)
+		if (index >= 0 && index < length)
 			return untyped __a[index]; // Field charCodeAt has different type than in core type
 									 // index : Int -> Null<Int> should be index : Int -> Int ??
 		return null; // TODO this is *definitely* wrong here, null (0) is a valid char code
