@@ -1,6 +1,7 @@
 open Ast
 open Type
 
+
 type gconstant_t = int
 and gtype_t = int
 and gvar_t  = Type.tvar
