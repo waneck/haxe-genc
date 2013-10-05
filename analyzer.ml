@@ -293,12 +293,3 @@ let gexpr_of_texpr e =
 	_ -> map_expr f e
 	in f e
 
-let fold_tree e =
-	let rec f acc ge : int =
-		let acc = acc+1 in
-		match ge with
-		| GE(te, e) -> (match e with
-			| _ -> fold_gexpr f acc ge
-			)
-		| _ -> acc
-	in f 0 e
