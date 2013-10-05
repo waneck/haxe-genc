@@ -96,8 +96,6 @@ and gen_context = {
 	mutable run_filter : tclass_field -> unit;
 	(* adds a field to the specified class *)
 	mutable add_field : tclass -> tclass_field -> bool -> unit;
-	(* delays to run after all filters are done *)
-	mutable delays : (unit -> unit) list;
 }
 
 and filter = gen_context->(texpr->texpr)
@@ -151,7 +149,7 @@ let sort_anon_fields fields =
 
 let pmap_to_list pm = PMap.fold (fun v acc -> v :: acc) pm []
 
-let mk_runtime_prefix n = "_wnck_" ^ n
+let mk_runtime_prefix n = "_hx_" ^ n
 
 let alloc_temp_func con =
 	let id = con.num_temp_funcs in
@@ -287,7 +285,6 @@ module Filters = struct
 		let ret = List.fold_left (fun e f ->
 			let found_block = ref false in
 			let run = f gen in
-			let process_next_block = ref true in
 			let rec map e = match e.eexpr with
 				| TFunction tf when not !found_block ->
 					(* if there were no blocks yet, declare inside the top-level TFunction *)
@@ -304,7 +301,7 @@ module Filters = struct
 						| _ ->
 							let expr = Codegen.concat expr ret in
 							expr)
-				| TBlock(el) when !process_next_block ->
+				| TBlock(el) ->
 					let old_declared = !declared_vars in
 					found_block := true;
 					declared_vars := [];
@@ -322,9 +319,6 @@ module Filters = struct
 					let ret = { e with eexpr = TBlock(el) } in
 					declared_vars := old_declared;
 					ret
-				| TBlock _ ->
-					process_next_block := true;
-					run e
 				| _ -> run e
 			in
 
@@ -359,7 +353,6 @@ module Filters = struct
 					c.cl_ordered_statics <- cf :: c.cl_ordered_statics
 				else
 					c.cl_ordered_fields <- cf :: c.cl_ordered_fields);
-			delays = [];
 		} in
 		gen
 
@@ -397,6 +390,7 @@ module Filters = struct
 
 end
 
+
 (*
 	This filter will take all out-of-place TVars declarations and add to the beginning of each block.
 	TPatMatch has some var names sanitized.
@@ -421,6 +415,7 @@ module VarDeclarations = struct
 			Type.map_expr gen.map e
 
 end
+
 
 (*
 	Transforms (x = value) function arguments to if (x == null) x = value expressions.
@@ -452,7 +447,7 @@ module DefaultValues = struct
 					"s"
 			in
 			let eformat = mk (TConst (TString ("%s:%ld: %" ^ s ^ "\\n"))) gen.gcom.basic.tstring e.epos in
-			let eargs = mk (TArrayDecl [List.assoc "fileName" fl;List.assoc "lineNumber" fl;e1]) (gen.gcom.basic.tarray gen.gcon.hxc.t_vararg) e.epos in
+			let eargs = mk (TArrayDecl [List.assoc "fileName" fl;List.assoc "lineNumber" fl;gen.map e1]) (gen.gcom.basic.tarray gen.gcon.hxc.t_vararg) e.epos in
 			Expr.mk_static_call_2 gen.gcon.hxc.c_cstdio "printf" [eformat;eargs] e.epos
 		| _ ->
 			Type.map_expr gen.map e
@@ -570,10 +565,9 @@ module TypeChecker = struct
 				| _ -> Type.map_expr gen.map e
 			end
 		| TReturn (Some e1) ->
-			begin match !fstack,follow gen.gfield.cf_type with
-				| tf :: _,_ -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tf.tf_type))}
-				| [],TFun(_,tr) -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tr))}
-				| _,t -> assert false
+			begin match !fstack with
+				| tf :: _ -> { e with eexpr = TReturn (Some (check gen (gen.map e1) tf.tf_type))}
+				| _ -> assert false
 			end
 		| TCast (e1,None) ->
 			let t = follow e.etype in
@@ -595,6 +589,7 @@ module TypeChecker = struct
 			Type.map_expr gen.map e
 
 end
+
 
 (*
 	- wraps String literals in String
@@ -843,10 +838,8 @@ module ClosureHandler = struct
 			fstack := List.tl !fstack;
 			e1
 		| _ when (match follow e.etype with
-				| TInst({cl_path=["c"],"Closure"},_)
 				| TAbstract( { a_path = ["c"],"FunctionPointer" }, _ ) -> true
 				| _ -> false) ->
-			(* skip previously creates closures *)
 			e
 		| TCall(e1,el) ->
 			let old = !is_call_expr,!is_extern in
@@ -856,7 +849,7 @@ module ClosureHandler = struct
 			is_call_expr := fst old;
 			let el = List.map gen.map el in
 			let e = if not !is_extern && is_closure_expr e1 then begin
-				let args,r = match follow e1.etype with TFun(args,r) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,r)]) -> args,r | _ -> assert false in
+				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
 				let mk_cast e = mk (TCast(e,None)) (gen.gcon.hxc.t_func_pointer e.etype) e.epos in
 				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
 				let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
@@ -908,7 +901,6 @@ module ArrayHandler = struct
 
 	let filter gen e =
 		match e.eexpr with
-		(* - pointer array access -> pointer + typeref's size * index *)
 		| TArray(e1, e2) ->
 			begin try begin match follow e1.etype with
 				| TAbstract({a_path=["c"], "ConstSizeArray"},[t;_])
@@ -947,6 +939,7 @@ module ArrayHandler = struct
 			Type.map_expr gen.map e
 end
 
+
 (*
 	- TTry is replaced with a TSwitch and uses setjmp
 	- TThrow is replaced with a call to longjmp
@@ -963,7 +956,6 @@ module ExprTransformation = struct
 		let c_array = gen.gcon.hxc.c_array in
 		let v = alloc_var "arr" (TInst(c_array,[tparam])) in
 		let eloc = mk (TLocal v) v.v_type p in
-		(*let eret = mk (TReturn (Some (Expr.mk_static_call_2 gen.gcon.hxc.c_array "ofNative" [eloc] p))) t_dynamic p in*)
 		let eret = mk (TReturn (Some (eloc))) t_dynamic p in
 		let (vars,einit,arity) = List.fold_left (fun (vl,el,i) e ->
 			let v = alloc_var ("v" ^ (string_of_int i)) tparam in
@@ -972,7 +964,6 @@ module ExprTransformation = struct
 		) ([],[eret],0) el in
 		let vars = List.rev vars in
 		let enew = ArrayHandler.mk_specialization_call c_array "__new" (ArrayHandler.get_type_size tparam) None [Expr.mk_int gen.gcon.com arity p] p in
-		(*mk (TNew(c_fixed_array,[tparam],[Expr.mk_int gen.gcon.com arity p;mk (TConst TNull) (mk_mono()) p])) t p in*)
 		let evar = mk (TVars [v,Some enew]) gen.gcom.basic.tvoid p in
 		let e = mk (TBlock (evar :: einit)) t p in
 		let tf = {
@@ -1578,7 +1569,11 @@ let rec s_type_with_name ctx t n =
 		let t = ctx.con.hxc.t_closure t in
 		add_type_dependency ctx t;
 		s_type_with_name ctx t n
-	| TAbstract({a_path = ["c"],"Pointer"},[t]) -> ( s_type_with_name ctx t ("*" ^ n))
+	| TAbstract({a_path = ["c"],"Pointer"},[t]) ->
+		begin match follow t with
+			| TInst({cl_kind = KTypeParameter _},_) -> "char* " ^ n (* TODO: ??? *)
+			| _ -> (s_type_with_name ctx t ("*" ^ n))
+		end
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) (escape_name n) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
@@ -2096,8 +2091,6 @@ let generate_class ctx c =
 	print ctx "typedef struct %s %s" path path;
 	newline ctx;
 
-
-
 	(* generate member struct *)
 	if not (DynArray.empty vars) then begin
 		spr ctx "\n// member var structure\n";
@@ -2256,7 +2249,9 @@ let generate_enum ctx en =
 	close_type_context ctx *)
 
 let generate_type con mt = match mt with
-	| TClassDecl c when not c.cl_extern ->
+	| TClassDecl {cl_kind = KAbstractImpl a} when Meta.has Meta.MultiType a.a_meta ->
+		()
+	| TClassDecl c when not c.cl_extern && not c.cl_interface ->
 		let ctx = mk_type_context con c.cl_path  in
 		generate_class ctx c;
 		close_type_context ctx;
@@ -2470,27 +2465,34 @@ let initialize_constructor con c cf =
 			[]
 		in
 		let args = List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args in
-		let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((v_this.v_name,false,v_this.v_type) :: args,con.com.basic.tvoid)) false p (Method MethNormal) [] in
-		let rec map_this e = match e.eexpr with
-			| TConst TThis -> e_this
-			| _ -> Type.map_expr map_this e
+		let mk_ctor_init () =
+			let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((v_this.v_name,false,v_this.v_type) :: args,con.com.basic.tvoid)) false p (Method MethNormal) [] in
+			let rec map_this e = match e.eexpr with
+				| TConst TThis -> e_this
+				| _ -> Type.map_expr map_this e
+			in
+			let tf_ctor = {
+				tf_args = (v_this,None) :: tf.tf_args;
+				tf_type = con.com.basic.tvoid;
+				tf_expr = map_this tf.tf_expr;
+			} in
+			cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) t_dynamic p);
+			c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
+			c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
+			let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
+			Expr.mk_static_call c cf_ctor (e_this :: ctor_args) p
 		in
-		let tf_ctor = {
-			tf_args = (v_this,None) :: tf.tf_args;
-			tf_type = con.com.basic.tvoid;
-			tf_expr = map_this tf.tf_expr;
-		} in
-		cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) t_dynamic p);
-		c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
-		c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
 		let e_vars = mk (TVars [v_this,Some e_alloc]) con.com.basic.tvoid p in
 		let e_return = mk (TReturn (Some e_this)) t_dynamic p in
-		let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
-		let e_ctor_call = Expr.mk_static_call c cf_ctor (e_this :: ctor_args) p in
+		let e_init = if is_value_type t_class then
+			tf.tf_expr
+		else
+			mk_ctor_init ()
+		in
 		let tf = {
 			tf_args = List.map (fun (v,_) -> v,None) tf.tf_args;
 			tf_type = t_class;
-			tf_expr = Expr.mk_block con p (e_vars :: el_vt @ [e_ctor_call;e_return]);
+			tf_expr = Expr.mk_block con p (e_vars :: el_vt @ [e_init;e_return]);
 		} in
 		cf.cf_expr <- Some {e with eexpr = TFunction tf};
 		cf.cf_type <- TFun(args, t_class)
@@ -2625,9 +2627,7 @@ let generate com =
 		| TClassDecl ({cl_constructor = Some cf} as c) -> initialize_constructor con c cf
 		| _ -> ()
 	) com.types;
-
-	let gen = Filters.run_filters_types con in
-	List.iter (fun f -> f()) gen.delays; (* we can choose another time to run this if needed *)
+	ignore(Filters.run_filters_types con);
 	List.iter (generate_type con) com.types;
 	let rec loop () =
 		let anons = !added_anons in
