@@ -473,7 +473,34 @@ end
 *)
 module TypeChecker = struct
 
+	let box com e =
+		match e.etype with
+			| TType({t_path=[],"Null"},_) ->
+				e
+			| _ ->
+				com.warning "Box!" e.epos;
+				{e with etype = com.basic.tnull e.etype}
+
+	let unbox com e =
+		match e.etype with
+			| TType({t_path=[],"Null"},[t]) ->
+				com.warning "Unbox!" e.epos;
+				{e with etype = t}
+			| _ ->
+				e
+
 	let rec check gen e t =
+		match e.etype,t with
+		| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_),TType({t_path=[],"Null"},_) ->
+			begin match e.eexpr with
+				| TConst TNull ->
+					e
+				| _ ->
+					box gen.gcom e
+			end
+		| TType({t_path=[],"Null"},_),TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
+			unbox gen.gcom e
+		| _ ->
 		match e.eexpr,follow t with
 		| TObjectDecl fl,(TAnon an as ta) ->
 			let fields = sort_anon_fields (pmap_to_list an.a_fields) in
@@ -526,6 +553,8 @@ module TypeChecker = struct
 		match e.eexpr with
 		| TBinop(OpAssign,e1,e2) ->
 			{e with eexpr = TBinop(OpAssign,gen.map e1,check gen (gen.map e2) e1.etype)}
+		| TBinop(op,e1,e2) ->
+			{e with eexpr = TBinop(op,gen.map (unbox gen.gcom e1),gen.map (unbox gen.gcom e2))}
 		| TVars vl ->
 			let vl = ExtList.List.filter_map (fun (v,eo) ->
 				match eo with
