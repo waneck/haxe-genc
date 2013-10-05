@@ -1569,7 +1569,11 @@ let rec s_type_with_name ctx t n =
 		let t = ctx.con.hxc.t_closure t in
 		add_type_dependency ctx t;
 		s_type_with_name ctx t n
-	| TAbstract({a_path = ["c"],"Pointer"},[t]) -> ( s_type_with_name ctx t ("*" ^ n))
+	| TAbstract({a_path = ["c"],"Pointer"},[t]) ->
+		begin match follow t with
+			| TInst({cl_kind = KTypeParameter _},_) -> "char* " ^ n (* TODO: ??? *)
+			| _ -> (s_type_with_name ctx t ("*" ^ n))
+		end
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*%s)(%s)" (s_type ctx ret) (escape_name n) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
