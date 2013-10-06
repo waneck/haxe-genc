@@ -2483,12 +2483,34 @@ let initialize_class con c =
 		| _ -> ()
 	in
 
+	let infer_null_argument cf =
+		match cf.cf_expr,follow cf.cf_type with
+			| Some ({eexpr = TFunction tf}),TFun(args,tr) ->
+				let args = List.map2 (fun (v,co) (n,o,t) ->
+					let t = if not o && co = None then
+						t
+					else match v.v_type with
+						| TType({t_path = [],"Null"},_) ->
+							v.v_type
+						| t ->
+							v.v_type <- con.com.basic.tnull t;
+							v.v_type
+					in
+					n,o,t
+				) tf.tf_args args in
+				cf.cf_type <- TFun(args,tr);
+			| _ ->
+				()
+	in
+
 	List.iter (fun cf ->
 		(match cf.cf_expr with Some e -> Analyzer.run e | _ -> ());
 		match cf.cf_kind with
 		| Var _ -> check_closure cf
 		| Method m -> match cf.cf_type with
-			| TFun(_) -> check_dynamic cf false;
+			| TFun(_) ->
+				infer_null_argument cf;
+				check_dynamic cf false;
 			| _ -> assert false;
 	) c.cl_ordered_fields;
 
@@ -2508,8 +2530,15 @@ let initialize_class con c =
 					cf.cf_expr <- Some eassign;
 					add_init eassign;
 			end
-		| Method _ -> check_dynamic cf true;
+		| Method _ ->
+			infer_null_argument cf;
+			check_dynamic cf true;
 	) c.cl_ordered_statics;
+
+	begin match c.cl_constructor with
+		| Some cf -> infer_null_argument cf
+		| _ -> ()
+	end;
 
 	let v = Var {v_read=AccNormal;v_write=AccNormal} in
 	let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable") (TInst(con.hxc.c_vtable,[])) false null_pos v [] in
