@@ -530,7 +530,7 @@ module DefaultValues = struct
 				Expr.mk_block gen.gcon p (List.rev el)
 			in
 			let e = match get_fmode tf e.etype with
-				| Default ->
+				| Default when gen.gfield.cf_name <> "new" ->
 					let is_field_func = match !fstack with [_] -> true | _ -> false in
 					let name = if is_field_func then (mk_runtime_prefix ("known_" ^ gen.gfield.cf_name)) else alloc_temp_func gen.gcon in
 					let subst,tf_args = List.fold_left (fun (subst,args) (v,_) ->
@@ -555,7 +555,7 @@ module DefaultValues = struct
 					{ e with eexpr = TFunction({tf with tf_expr = e_call})}
 				| Given ->
 					e
-				| Mixed ->
+				| _ ->
 					let e = handle_default_assign tf.tf_expr in
 					{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
 			in
@@ -599,7 +599,7 @@ module DefaultValues = struct
 
 	let handle_call_site gen = function e ->
 		match e.eexpr with
- 		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
+ 		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta && cf.cf_name <> "new" ->
 			gen.map (mk_known_call gen.gcon c cf el)
 		| _ ->
 			Type.map_expr gen.map e
@@ -2700,7 +2700,7 @@ let initialize_constructor con c cf =
 				| _ -> Type.map_expr map_this e
 			in
 			let tf_ctor = {
-				tf_args = (v_this,None) :: tf.tf_args;
+				tf_args = (v_this,None) :: List.map (fun (v,_) -> v,None) tf.tf_args;
 				tf_type = con.com.basic.tvoid;
 				tf_expr = map_this tf.tf_expr;
 			} in
@@ -2718,7 +2718,7 @@ let initialize_constructor con c cf =
 			mk_ctor_init ()
 		in
 		let tf = {
-			tf_args = List.map (fun (v,_) -> v,None) tf.tf_args;
+			tf_args = tf.tf_args;
 			tf_type = t_class;
 			tf_expr = Expr.mk_block con p (e_vars :: el_vt @ [e_init;e_return]);
 		} in
