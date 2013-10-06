@@ -1699,11 +1699,13 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			| None -> ()
 		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
+		add_class_dependency ctx c;
 		ignore(check_include_meta ctx c.cl_meta);
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
-	| TField(_,FStatic(_,cf)),el when Meta.has Meta.Native cf.cf_meta ->
+	| TField(_,FStatic(c,cf)),el when Meta.has Meta.Native cf.cf_meta ->
+		add_class_dependency ctx c;
 		let name = match get_native_name cf.cf_meta with
 			| Some s -> s
 			| None -> ctx.con.com.error "String argument expected for @:native" e.epos; "_"
