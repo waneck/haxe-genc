@@ -491,6 +491,7 @@ module DefaultValues = struct
 			let p = e.epos in
 			fstack := tf :: !fstack;
 			let replace_locals subst e =
+				let v_this = ref None in
 				let rec replace e = match e.eexpr with
 					| TLocal v ->
 						begin try
@@ -499,10 +500,13 @@ module DefaultValues = struct
 						with Not_found ->
 							e
 						end
+					| TConst TThis ->
+						v_this := Some (alloc_var "this" e.etype);
+						e
 					| _ ->
 						Type.map_expr replace e
 				in
-				replace e
+				replace e,!v_this
 			in
 			let handle_default_assign e =
 				let subst,el = List.fold_left (fun (subst,el) (v,co) ->
@@ -530,7 +534,7 @@ module DefaultValues = struct
 						let eif = mk (TIf(econd,eassign,eelse)) gen.gcom.basic.tvoid p in
 						subst,(eif :: el)
 				) ([],[]) tf.tf_args in
-				let el = (replace_locals subst e) :: el in
+				let el = (fst (replace_locals subst e)) :: el in
 				Expr.mk_block gen.gcon p (List.rev el)
 			in
 			let e = match get_fmode tf e.etype with
@@ -542,7 +546,11 @@ module DefaultValues = struct
 						((v,vr) :: subst),((vr,None) :: args)
 					) ([],[]) tf.tf_args in
 					let tf_args = List.rev tf_args in
-					let e_tf = replace_locals subst tf.tf_expr in
+					let e_tf,v_this = replace_locals subst tf.tf_expr in
+					let tf_args = match v_this with
+						| None -> tf_args
+						| Some v -> (v,None) :: tf_args
+					in
 					let tf_given = {
 						tf_args = tf_args;
 						tf_type = tf.tf_type;
@@ -554,11 +562,15 @@ module DefaultValues = struct
 					gen.add_field gen.gclass cf_given true;
 					if is_field_func then gen.gfield.cf_meta <- (Meta.Custom ":known",[(EConst(String name)),p],p) :: gen.gfield.cf_meta;
 					let e_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
+					let e_args = match v_this with
+						| None -> e_args
+						| Some v -> (mk (TConst TThis) v.v_type p) :: e_args
+					in
 					let e_call = Expr.mk_static_call gen.gclass cf_given e_args p in
 					let e_call = handle_default_assign e_call in
 					{ e with eexpr = TFunction({tf with tf_expr = e_call})}
 				| Given ->
-					e
+					{e with eexpr = TFunction{tf with tf_expr = gen.map tf.tf_expr}}
 				| _ ->
 					let e = handle_default_assign tf.tf_expr in
 					{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
@@ -585,7 +597,7 @@ module DefaultValues = struct
 		| TParenthesis e1 | TMeta(_,e1) | TCast(e1,None) -> is_null_expr e1
 		| _ -> Maybe
 
-	let mk_known_call con c cf el =
+	let mk_known_call con c cf stat el =
 		match cf.cf_expr with
 		| Some ({eexpr = TFunction tf}) ->
 			let rec loop args el = match args,el with
@@ -604,7 +616,28 @@ module DefaultValues = struct
 				| _,[EConst(String s),_],_ -> s
 				| _ -> assert false
 			in
-			let el = loop tf.tf_args el in
+			let has_this e =
+				let rec loop e = match e.eexpr with
+					| TConst TThis -> raise Exit
+					| _ -> Type.iter loop e
+				in
+				try
+					loop e;
+					false;
+				with Exit ->
+					true
+			in
+			let el = if stat then
+				loop tf.tf_args el
+			else match el with
+				| e :: el ->
+					if has_this tf.tf_expr then
+						 e :: loop tf.tf_args el
+					else
+						loop tf.tf_args el
+				| [] ->
+					assert false
+			in
 			Expr.mk_static_call_2 c name el cf.cf_pos
 		| _ ->
 			raise Exit
@@ -612,12 +645,15 @@ module DefaultValues = struct
 	let handle_call_site gen = function e ->
 		match e.eexpr with
  		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
-			begin try gen.map (mk_known_call gen.gcon c cf el)
+			begin try gen.map (mk_known_call gen.gcon c cf true el)
+			with Exit -> e end
+ 		| TCall({eexpr = TField(e1,FInstance(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
+			begin try gen.map (mk_known_call gen.gcon c cf false (e1 :: el))
 			with Exit -> e end
 		| TNew(c,tl,el) ->
 			let _,cf = get_constructor (fun cf -> apply_params c.cl_types tl cf.cf_type) c in
 			if Meta.has (Meta.Custom ":known") cf.cf_meta then
-				begin try gen.map (mk_known_call gen.gcon c cf el)
+				begin try gen.map (mk_known_call gen.gcon c cf true el)
 				with Exit -> e end
 			else e
 		| _ ->
