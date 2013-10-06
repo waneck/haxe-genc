@@ -534,7 +534,7 @@ module DefaultValues = struct
 				Expr.mk_block gen.gcon p (List.rev el)
 			in
 			let e = match get_fmode tf e.etype with
-				| Default when gen.gfield.cf_name <> "new" ->
+				| Default ->
 					let is_field_func = match !fstack with [_] -> true | _ -> false in
 					let name = if is_field_func then (mk_runtime_prefix ("known_" ^ gen.gfield.cf_name)) else alloc_temp_func gen.gcon in
 					let subst,tf_args = List.fold_left (fun (subst,args) (v,_) ->
@@ -551,8 +551,8 @@ module DefaultValues = struct
 					let t_cf = TFun(List.map (fun (v,_) -> v.v_name,false,follow v.v_type) tf_args,tf.tf_type) in
 					let cf_given = Expr.mk_class_field name t_cf true p (Method MethNormal) [] in
 					cf_given.cf_expr <- Some (mk (TFunction tf_given) cf_given.cf_type p);
-					gen.add_field gen.gclass cf_given gen.gstat;
-					if is_field_func && gen.gstat then gen.gfield.cf_meta <- (Meta.Custom ":known",[(EConst(String name)),p],p) :: gen.gfield.cf_meta;
+					gen.add_field gen.gclass cf_given true;
+					if is_field_func then gen.gfield.cf_meta <- (Meta.Custom ":known",[(EConst(String name)),p],p) :: gen.gfield.cf_meta;
 					let e_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
 					let e_call = Expr.mk_static_call gen.gclass cf_given e_args p in
 					let e_call = handle_default_assign e_call in
@@ -611,9 +611,15 @@ module DefaultValues = struct
 
 	let handle_call_site gen = function e ->
 		match e.eexpr with
- 		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta && cf.cf_name <> "new" ->
+ 		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
 			begin try gen.map (mk_known_call gen.gcon c cf el)
 			with Exit -> e end
+		| TNew(c,tl,el) ->
+			let _,cf = get_constructor (fun cf -> apply_params c.cl_types tl cf.cf_type) c in
+			if Meta.has (Meta.Custom ":known") cf.cf_meta then
+				begin try gen.map (mk_known_call gen.gcon c cf el)
+				with Exit -> e end
+			else e
 		| _ ->
 			Type.map_expr gen.map e
 end
@@ -629,7 +635,6 @@ end
 		- TArrayDecl
 		- TObjectDecl
 		- TReturn
-		- TODO: TIf may be missing
 
 	It may perform the following transformations:
 		- pad TObjectDecl with null for optional arguments
