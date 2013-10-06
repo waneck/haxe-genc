@@ -84,6 +84,14 @@ let rec type_constant_value com (e,p) =
 	| _ ->
 		error "Constant value expected" p
 
+let mk_const_texpr com p = function
+	| TString s -> mk (TConst (TString s)) com.basic.tstring p
+	| TInt i -> mk (TConst (TInt i)) com.basic.tint p
+	| TFloat f -> mk (TConst (TFloat f)) com.basic.tfloat p
+	| TBool b -> mk (TConst (TBool b)) com.basic.tbool p
+	| TNull -> mk (TConst TNull) (com.basic.tnull (mk_mono())) p
+	| _ -> error "Unsupported constant" p
+
 let rec has_properties c =
 	List.exists (fun f ->
 		match f.cf_kind with

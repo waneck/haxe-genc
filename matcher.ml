@@ -905,30 +905,22 @@ let rec collapse_case el = match el with
 	| [] ->
 		assert false
 
-let mk_const ctx p = function
-	| TString s -> mk (TConst (TString s)) ctx.com.basic.tstring p
-	| TInt i -> mk (TConst (TInt i)) ctx.com.basic.tint p
-	| TFloat f -> mk (TConst (TFloat f)) ctx.com.basic.tfloat p
-	| TBool b -> mk (TConst (TBool b)) ctx.com.basic.tbool p
-	| TNull -> mk (TConst TNull) (ctx.com.basic.tnull (mk_mono())) p
-	| _ -> error "Unsupported constant" p
-
 let rec convert_st ctx st = match st.st_def with
 	| SVar v -> mk (TLocal v) v.v_type st.st_pos
 	| SField (sts,f) ->
 		let e = convert_st ctx sts in
 		let fa = try quick_field e.etype f with Not_found -> FDynamic f in
 		mk (TField(e,fa)) st.st_type st.st_pos
-	| SArray (sts,i) -> mk (TArray(convert_st ctx sts,mk_const ctx st.st_pos (TInt (Int32.of_int i)))) st.st_type st.st_pos
+	| SArray (sts,i) -> mk (TArray(convert_st ctx sts,Codegen.mk_const_texpr ctx.com st.st_pos (TInt (Int32.of_int i)))) st.st_type st.st_pos
 	| STuple (st,_,_) -> convert_st ctx st
 	| SEnum(sts,ef,i) -> mk (TEnumParameter(convert_st ctx sts, ef, i)) st.st_type st.st_pos
 
 let convert_con ctx con = match con.c_def with
-	| CConst c -> mk_const ctx con.c_pos c
+	| CConst c -> Codegen.mk_const_texpr ctx.com con.c_pos c
 	| CType mt -> mk (TTypeExpr mt) t_dynamic con.c_pos
 	| CExpr e -> e
-	| CEnum(e,ef) -> mk_const ctx con.c_pos (TInt (Int32.of_int ef.ef_index))
-	| CArray i -> mk_const ctx con.c_pos (TInt (Int32.of_int i))
+	| CEnum(e,ef) -> Codegen.mk_const_texpr ctx.com con.c_pos (TInt (Int32.of_int ef.ef_index))
+	| CArray i -> Codegen.mk_const_texpr ctx.com con.c_pos (TInt (Int32.of_int i))
 	| CAny | CFields _ -> assert false
 
 let convert_switch ctx st cases loop =
