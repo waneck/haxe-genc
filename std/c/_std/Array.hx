@@ -29,7 +29,8 @@ import c.CStdio;
 import c.CString;
 import c.NInt.Int64;
 
-@:final @:coreApi class Array<T> implements ArrayAccess<T>
+//@:coreApi
+@:final class Array<T> implements ArrayAccess<T>
 {
 	public var length(default,null) : Int;
 
@@ -370,12 +371,12 @@ import c.NInt.Int64;
 		return null; //TODO
 	}
 
-	public function pop() : Null<T>
+	public function pop() : T
 	{
 		return null;
 	}
 	
-	private function pop_8() : Null<T>
+	private function pop_8() : T
 	{
 		var __a:Pointer<Char> = cast __a;
 		var length = length;
@@ -392,7 +393,7 @@ import c.NInt.Int64;
 		}
 	}
 
-	private function pop_32() : Null<T>
+	private function pop_32() : T
 	{
 		var __a:Pointer<Int> = cast __a;
 		var length = length;
@@ -409,7 +410,7 @@ import c.NInt.Int64;
 		}
 	}
 
-	private function pop_64() : Null<T>
+	private function pop_64() : T
 	{
 		var __a:Pointer<c.NInt.Int64> = cast __a;
 		var length = length;
