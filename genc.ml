@@ -272,25 +272,19 @@ module Expr = struct
 		mk (TMeta((m,[],e.epos),e)) e.etype e.epos
 
 	let box com e =
-		match e.etype with
-			| TType({t_path=[],"Null"},[t]) when is_base_type t ->
-				e
-			| _ ->
-				let e_null = mk (TConst TNull) (mk_mono()) e.epos in
-				let e_cond = mk_binop OpEq e_null e e.etype e.epos in
-				let e_obj = mk_obj_decl ["value",e] e.epos in
-				let t_null = com.basic.tnull e.etype in
-				let e_if = mk (TIf(e_cond,e_null,Some e_obj)) t_null e.epos in
-				e_if
+		if is_null e.etype then
+			e
+		else begin
+			let t = com.basic.tnull e.etype in
+			mk_cast (mk_obj_decl ["value",e] e.epos) t
+		end
 
 	let unbox com e =
-		match e.eexpr,e.etype with
-			| TConst TNull,_ ->
-				e
-			| _,TType({t_path=[],"Null"},[t]) when is_base_type t ->
-				mk (TField(e,FDynamic "value")) t e.epos
-			| _ ->
-				e
+		if is_null e.etype then begin
+			let t = follow e.etype in
+			mk_cast (mk (TField(e,FDynamic "value")) t e.epos) t
+		end else
+			e
 end
 
 
@@ -644,20 +638,11 @@ end
 module TypeChecker = struct
 
 	let rec check gen e t =
-		let e = match e.etype,t with
-			| _,TType({t_path=[],"Null"},_) when is_base_type e.etype ->
-				begin match e.eexpr with
-					| TConst TNull ->
-						e
-					| _ ->
-						Expr.box gen.gcom e
-				end
-			| TType({t_path=[],"Null"},_),_ when is_base_type t ->
-				Expr.unbox gen.gcom e
-			| TType({t_path=[],"Null"},_),TAbstract({a_path = ["c"],"VarArg"},_) ->
-				Expr.unbox gen.gcom e
-			| _ ->
-				e
+		let e = match is_null e.etype,is_null t with
+			| true,true
+			| false,false -> e
+			| true,false -> Expr.unbox gen.gcom e
+			| false,true -> Expr.box gen.gcom e
 		in
 		match e.eexpr,follow t with
 		| TObjectDecl fl,(TAnon an as ta) ->
@@ -1632,7 +1617,7 @@ end
 
 let rec is_value_type t =
 	match t with
-	| TType({t_path=[],"Null"},[t]) when is_base_type t ->
+	| TType({t_path=[],"Null"},[t]) ->
 		false
 	| TMono r ->
 		begin match !r with
@@ -1706,14 +1691,12 @@ let escape_name n =
 (* Type signature *)
 
 let rec s_type ctx t =
-	match t with
-	| TType({t_path=[],"Null"},[t]) when is_base_type t ->
+	if is_null t then
 		s_type ctx (TAnon {
 			a_status = ref Closed;
 			a_fields = PMap.add "value" (Expr.mk_class_field "value" t true Ast.null_pos (Var {v_read = AccNormal;v_write=AccNormal}) []) PMap.empty (* TODO: this is a bit silly *)
 		})
-	| _ ->
-	match follow t with
+	else match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
 	| TAbstract({a_path = [],"Void"},[]) -> "void"
@@ -2632,13 +2615,12 @@ let initialize_class con c =
 				let args = List.map2 (fun (v,co) (n,o,t) ->
 					let t = if not o && co = None then
 						t
-					else match v.v_type with
-						| TType({t_path = [],"Null"},_) ->
-							v.v_type
-						| t ->
-							v.v_type <- con.com.basic.tnull t;
-							v.v_type
-					in
+					else if is_null v.v_type then
+						v.v_type
+					else begin
+						v.v_type <- con.com.basic.tnull v.v_type;
+						v.v_type
+					end in
 					n,o,t
 				) tf.tf_args args in
 				cf.cf_type <- TFun(args,tr);
