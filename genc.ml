@@ -744,9 +744,8 @@ module TypeChecker = struct
 				| _ -> assert false
 			end
 		| TCast (e1,None) ->
-			let t = follow e.etype in
-			if e1.etype != t then
-				{e with eexpr = TCast(check gen (gen.map e1) t,None)}
+			if e1.etype != e.etype then
+				{e with eexpr = TCast(check gen (gen.map e1) e.etype,None)}
 			else
 				{e with eexpr = TCast(gen.map e1,None)}
 		| TSwitch(e1,cases,def) ->
