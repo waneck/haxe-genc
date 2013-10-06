@@ -86,7 +86,7 @@ and gen_context = {
 	gcom : Common.context;
 	gcon : context;
 	mutable gfield : tclass_field;
-	mutable mtype : module_type option;
+	mutable gclass : tclass;
 	(* call this function instead of Type.map_expr () *)
 	mutable map : texpr -> texpr;
 	(* tvar_decl -> unit; declares a variable on the current block *)
@@ -349,7 +349,7 @@ module Filters = struct
 			gcom = con.com;
 			gcon = con;
 			gfield = null_field;
-			mtype = None;
+			gclass = null_class;
 			map = (function _ -> assert false);
 			declare_var = (fun _ -> assert false);
 			declare_temp = (fun _ _ -> assert false);
@@ -366,7 +366,7 @@ module Filters = struct
 		let gen = mk_gen_context con in
 		List.iter (fun md -> match md with
 			| TClassDecl c ->
-				gen.mtype <- Some md;
+				gen.gclass <- c;
 				let added = ref [] in
 				let old_run_filter = gen.run_filter in
 				gen.run_filter <- (fun cf ->
@@ -875,13 +875,11 @@ module ClosureHandler = struct
 		match e.eexpr with
 		| TFunction tf ->
 			fstack := tf :: !fstack;
-			let e1 = match !fstack,gen.mtype with
-				| _ :: [],_ when (match gen.gfield.cf_kind with Method _ -> true | Var _ -> false) ->
+			let e1 = match !fstack with
+				| _ :: [] when (match gen.gfield.cf_kind with Method _ -> true | Var _ -> false) ->
 					{e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})}
-				| _,Some (TClassDecl c) ->
-					add_closure_field gen c tf None e.epos
 				| _ ->
-					assert false
+					add_closure_field gen gen.gclass tf None e.epos
 			in
 			fstack := List.tl !fstack;
 			e1
@@ -1025,10 +1023,9 @@ module ExprTransformation = struct
 		let cf = Expr.mk_class_field name tfun true p (Method MethNormal) [] in
 		let efun = mk (TFunction tf) tfun p in
 		cf.cf_expr <- Some efun;
-		let c = match gen.mtype with Some (TClassDecl c) -> c | _ -> assert false in
-		gen.add_field c cf true;
+		gen.add_field gen.gclass cf true;
 		gen.run_filter cf;
-		Expr.mk_static_call c cf el p
+		Expr.mk_static_call gen.gclass cf el p
 
 	let filter gen e =
 		match e.eexpr with
