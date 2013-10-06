@@ -452,21 +452,105 @@ end
 *)
 module DefaultValues = struct
 
+	type function_mode =
+		| Given
+		| Mixed
+		| Default
+
+	let get_fmode tf t =
+		try
+			let args = match follow t with TFun(args,_) -> args | _ -> raise Exit in
+			let rec loop has_default args1 args2 = match args1,args2 with
+				| ((v,co) :: args1),((n,o,t) :: args2) ->
+					begin match o,co with
+						| true,None
+						| true,Some TNull -> Mixed
+						| _,Some _ -> loop true args1 args2
+						| false,None -> loop has_default args1 args2
+					end
+				| [],[] ->
+					if has_default then Default else Given
+				| _ ->
+					Mixed
+			in
+			loop false tf.tf_args args
+		with Exit ->
+			Mixed
+
 	let filter gen = function e ->
 		match e.eexpr with
 		| TFunction tf ->
-			let e = List.fold_left (fun e (v,co) ->
-				match co with
-				| None
-				| Some TNull -> e
-				| Some c ->
-					let eloc = Expr.mk_local v e.epos in
-					let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono()) e.epos) eloc gen.gcom.basic.tbool e.epos) in
-					let eassign = Codegen.binop OpAssign eloc (mk (TConst c) (follow v.v_type) e.epos) v.v_type e.epos in
-					let eif = mk (TIf(econd,eassign,None)) gen.gcom.basic.tvoid e.epos in
-					Codegen.concat eif e
-			) tf.tf_expr tf.tf_args in
-			{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
+			let replace_locals subst e =
+				let rec replace e = match e.eexpr with
+					| TLocal v ->
+						begin try
+							let vr = List.assq v subst in
+							mk (TLocal vr) vr.v_type e.epos
+						with Not_found ->
+							e
+						end
+					| _ ->
+						Type.map_expr replace e
+				in
+				replace e
+			in
+			let handle_default_assign e =
+				let subst,el = List.fold_left (fun (subst,el) (v,co) ->
+					match co with
+					| None ->
+						subst,el
+					| Some TNull ->
+						subst,el
+					| Some c ->
+						let e_loc_v = Expr.mk_local v e.epos in
+						let e_loc_v2,subst = if is_base_type v.v_type then begin
+							let temp = gen.declare_temp (follow v.v_type) None in
+							Expr.mk_local temp e.epos,((v,temp) :: subst)
+						end else
+							e_loc_v,subst
+						in
+						let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono()) e.epos) e_loc_v gen.gcom.basic.tbool e.epos) in
+						let mk_assign e2 = Codegen.binop OpAssign e_loc_v2 e2 e2.etype e.epos in
+						let eassign = mk_assign (mk (TConst c) (follow v.v_type) e.epos) in
+						let eelse = if is_base_type v.v_type then begin
+							Some (mk_assign (Expr.unbox gen.gcom e_loc_v))
+						end else
+							None
+						in
+						let eif = mk (TIf(econd,eassign,eelse)) gen.gcom.basic.tvoid e.epos in
+						subst,(eif :: el)
+				) ([],[]) tf.tf_args in
+				let el = (replace_locals subst e) :: el in
+				Expr.mk_block gen.gcon e.epos (List.rev el)
+			in
+			begin match get_fmode tf e.etype with
+				| Mixed ->
+					let e = handle_default_assign tf.tf_expr in
+					{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
+				| Given ->
+					e
+				| Default ->
+					let name = alloc_temp_func gen.gcon in
+					let subst,tf_args = List.fold_left (fun (subst,args) (v,_) ->
+						let vr = alloc_var v.v_name (follow v.v_type) in
+						((v,vr) :: subst),((vr,None) :: args)
+					) ([],[]) tf.tf_args in
+					let tf_args = List.rev tf_args in
+					let e_tf = replace_locals subst tf.tf_expr in
+					let tf_given = {
+						tf_args = tf_args;
+						tf_type = tf.tf_type;
+						tf_expr = gen.map e_tf;
+					} in
+					let t_cf = TFun(List.map (fun (v,_) -> v.v_name,false,follow v.v_type) tf_args,tf.tf_type) in
+					let cf_given = Expr.mk_class_field name t_cf true e.epos (Method MethNormal) [] in
+					cf_given.cf_expr <- Some (mk (TFunction tf_given) cf_given.cf_type e.epos);
+					gen.add_field gen.gclass cf_given gen.gstat;
+					let e_args = List.map (fun (v,_) -> Expr.mk_local v e.epos) tf.tf_args in
+					let e_call = Expr.mk_static_call gen.gclass cf_given e_args e.epos in
+					let e_call = handle_default_assign e_call in
+					{ e with eexpr = TFunction({tf with tf_expr = e_call})}
+			end
 		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
 			let s = match follow e1.etype with
 				| TAbstract({a_path=[],"Int"},_) -> "i"
