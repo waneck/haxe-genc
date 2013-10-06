@@ -9,6 +9,11 @@ import c.Closure;
 import c.VTable;
 
 @:headerCode('
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #ifndef _MSC_VER
 	#define ALLOCA(n) alloca(n)
 #else

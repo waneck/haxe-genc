@@ -1173,9 +1173,6 @@ let close_type_context ctx =
 	let relpath path = path_to_file_path ((get_relative_path ctx.type_path path),snd path) in
 	spr (Printf.sprintf "#ifndef %s\n" n);
 	spr (Printf.sprintf "#define %s\n" n);
-	spr "#include <stdio.h>\n";
-	spr "#include <stdlib.h>\n";
-	spr "#include <string.h>\n";
 	if ctx.type_path <> ([],"hxc") then spr (Printf.sprintf "#include \"%s.h\"\n" (relpath ([],"hxc")));
 
 	PMap.iter (fun path dept ->
