@@ -155,7 +155,7 @@ let alloc_temp_func con =
 	let id = con.num_temp_funcs in
 	con.num_temp_funcs <- con.num_temp_funcs + 1;
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
-	name, id
+	name
 
 let is_base_type t = match t with
 	| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
@@ -829,7 +829,7 @@ module ClosureHandler = struct
 				Type.map_expr loop e
 		in
 		let e = loop tf.tf_expr in
-		let name,id = alloc_temp_func gen.gcon in
+		let name = alloc_temp_func gen.gcon in
 		let vars,fields = PMap.fold (fun v (vars,fields) ->
 			let e = match v.v_name,ethis with
 				| "this",Some e -> e
@@ -1018,7 +1018,7 @@ module ExprTransformation = struct
 			tf_type = t;
 			tf_expr = e;
 		} in
-		let name,id = alloc_temp_func gen.gcon in
+		let name = alloc_temp_func gen.gcon in
 		let tfun = TFun (List.map (fun v -> v.v_name,false,v.v_type) vars,t) in
 		let cf = Expr.mk_class_field name tfun true p (Method MethNormal) [] in
 		let efun = mk (TFunction tf) tfun p in
