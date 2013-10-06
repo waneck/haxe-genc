@@ -485,6 +485,7 @@ module DefaultValues = struct
 	let filter gen = function e ->
 		match e.eexpr with
 		| TFunction tf ->
+			let p = e.epos in
 			fstack := tf :: !fstack;
 			let replace_locals subst e =
 				let rec replace e = match e.eexpr with
@@ -508,26 +509,26 @@ module DefaultValues = struct
 					| Some TNull ->
 						subst,el
 					| Some c ->
-						let e_loc_v = Expr.mk_local v e.epos in
+						let e_loc_v = Expr.mk_local v p in
 						let e_loc_v2,subst = if is_base_type v.v_type then begin
 							let temp = gen.declare_temp (follow v.v_type) None in
-							Expr.mk_local temp e.epos,((v,temp) :: subst)
+							Expr.mk_local temp p,((v,temp) :: subst)
 						end else
 							e_loc_v,subst
 						in
-						let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono()) e.epos) e_loc_v gen.gcom.basic.tbool e.epos) in
-						let mk_assign e2 = Codegen.binop OpAssign e_loc_v2 e2 e2.etype e.epos in
-						let eassign = mk_assign (mk (TConst c) (follow v.v_type) e.epos) in
+						let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono())p) e_loc_v gen.gcom.basic.tbool p) in
+						let mk_assign e2 = Codegen.binop OpAssign e_loc_v2 e2 e2.etype p in
+						let eassign = mk_assign (mk (TConst c) (follow v.v_type) p) in
 						let eelse = if is_base_type v.v_type then begin
 							Some (mk_assign (Expr.unbox gen.gcom e_loc_v))
 						end else
 							None
 						in
-						let eif = mk (TIf(econd,eassign,eelse)) gen.gcom.basic.tvoid e.epos in
+						let eif = mk (TIf(econd,eassign,eelse)) gen.gcom.basic.tvoid p in
 						subst,(eif :: el)
 				) ([],[]) tf.tf_args in
 				let el = (replace_locals subst e) :: el in
-				Expr.mk_block gen.gcon e.epos (List.rev el)
+				Expr.mk_block gen.gcon p (List.rev el)
 			in
 			let e = match get_fmode tf e.etype with
 				| Default ->
@@ -545,11 +546,12 @@ module DefaultValues = struct
 						tf_expr = gen.map e_tf;
 					} in
 					let t_cf = TFun(List.map (fun (v,_) -> v.v_name,false,follow v.v_type) tf_args,tf.tf_type) in
-					let cf_given = Expr.mk_class_field name t_cf true e.epos (Method MethNormal) [] in
-					cf_given.cf_expr <- Some (mk (TFunction tf_given) cf_given.cf_type e.epos);
+					let cf_given = Expr.mk_class_field name t_cf true p (Method MethNormal) [] in
+					cf_given.cf_expr <- Some (mk (TFunction tf_given) cf_given.cf_type p);
 					gen.add_field gen.gclass cf_given gen.gstat;
-					let e_args = List.map (fun (v,_) -> Expr.mk_local v e.epos) tf.tf_args in
-					let e_call = Expr.mk_static_call gen.gclass cf_given e_args e.epos in
+					if is_field_func && gen.gstat then gen.gfield.cf_meta <- (Meta.Custom ":known",[(EConst(String name)),p],p) :: gen.gfield.cf_meta;
+					let e_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
+					let e_call = Expr.mk_static_call gen.gclass cf_given e_args p in
 					let e_call = handle_default_assign e_call in
 					{ e with eexpr = TFunction({tf with tf_expr = e_call})}
 				| Given ->
@@ -574,6 +576,34 @@ module DefaultValues = struct
 		| _ ->
 			Type.map_expr gen.map e
 
+	let mk_known_call con c cf el =
+		match cf.cf_expr with
+		| Some ({eexpr = TFunction tf}) ->
+			let rec loop args el = match args,el with
+				| (_,Some co) :: args,([] as el | ({eexpr = TConst TNull} :: el)) ->
+					(Codegen.mk_const_texpr con.com cf.cf_pos co) :: loop args el
+				| _ :: args,e :: el ->
+					e :: loop args el
+				| [],[] ->
+					[]
+				| _ ->
+					assert false
+			in
+			let name = match Meta.get (Meta.Custom ":known") cf.cf_meta with
+				| _,[EConst(String s),_],_ -> s
+				| _ -> assert false
+			in
+			let el = loop tf.tf_args el in
+			Expr.mk_static_call_2 c name el cf.cf_pos
+		| _ ->
+			assert false
+
+	let handle_call_site gen = function e ->
+		match e.eexpr with
+ 		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
+			gen.map (mk_known_call gen.gcon c cf el)
+		| _ ->
+			Type.map_expr gen.map e
 end
 
 
