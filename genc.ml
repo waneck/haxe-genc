@@ -67,7 +67,6 @@ type context = {
 	mutable type_parameters : (path, texpr) PMap.t;
 	mutable init_modules : path list;
 	mutable generated_types : type_context list;
-	mutable filters : filter list;
 }
 
 and type_context = {
@@ -100,6 +99,7 @@ and gen_context = {
 	mutable run_filter : tclass_field -> bool -> unit;
 	(* adds a field to the specified class *)
 	mutable add_field : tclass -> tclass_field -> bool -> unit;
+	mutable filters : filter list;
 }
 
 and filter = gen_context->(texpr->texpr)
@@ -288,8 +288,8 @@ end
 
 module Filters = struct
 
-	let add_filter con filter =
-		con.filters <- filter :: con.filters
+	let add_filter gen filter =
+		gen.filters <- filter :: gen.filters
 
 	let run_filters gen e =
 		(* local vars / temp vars handling *)
@@ -353,7 +353,7 @@ module Filters = struct
 			let ret = map e in
 			gen.map <- last_map;
 			ret
-		) e gen.gcon.filters in
+		) e gen.filters in
 		gen.declare_var <- old_declare;
 		ret
 
@@ -372,6 +372,7 @@ module Filters = struct
 			gfield = null_field;
 			gstat  = false;
 			gclass = null_class;
+			filters = [];
 			map = (function _ -> assert false);
 			declare_var = (fun _ -> assert false);
 			declare_temp = (fun _ _ -> assert false);
@@ -388,8 +389,7 @@ module Filters = struct
 		} in
 		gen
 
-	let run_filters_types con =
-		let gen = mk_gen_context con in
+	let run_filters_types gen =
 		List.iter (fun md -> match md with
 			| TClassDecl c ->
 				gen.gclass <- c;
@@ -417,8 +417,7 @@ module Filters = struct
 				loop();
 				gen.run_filter <- old_run_filter
 			| _ -> ()
-		) con.com.types;
-		gen
+		) gen.gcon.com.types
 
 end
 
@@ -2831,22 +2830,8 @@ let generate com =
 		type_parameters = PMap.empty;
 		init_modules = [];
 		generated_types = [];
-		filters = [];
 		get_anon_signature = get_anon;
 	} in
-	(* ascending priority *)
-	let filters = [
-		VarDeclarations.filter;
-		ExprTransformation.filter;
-		ArrayHandler.filter;
-		TypeChecker.filter;
-		StringHandler.filter;
-		SwitchHandler.filter;
-		ClosureHandler.filter;
-		DefaultValues.filter;
-		ExprTransformation2.filter
-	] in
-	List.iter (Filters.add_filter con) filters;
 	List.iter (fun mt -> match mt with
 		| TClassDecl c -> initialize_class con c
 		| _ -> ()
@@ -2856,7 +2841,29 @@ let generate com =
 		| TClassDecl ({cl_constructor = Some cf} as c) -> initialize_constructor con c cf
 		| _ -> ()
 	) com.types;
-	ignore(Filters.run_filters_types con);
+	(* ascending priority *)
+	let filters = [
+		DefaultValues.filter;
+		ExprTransformation2.filter
+	] in
+
+	let gen = Filters.mk_gen_context con in
+	List.iter (Filters.add_filter gen) filters;
+	ignore(Filters.run_filters_types gen);
+	let filters = [
+		VarDeclarations.filter;
+		ExprTransformation.filter;
+		ArrayHandler.filter;
+		TypeChecker.filter;
+		StringHandler.filter;
+		SwitchHandler.filter;
+		ClosureHandler.filter;
+		DefaultValues.handle_call_site;
+	] in
+	let gen = Filters.mk_gen_context con in
+	List.iter (Filters.add_filter gen) filters;
+	ignore(Filters.run_filters_types gen);
+
 	List.iter (generate_type con) com.types;
 	let rec loop () =
 		let anons = !added_anons in
