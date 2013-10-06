@@ -558,6 +558,7 @@ module TypeChecker = struct
 		List.rev (loop [] el tl)
 
 	let fstack = ref []
+	let is_call_expr = ref false
 
 	let filter gen = function e ->
 		match e.eexpr with
@@ -578,9 +579,12 @@ module TypeChecker = struct
 		| TLocal v ->
 			{ e with etype = v.v_type }
 		| TCall(e1,el) ->
+			is_call_expr := true;
+			let e1 = gen.map e1 in
+			is_call_expr := false;
 			begin match follow e1.etype with
 				| TFun(args,_) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,_)]) ->
-					{e with eexpr = TCall(gen.map e1,check_call_params gen el args)}
+					{e with eexpr = TCall(e1,check_call_params gen el args)}
 				| _ -> Type.map_expr gen.map e
 			end
 		| TNew(c,tl,el) ->
@@ -626,6 +630,9 @@ module TypeChecker = struct
 			etf
 		| TThrow e1 ->
 			{ e with eexpr = TThrow (check gen e1 e1.etype) }
+(* 		| TField(e1,(FInstance(_) as fa)) when not !is_call_expr ->
+			let e1 = gen.map e1 in
+			Expr.mk_cast {e with eexpr = TField(e1,fa)} e.etype *)
 		| _ ->
 			Type.map_expr gen.map e
 
@@ -915,15 +922,15 @@ end
 
 module ArrayHandler = struct
 
-	let get_type_size tp = match tp with
+	let get_type_size hxc tp = match tp with
 	| TAbstract ( { a_path =[], "Int" } ,_ )
-	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32"
-	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16") } ,_ ) -> "16"
-	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hc_char" | "hx_uchar") } ,_ ) -> "8"
+	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32",(fun e -> e)
+	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16") } ,_ ) -> "16",(fun e -> e)
+	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hc_char" | "hx_uchar") } ,_ ) -> "8",(fun e -> e)
 	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
-	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64"
+	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))
 	(* FIXME: should we include ConstSizeArray here? *)
-	| _ -> "64"
+	| _ -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))
 
 	let rec mk_specialization_call c n suffix ethis el p =
 		let name = if suffix = "" then n else n ^ "_" ^ suffix in
@@ -948,7 +955,7 @@ module ArrayHandler = struct
 				| TAbstract({a_path=["c"], "Pointer"},[t]) ->
 					{e with eexpr = TArray(gen.map e1, gen.map e2)}
 				| TInst(c,[tp]) ->
-					let suffix = get_type_size (follow tp) in
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
 					Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(gen.map e1,[tp])) [gen.map e2] e.epos) tp
 				| _ ->
 					raise Not_found
@@ -959,8 +966,8 @@ module ArrayHandler = struct
 			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
-					let suffix = get_type_size (follow tp) in
-					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [gen.map e2; Expr.mk_cast (gen.map ev) tp] e.epos
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
+					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [gen.map e2; cast (gen.map ev)] e.epos
 				| _ ->
 					raise Not_found
 			end with Not_found ->
@@ -969,7 +976,7 @@ module ArrayHandler = struct
 		| TCall( ({eexpr = (TField (ethis,FInstance(c,({cf_name = cfname })))) }) ,el) ->
 			begin try begin match follow ethis.etype with
 				| TInst({cl_path = [],"Array"},[tp]) ->
-					let suffix = get_type_size (follow tp) in
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
 					Expr.mk_cast (mk_specialization_call c cfname suffix (Some(ethis,[tp])) (List.map gen.map el) e.epos) e.etype
 				| _ ->
 					raise Not_found
@@ -1004,7 +1011,8 @@ module ExprTransformation = struct
 			(v :: vl,e :: el,i + 1)
 		) ([],[eret],0) el in
 		let vars = List.rev vars in
-		let enew = ArrayHandler.mk_specialization_call c_array "__new" (ArrayHandler.get_type_size tparam) None [Expr.mk_int gen.gcon.com arity p] p in
+		let suffix,_ = ArrayHandler.get_type_size gen.gcon.hxc tparam in
+		let enew = ArrayHandler.mk_specialization_call c_array "__new" suffix  None [Expr.mk_int gen.gcon.com arity p] p in
 		let evar = mk (TVars [v,Some enew]) gen.gcom.basic.tvoid p in
 		let e = mk (TBlock (evar :: einit)) t p in
 		let tf = {
