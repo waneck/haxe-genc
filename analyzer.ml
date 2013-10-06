@@ -1,6 +1,14 @@
 open Ast
 open Type
 
+	let assigns_to_trace = ref false
+
+	let rec run e =
+		match e.eexpr with
+		| TBinop(OpAssign, {eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"}, {cf_name = "trace"}))}, _) ->
+			assigns_to_trace := true
+		| _ ->
+			Type.iter run e
 
 type gconstant_t = int
 and gtype_t = int
@@ -12,10 +20,22 @@ and gfield_access_t = int
 and gmodule_type_t = int
 and gdecision_tree_t = int
 and genum_field_t = int
+and gnode_t =
+	| GNone
+	| GWhatever of (int * gexpr_t)
 
-and gexpr_t =
-	| GE of (texpr * gexpr_expr_t)
-	| GMergeBlock of (texpr * gexpr_expr_t) list
+and gdata_t =
+	| GDNone
+	| GDBlockInfo of ( int * gdata_t list )
+
+and gexpr_t = {
+	g_te  : Type.texpr;
+	gtype : Type.t;
+	gexpr : gexpr_expr_t;
+	gdata : gdata_t;
+}
+	(*| GE of (texpr * gexpr_expr_t)
+	| GMergeBlock of (texpr * gexpr_expr_t) list*)
 
 
 and gexpr_expr_t    =
@@ -49,6 +69,7 @@ and gexpr_expr_t    =
 	| GCast of gexpr_t * gmodule_type_t option
 	| GMeta of metadata_entry * gexpr_t
 	| GEnumParameter of gexpr_t * genum_field_t * int
+	| GNode of gnode_t
 
 let fdefault v:'a = 0
 let id       v:'a = v
@@ -63,123 +84,123 @@ let fmodule_type   = fdefault
 let fdecision_tree = fdefault
 let fenum_field    = fdefault
 
-let map_expr f  ( e : Type.texpr ) =
-	match e.eexpr with
-	| TConst v ->  GE (e, GConst (fconstant v) )
-	| TLocal v ->  GE (e, GLocal (fvar v) )
-	| TBreak   ->  GE (e, GBreak )
-	| TContinue -> GE (e, GContinue )
-	| TTypeExpr mt -> GE (e, GTypeExpr (fmodule_type mt))
-	| TArray (e1,e2) ->
-		GE (e,  GArray (f e1,f e2) )
-	| TBinop (op,e1,e2) ->
-		GE (e,  GBinop (op,f e1,f e2) )
-	| TFor (v,e1,e2) ->
-		GE (e,  GFor (fvar v,f e1,f e2) )
-	| TWhile (e1,e2,flag) ->
-		GE (e,  GWhile (f e1,f e2,flag) )
-	| TThrow e1 ->
-		GE (e,  GThrow (f e1) )
-	| TEnumParameter (e1,ef,i) ->
-		GE (e,  GEnumParameter(f e1,fenum_field ef,i) )
-	| TField (e1,v) ->
-		GE (e,  GField (f e1, ffield_access v) )
-	| TParenthesis e1 ->
-		GE (e,  GParenthesis (f e1) )
-	| TUnop (op,pre,e1) ->
-		GE (e,  GUnop (op,pre,f e1) )
-	| TArrayDecl el ->
-		GE (e,  GArrayDecl (List.map f el) )
-	| TNew (t,pl,el) ->
-		GE (e,  GNew (fclass t,pl,List.map f el) )
-	| TBlock el ->
-		GE (e,  GBlock (List.map f el) )
-	| TObjectDecl el ->
-		GE (e,  GObjectDecl (List.map (fun (v,e) -> v, f e) el) )
-	| TCall (e1,el) ->
-		GE (e,  GCall (f e1, List.map f el) )
-	| TVars vl ->
-		GE (e,  GVars (List.map (fun (v,e) -> fvar v , match e with None -> None | Some e -> Some (f e)) vl) )
-	| TFunction tf ->
-		GE (e,  GFunction (tf, f tf.tf_expr))
-	| TIf (ec,e1,e2) ->
-		GE (e,  GIf (f ec,f e1,match e2 with None -> None | Some e -> Some (f e)) )
-	| TSwitch (e1,cases,def) ->
-		GE (e,  GSwitch (f e1, List.map (fun (el,e2) -> List.map f el, f e2) cases, match def with None -> None | Some e -> Some (f e)) )
-	| TPatMatch dt ->
-		GE (e,  GPatMatch( fdecision_tree dt ))
-	| TTry (e1,catches) ->
-		GE (e,  GTry (f e1, List.map (fun (v,e) -> fvar v, f e) catches) )
-	| TReturn eo ->
-		GE (e,  GReturn (match eo with None -> None | Some e -> Some (f e)) )
-	| TCast (e1,t) ->
-		GE (e,  GCast (f e1, match t with None -> None | Some mt -> Some (fmodule_type mt)) )
-	| TMeta (m,e1) ->
-		GE (e,  GMeta(m,f e1) )
+let gdata_default () = GDNone
 
-let map_gexpr f ge : gexpr_t = match ge with
-	| GE(te, e)-> (match e with
+let map_expr f  ( e : Type.texpr ) =
+	let te = e in
+	match e.eexpr with
+	| TConst v ->  { g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =  GConst (fconstant v) }
+	| TLocal v ->  { g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =  GLocal (fvar v) }
+	| TBreak   ->  { g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =  GBreak }
+	| TContinue -> { g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =  GContinue }
+	| TTypeExpr mt -> { g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =  GTypeExpr (fmodule_type mt) }
+	| TArray (e1,e2) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GArray (f e1,f e2) }
+	| TBinop (op,e1,e2) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GBinop (op,f e1,f e2) }
+	| TFor (v,e1,e2) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GFor (fvar v,f e1,f e2) }
+	| TWhile (e1,e2,flag) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GWhile (f e1,f e2,flag) }
+	| TThrow e1 ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GThrow (f e1) }
+	| TEnumParameter (e1,ef,i) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GEnumParameter(f e1,fenum_field ef,i) }
+	| TField (e1,v) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GField (f e1, ffield_access v) }
+	| TParenthesis e1 ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GParenthesis (f e1) }
+	| TUnop (op,pre,e1) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GUnop (op,pre,f e1) }
+	| TArrayDecl el ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GArrayDecl (List.map f el) }
+	| TNew (t,pl,el) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GNew (fclass t,pl,List.map f el) }
+	| TBlock el ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GBlock (List.map f el) }
+	| TObjectDecl el ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GObjectDecl (List.map (fun (v,e) -> v, f e) el) }
+	| TCall (e1,el) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GCall (f e1, List.map f el) }
+	| TVars vl ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GVars (List.map (fun (v,e) -> fvar v , match e with None -> None | Some e -> Some (f e)) vl) }
+	| TFunction tf ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GFunction (tf, f tf.tf_expr) }
+	| TIf (ec,e1,e2) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GIf (f ec,f e1,match e2 with None -> None | Some e -> Some (f e)) }
+	| TSwitch (e1,cases,def) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GSwitch (f e1, List.map (fun (el,e2) -> List.map f el, f e2) cases, match def with None -> None | Some e -> Some (f e)) }
+	| TPatMatch dt ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GPatMatch( fdecision_tree dt ) }
+	| TTry (e1,catches) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GTry (f e1, List.map (fun (v,e) -> fvar v, f e) catches) }
+	| TReturn eo ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GReturn (match eo with None -> None | Some e -> Some (f e)) }
+	| TCast (e1,t) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GCast (f e1, match t with None -> None | Some mt -> Some (fmodule_type mt)) }
+	| TMeta (m,e1) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GMeta(m,f e1) }
+
+let map_gexpr f e : gexpr_t = match e.gexpr with
 		| GConst _
 		| GLocal _
 		| GBreak
 		| GContinue
 		| GTypeExpr _ ->
-			ge
+			e
 		| GArray (e1,e2) ->
-			GE (te,  GArray (f e1,f e2) )
+			{ e with gexpr =   GArray (f e1,f e2) }
 		| GBinop (op,e1,e2) ->
-			GE (te,  GBinop (op,f e1,f e2) )
+			{ e with gexpr =   GBinop (op,f e1,f e2) }
 		| GFor (v,e1,e2) ->
-			GE (te,  GFor ( v,f e1,f e2) )
+			{ e with gexpr =   GFor ( v,f e1,f e2) }
 		| GWhile (e1,e2,flag) ->
-			GE (te,  GWhile (f e1,f e2,flag) )
+			{ e with gexpr =   GWhile (f e1,f e2,flag) }
 		| GThrow e1 ->
-			GE (te,  GThrow (f e1) )
+			{ e with gexpr =   GThrow (f e1) }
 		| GEnumParameter (e1,ef,i) ->
-			GE (te,  GEnumParameter(f e1, ef,i) )
+			{ e with gexpr =   GEnumParameter(f e1, ef,i) }
 		| GField (e1,v) ->
-			GE (te,  GField (f e1, v) )
+			{ e with gexpr =   GField (f e1, v) }
 		| GParenthesis e1 ->
-			GE (te,  GParenthesis (f e1) )
+			{ e with gexpr =   GParenthesis (f e1) }
 		| GUnop (op,pre,e1) ->
-			GE (te,  GUnop (op,pre,f e1) )
+			{ e with gexpr =   GUnop (op,pre,f e1) }
 		| GArrayDecl el ->
-			GE (te,  GArrayDecl (List.map f el) )
+			{ e with gexpr =   GArrayDecl (List.map f el) }
 		| GNew (t,pl,el) ->
-			GE (te,  GNew (fclass t,pl,List.map f el) )
+			{ e with gexpr =   GNew (fclass t,pl,List.map f el) }
 		| GBlock el ->
-			GE (te,  GBlock (List.map f el) )
+			{ e with gexpr =   GBlock (List.map f el) }
 		| GObjectDecl el ->
-			GE (te,  GObjectDecl (List.map (fun (v,e) -> v, f e) el) )
+			{ e with gexpr =   GObjectDecl (List.map (fun (v,e) -> v, f e) el) }
 		| GCall (e1,el) ->
-			GE (te,  GCall (f e1, List.map f el) )
+			{ e with gexpr =   GCall (f e1, List.map f el) }
 		| GNVar _ ->
-			ge
+			e
 		| GSVar(v, e) ->
-			GE(te, GSVar (v, f e))
+			{ e with gexpr =   GSVar (v, f e) }
 		| GVars vl ->
-			GE (te,  GVars (List.map (fun (v,e) -> fvar v , match e with None -> None | Some e -> Some (f e)) vl) )
+			{ e with gexpr =   GVars (List.map (fun (v,e) -> fvar v , match e with None -> None | Some e -> Some (f e)) vl) }
 		| GFunction (tf, e) ->
-			GE (te,  GFunction (tf, f e))
+			{ e with gexpr =   GFunction (tf, f e) }
 		| GIf (ec,e1,e2) ->
-			GE (te,  GIf (f ec,f e1,match e2 with None -> None | Some e -> Some (f e)) )
+			{ e with gexpr =   GIf (f ec,f e1,match e2 with None -> None | Some e -> Some (f e)) }
 		| GSwitch (e1,cases,def) ->
-			GE (te,  GSwitch (f e1, List.map (fun (el,e2) -> List.map f el, f e2) cases, match def with None -> None | Some e -> Some (f e)) )
+			{ e with gexpr =   GSwitch (f e1, List.map (fun (el,e2) -> List.map f el, f e2) cases, match def with None -> None | Some e -> Some (f e)) }
 		| GPatMatch dt ->
-			GE (te,  GPatMatch( dt ))
+			{ e with gexpr =   GPatMatch( dt ) }
 		| GTry (e1,catches) ->
-			GE (te,  GTry (f e1, List.map (fun (v,e) -> fvar v, f e) catches) )
+			{ e with gexpr =   GTry (f e1, List.map (fun (v,e) -> fvar v, f e) catches) }
 		| GReturn eo ->
-			GE (te,  GReturn (match eo with None -> None | Some e -> Some (f e)) )
+			{ e with gexpr =   GReturn (match eo with None -> None | Some e -> Some (f e)) }
 		| GCast (e1,t) ->
-			GE (te,  GCast (f e1, match t with None -> None | Some mt -> Some (mt)) )
+			{ e with gexpr =   GCast (f e1, match t with None -> None | Some mt -> Some (mt)) }
 		| GMeta (m,e1) ->
-			GE (te,  GMeta(m,f e1) )
-		)
-	| _ -> ge
+			{ e with gexpr =   GMeta(m,f e1) }
 
-let fold_gexpr (f : 'a -> gexpr_t -> 'a) (acc : 'a) ( ge : gexpr_t)  : 'a = match ge with
-	| GE(te, e) -> (match e with
+
+let fold_gexpr (f : 'a -> gexpr_t -> 'a) (acc : 'a) ( e : gexpr_t)  : 'a = match e.gexpr with
 		| GConst _
 		| GLocal _
 		| GBreak
@@ -231,11 +252,9 @@ let fold_gexpr (f : 'a -> gexpr_t -> 'a) (acc : 'a) ( ge : gexpr_t)  : 'a = matc
 			List.fold_left (fun acc (_,e) -> f acc e) acc catches
 		| GReturn eo ->
 			(match eo with None -> acc | Some e -> f acc e)
-		)
-	| _ -> acc
 
-let iter_gexpr f ge : unit = match ge with
-	| GE(te, e) -> (match e with
+
+let iter_gexpr f e : unit = match e.gexpr with
 		| GConst _
 		| GLocal _
 		| GBreak
@@ -285,11 +304,67 @@ let iter_gexpr f ge : unit = match ge with
 			List.iter (fun (_,e) -> f e) catches
 		| GReturn eo ->
 			(match eo with None -> () | Some e -> f e)
-		)
-	| _ -> ()
+
+type blockinfogctx = {
+	mutable blockid : int;
+}
+type blockinfoctx = {
+	mutable blocks : gdata_t list;
+}
+
+let p_blockinfo xs =
+	let rec loop depth x =
+		match x with
+		| GDBlockInfo (id,xs) ->
+			print_endline ("block " ^ (string_of_int id) ^ " cs:" ^
+				(String.concat "," (List.map ( fun d -> match d with
+					| GDBlockInfo(id,_) -> (string_of_int id)
+					| _ -> ""
+				) xs )))
+		| _ -> ()
+	in
+	List.iter (loop 0) xs
+
+
+let collect_block_info e =
+	let rec f (gctx,ctx) e : gexpr_t = match e.gexpr with
+	| GBlock el ->
+		let _,nctx = (gctx,{ blocks = [] }) in
+		let _ = List.map (f (gctx,nctx)) el in
+		let id = gctx.blockid in
+		let _  = gctx.blockid <- id + 1 in
+		let data = GDBlockInfo (id, nctx.blocks ) in
+		let _ = ctx.blocks <- data :: ctx.blocks in
+		{ e with gdata = data }
+
+	|_ -> map_gexpr (f (gctx,ctx)) e in
+	let gctx,ctx = {blockid = 0},{blocks= []} in
+	let _ = f (gctx,ctx) e in
+	ctx.blocks
 
 let gexpr_of_texpr e =
 	let rec f e = match e.eexpr with
 	_ -> map_expr f e
 	in f e
 
+let get_field_expressions xs = List.fold_left (fun acc cf ->
+		match cf.cf_expr with
+		| None -> acc
+		| Some {eexpr = TFunction tf} -> tf.tf_expr :: acc
+		| Some e -> e :: acc
+
+	) [] xs
+
+let run_analyzer ( mt : Type.module_type list ) : unit =
+	print_endline "start";
+	List.iter ( fun mt -> match mt with
+	| TClassDecl v ->
+		let fields  = List.map  gexpr_of_texpr (get_field_expressions v.cl_ordered_statics) in
+		let statics = List.map  gexpr_of_texpr (get_field_expressions v.cl_ordered_fields) in
+		let _ = List.iter (fun e -> p_blockinfo (collect_block_info e)) fields in
+		()
+	| TEnumDecl  v -> ()
+	| TTypeDecl  v -> ()
+	| TAbstractDecl v -> ()
+    ) mt;
+	print_endline "done."

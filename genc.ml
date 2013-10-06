@@ -123,7 +123,7 @@ let rec follow t =
 		follow (Codegen.Abstract.get_underlying_type a pl)
 	| _ -> t
 
-module Analyzer = struct
+(*module Analyzer = struct
 	let assigns_to_trace = ref false
 
 	let rec run e =
@@ -132,7 +132,7 @@ module Analyzer = struct
 			assigns_to_trace := true
 		| _ ->
 			Type.iter run e
-end
+end*)
 
 
 (* Helper *)
@@ -1562,6 +1562,7 @@ module VTableHandler = struct
 		) c.cl_overrides )
 
 	let get_chains con tps =
+
 		let m = List.fold_left ( fun m tp -> match tp with
 			| TClassDecl c -> ( match c.cl_super with
 				| Some (c1,_) ->
@@ -1578,6 +1579,8 @@ module VTableHandler = struct
 						 cids    = PMap.empty;
 						 vtables = PMap.empty;
 						 next    = 0} tps in
+
+		let _ = Analyzer.run_analyzer tps in
 
 		let add_vtable con c vtable =
 			(* helpers *)
