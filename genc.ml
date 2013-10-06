@@ -265,6 +265,22 @@ module Expr = struct
 
 	let add_meta m e =
 		mk (TMeta((m,[],e.epos),e)) e.etype e.epos
+
+	let box com e =
+		match e.etype with
+			| TType({t_path=[],"Null"},[t]) when is_base_type t ->
+				e
+			| _ ->
+				mk_cast (mk_obj_decl ["value",e] e.epos) (com.basic.tnull e.etype)
+
+	let unbox com e =
+		match e.eexpr,e.etype with
+			| TConst TNull,_ ->
+				e
+			| _,TType({t_path=[],"Null"},[t]) when is_base_type t ->
+				mk (TField(e,FDynamic "value")) t e.epos
+			| _ ->
+				e
 end
 
 
@@ -486,22 +502,6 @@ end
 *)
 module TypeChecker = struct
 
-	let box com e =
-		match e.etype with
-			| TType({t_path=[],"Null"},[t]) when is_base_type t ->
-				e
-			| _ ->
-				Expr.mk_cast (Expr.mk_obj_decl ["value",e] e.epos) (com.basic.tnull e.etype)
-
-	let unbox com e =
-		match e.eexpr,e.etype with
-			| TConst TNull,_ ->
-				e
-			| _,TType({t_path=[],"Null"},[t]) when is_base_type t ->
-				mk (TField(e,FDynamic "value")) t e.epos
-			| _ ->
-				e
-
 	let rec check gen e t =
 		let e = match e.etype,t with
 			| _,TType({t_path=[],"Null"},_) when is_base_type e.etype ->
@@ -509,12 +509,12 @@ module TypeChecker = struct
 					| TConst TNull ->
 						e
 					| _ ->
-						box gen.gcom e
+						Expr.box gen.gcom e
 				end
 			| TType({t_path=[],"Null"},_),_ when is_base_type t ->
-				unbox gen.gcom e
+				Expr.unbox gen.gcom e
 			| TType({t_path=[],"Null"},_),TAbstract({a_path = ["c"],"VarArg"},_) ->
-				unbox gen.gcom e
+				Expr.unbox gen.gcom e
 			| _ ->
 				e
 		in
@@ -574,7 +574,7 @@ module TypeChecker = struct
 		| TBinop(OpEq | OpNotEq as op,e1,e2) ->
 			{e with eexpr = TBinop(op,gen.map e1,gen.map e2)}
 		| TBinop(op,e1,e2) ->
-			{e with eexpr = TBinop(op,gen.map (unbox gen.gcom e1),gen.map (unbox gen.gcom e2))}
+			{e with eexpr = TBinop(op,gen.map (Expr.unbox gen.gcom e1),gen.map (Expr.unbox gen.gcom e2))}
 		| TVars vl ->
 			let vl = ExtList.List.filter_map (fun (v,eo) ->
 				match eo with
