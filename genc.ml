@@ -2656,7 +2656,7 @@ let initialize_class con c =
 
 	let infer_null_argument cf =
 		match cf.cf_expr,follow cf.cf_type with
-			| Some ({eexpr = TFunction tf}),TFun(args,tr) ->
+			| Some ({eexpr = TFunction tf} as e),TFun(args,tr) ->
 				let args = List.map2 (fun (v,co) (n,o,t) ->
 					let t = if not o && co = None then
 						t
@@ -2669,6 +2669,7 @@ let initialize_class con c =
 					n,o,t
 				) tf.tf_args args in
 				cf.cf_type <- TFun(args,tr);
+				cf.cf_expr <- Some ({e with etype = cf.cf_type})
 			| _ ->
 				()
 	in
