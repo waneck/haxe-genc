@@ -439,7 +439,7 @@ module DefaultValues = struct
 				| Some c ->
 					let eloc = Expr.mk_local v e.epos in
 					let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono()) e.epos) eloc gen.gcom.basic.tbool e.epos) in
-					let eassign = Codegen.binop OpAssign eloc (mk (TConst c) v.v_type e.epos) v.v_type e.epos in
+					let eassign = Codegen.binop OpAssign eloc (mk (TConst c) (follow v.v_type) e.epos) v.v_type e.epos in
 					let eif = mk (TIf(econd,eassign,None)) gen.gcom.basic.tvoid e.epos in
 					Codegen.concat eif e
 			) tf.tf_expr tf.tf_args in
@@ -481,32 +481,36 @@ module TypeChecker = struct
 
 	let box com e =
 		match e.etype with
-			| TType({t_path=[],"Null"},_) ->
+			| TType({t_path=[],"Null"},[t]) when is_base_type t ->
 				e
 			| _ ->
-				com.warning "Box!" e.epos;
-				{e with etype = com.basic.tnull e.etype}
+				Expr.mk_cast (Expr.mk_obj_decl ["value",e] e.epos) (com.basic.tnull e.etype)
 
 	let unbox com e =
-		match e.etype with
-			| TType({t_path=[],"Null"},[t]) ->
-				com.warning "Unbox!" e.epos;
-				{e with etype = t}
+		match e.eexpr,e.etype with
+			| TConst TNull,_ ->
+				e
+			| _,TType({t_path=[],"Null"},[t]) when is_base_type t ->
+				mk (TField(e,FDynamic "value")) t e.epos
 			| _ ->
 				e
 
 	let rec check gen e t =
-		match e.etype,t with
-		| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_),TType({t_path=[],"Null"},_) ->
-			begin match e.eexpr with
-				| TConst TNull ->
-					e
-				| _ ->
-					box gen.gcom e
-			end
-		| TType({t_path=[],"Null"},_),TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
-			unbox gen.gcom e
-		| _ ->
+		let e = match e.etype,t with
+			| _,TType({t_path=[],"Null"},_) when is_base_type e.etype ->
+				begin match e.eexpr with
+					| TConst TNull ->
+						e
+					| _ ->
+						box gen.gcom e
+				end
+			| TType({t_path=[],"Null"},_),_ when is_base_type t ->
+				unbox gen.gcom e
+			| TType({t_path=[],"Null"},_),TAbstract({a_path = ["c"],"VarArg"},_) ->
+				unbox gen.gcom e
+			| _ ->
+				e
+		in
 		match e.eexpr,follow t with
 		| TObjectDecl fl,(TAnon an as ta) ->
 			let fields = sort_anon_fields (pmap_to_list an.a_fields) in
@@ -559,6 +563,8 @@ module TypeChecker = struct
 		match e.eexpr with
 		| TBinop(OpAssign,e1,e2) ->
 			{e with eexpr = TBinop(OpAssign,gen.map e1,check gen (gen.map e2) e1.etype)}
+		| TBinop(OpEq | OpNotEq as op,e1,e2) ->
+			{e with eexpr = TBinop(op,gen.map e1,gen.map e2)}
 		| TBinop(op,e1,e2) ->
 			{e with eexpr = TBinop(op,gen.map (unbox gen.gcom e1),gen.map (unbox gen.gcom e2))}
 		| TVars vl ->
@@ -1552,6 +1558,13 @@ let escape_name n =
 (* Type signature *)
 
 let rec s_type ctx t =
+	match t with
+	| TType({t_path=[],"Null"},[t]) when is_base_type t ->
+		s_type ctx (TAnon {
+			a_status = ref Closed;
+			a_fields = PMap.add "value" (Expr.mk_class_field "value" t true Ast.null_pos (Var {v_read = AccNormal;v_write=AccNormal}) []) PMap.empty (* TODO: this is a bit silly *)
+		})
+	| _ ->
 	match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"

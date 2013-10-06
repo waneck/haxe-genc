@@ -146,6 +146,7 @@ import c.CString.memcmp;
 	}
 
 	public function substr( pos : Int, ?len : Int ):String {
+		var len:Int = len == null ? length : len;
 		if (pos < 0) {
 			pos = (length + pos) < 0 ? 0 : (length + pos);
 		}
