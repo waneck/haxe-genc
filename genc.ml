@@ -161,7 +161,7 @@ let alloc_temp_func con =
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
 	name
 
-let is_base_type t = match t with
+let is_base_type t = match follow t with
 	| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
 		true
 	| _ ->
