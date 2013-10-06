@@ -133,7 +133,7 @@ class BalancedTree<K,V> {
 	}
 	
 	function setLoop(k:K, v:V, node:TreeNode<K,V>) {
-		if (node == null) return new TreeNode<K,V>(null, k, v, null);
+		if (node == null) return new TreeNode<K,V>(null, k, v, null, -1);
 		var c = compare(k, node.key);
 		return if (c == 0) new TreeNode<K,V>(node.left, k, v, node.right, node.get_height());
 		else if (c < 0) {
@@ -191,11 +191,11 @@ class BalancedTree<K,V> {
 		var hl = l.get_height();
 		var hr = r.get_height();
 		return if (hl > hr + 2) {
-			if (l.left.get_height() >= l.right.get_height()) new TreeNode<K,V>(l.left, l.key, l.value, new TreeNode<K,V>(l.right, k, v, r));
-			else new TreeNode<K,V>(new TreeNode<K,V>(l.left,l.key, l.value, l.right.left), l.right.key, l.right.value, new TreeNode<K,V>(l.right.right, k, v, r));
+			if (l.left.get_height() >= l.right.get_height()) new TreeNode<K,V>(l.left, l.key, l.value, new TreeNode<K,V>(l.right, k, v, r, -1), -1);
+			else new TreeNode<K,V>(new TreeNode<K,V>(l.left,l.key, l.value, l.right.left, -1), l.right.key, l.right.value, new TreeNode<K,V>(l.right.right, k, v, r, -1), -1);
 		} else if (hr > hl + 2) {
-			if (r.right.get_height() > r.left.get_height()) new TreeNode<K,V>(new TreeNode<K,V>(l, k, v, r.left), r.key, r.value, r.right);
-			else new TreeNode<K,V>(new TreeNode<K,V>(l, k, v, r.left.left), r.left.key, r.left.value, new TreeNode<K,V>(r.left.right, r.key, r.value, r.right));
+			if (r.right.get_height() > r.left.get_height()) new TreeNode<K,V>(new TreeNode<K,V>(l, k, v, r.left, -1), r.key, r.value, r.right, -1);
+			else new TreeNode<K,V>(new TreeNode<K,V>(l, k, v, r.left.left, -1), r.left.key, r.left.value, new TreeNode<K,V>(r.left.right, r.key, r.value, r.right, -1), -1);
 		} else {
 			new TreeNode<K,V>(l, k, v, r, (hl > hr ? hl : hr) + 1);
 		}
@@ -216,7 +216,7 @@ class TreeNode<K,V> {
 	#end
 	var _height : Int;
 	
-	public function new(l, k, v, r, h = -1) {
+	public function new(l, k, v, r, h) {
 		left = l;
 		key = k;
 		value = v;

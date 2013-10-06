@@ -86,8 +86,11 @@ and gen_context = {
 	gcom : Common.context;
 	gcon : context;
 	mutable gfield : tclass_field;
+
 	mutable gstat  : bool;
-	mutable mtype : module_type option;
+
+	mutable gclass : tclass;
+
 	(* call this function instead of Type.map_expr () *)
 	mutable map : texpr -> texpr;
 	(* tvar_decl -> unit; declares a variable on the current block *)
@@ -156,7 +159,7 @@ let alloc_temp_func con =
 	let id = con.num_temp_funcs in
 	con.num_temp_funcs <- con.num_temp_funcs + 1;
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
-	name, id
+	name
 
 let is_base_type t = match t with
 	| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
@@ -352,7 +355,7 @@ module Filters = struct
 			gcon = con;
 			gfield = null_field;
 			gstat  = false;
-			mtype = None;
+			gclass = null_class;
 			map = (function _ -> assert false);
 			declare_var = (fun _ -> assert false);
 			declare_temp = (fun _ _ -> assert false);
@@ -370,7 +373,7 @@ module Filters = struct
 		let gen = mk_gen_context con in
 		List.iter (fun md -> match md with
 			| TClassDecl c ->
-				gen.mtype <- Some md;
+				gen.gclass <- c;
 				let added = ref [] in
 				let old_run_filter = gen.run_filter in
 				gen.run_filter <- (fun cf stat ->
@@ -833,7 +836,7 @@ module ClosureHandler = struct
 				Type.map_expr loop e
 		in
 		let e = loop tf.tf_expr in
-		let name,id = alloc_temp_func gen.gcon in
+		let name = alloc_temp_func gen.gcon in
 		let vars,fields = PMap.fold (fun v (vars,fields) ->
 			let e = match v.v_name,ethis with
 				| "this",Some e -> e
@@ -856,7 +859,6 @@ module ClosureHandler = struct
 	let add_closure_field gen c tf ethis p =
 		let cf,e_init = mk_closure_field gen tf ethis p in
 		gen.add_field c cf true;
-		(*gen.run_filter cf;*)
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
 		Expr.wrap_function gen.gcon e_init e_field
 
@@ -879,13 +881,11 @@ module ClosureHandler = struct
 		match e.eexpr with
 		| TFunction tf ->
 			fstack := tf :: !fstack;
-			let e1 = match !fstack,gen.mtype with
-				| _ :: [],_ when (match gen.gfield.cf_kind with Method _ -> true | Var _ -> false) ->
+			let e1 = match !fstack with
+				| _ :: [] when (match gen.gfield.cf_kind with Method _ -> true | Var _ -> false) ->
 					{e with eexpr = TFunction({tf with tf_expr = gen.map tf.tf_expr})}
-				| _,Some (TClassDecl c) ->
-					add_closure_field gen c tf None e.epos
 				| _ ->
-					assert false
+					add_closure_field gen gen.gclass tf None e.epos
 			in
 			fstack := List.tl !fstack;
 			e1
@@ -1024,15 +1024,14 @@ module ExprTransformation = struct
 			tf_type = t;
 			tf_expr = e;
 		} in
-		let name,id = alloc_temp_func gen.gcon in
+		let name = alloc_temp_func gen.gcon in
 		let tfun = TFun (List.map (fun v -> v.v_name,false,v.v_type) vars,t) in
 		let cf = Expr.mk_class_field name tfun true p (Method MethNormal) [] in
 		let efun = mk (TFunction tf) tfun p in
 		cf.cf_expr <- Some efun;
-		let c = match gen.mtype with Some (TClassDecl c) -> c | _ -> assert false in
-		gen.add_field c cf true;
-		(*gen.run_filter cf;*)
-		Expr.mk_static_call c cf el p
+
+		gen.add_field gen.gclass cf true;
+		Expr.mk_static_call gen.gclass cf el p
 
 	let filter gen e =
 		match e.eexpr with
@@ -2487,12 +2486,34 @@ let initialize_class con c =
 		| _ -> ()
 	in
 
+	let infer_null_argument cf =
+		match cf.cf_expr,follow cf.cf_type with
+			| Some ({eexpr = TFunction tf}),TFun(args,tr) ->
+				let args = List.map2 (fun (v,co) (n,o,t) ->
+					let t = if not o && co = None then
+						t
+					else match v.v_type with
+						| TType({t_path = [],"Null"},_) ->
+							v.v_type
+						| t ->
+							v.v_type <- con.com.basic.tnull t;
+							v.v_type
+					in
+					n,o,t
+				) tf.tf_args args in
+				cf.cf_type <- TFun(args,tr);
+			| _ ->
+				()
+	in
+
 	List.iter (fun cf ->
 		(match cf.cf_expr with Some e -> Analyzer.run e | _ -> ());
 		match cf.cf_kind with
 		| Var _ -> check_closure cf
 		| Method m -> match cf.cf_type with
-			| TFun(_) -> check_dynamic cf false;
+			| TFun(_) ->
+				infer_null_argument cf;
+				check_dynamic cf false;
 			| _ -> assert false;
 	) c.cl_ordered_fields;
 
@@ -2512,8 +2533,15 @@ let initialize_class con c =
 					cf.cf_expr <- Some eassign;
 					add_init eassign;
 			end
-		| Method _ -> check_dynamic cf true;
+		| Method _ ->
+			infer_null_argument cf;
+			check_dynamic cf true;
 	) c.cl_ordered_statics;
+
+	begin match c.cl_constructor with
+		| Some cf -> infer_null_argument cf
+		| _ -> ()
+	end;
 
 	let v = Var {v_read=AccNormal;v_write=AccNormal} in
 	let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable") (TInst(con.hxc.c_vtable,[])) false null_pos v [] in
@@ -2554,7 +2582,7 @@ let initialize_constructor con c cf =
 				tf_type = con.com.basic.tvoid;
 				tf_expr = map_this tf.tf_expr;
 			} in
-			cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) t_dynamic p);
+			cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) cf_ctor.cf_type p);
 			c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
 			c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
 			let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
