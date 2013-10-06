@@ -2317,6 +2317,15 @@ and type_expr ctx (e,p) (with_type:with_type) =
 						if ctx.untyped then raise Not_found;
 						with_type_error ctx with_type (string_error s e.e_names ("Identifier '" ^ s ^ "' is not part of enum " ^ s_type_path e.e_path)) p;
 						mk (TConst TNull) t p)
+				| TAbstract (a,pl) when has_meta Meta.FakeEnum a.a_meta ->
+					let cimpl = (match a.a_impl with None -> assert false | Some c -> c) in
+					(try
+						let cf = PMap.find s cimpl.cl_statics in
+						acc_get ctx (type_field ctx (mk (TTypeExpr (TClassDecl cimpl)) (TAnon { a_fields = PMap.add cf.cf_name cf PMap.empty; a_status = ref (Statics cimpl) }) p) s p MGet) p
+					with Not_found ->
+						if ctx.untyped then raise Not_found;
+						with_type_error ctx with_type (string_error s (List.map (fun f -> f.cf_name) cimpl.cl_ordered_statics) ("Identifier '" ^ s ^ "' is not part of enum " ^ s_type_path a.a_path)) p;
+						mk (TConst TNull) t p)
 				| _ -> raise Not_found)
 			| _ ->
 				raise Not_found)
@@ -2834,6 +2843,8 @@ and type_expr ctx (e,p) (with_type:with_type) =
 				| _ -> ())
 			in
 			loop t
+		| NoValue ->
+			if name = None then display_error ctx "Unnamed lvalue functions are not supported" p
 		| _ ->
 			());
 		let ft = TFun (fun_args args,rt) in
@@ -3702,9 +3713,40 @@ let make_macro_api ctx p =
 		);
 		Interp.define_type = (fun v ->
 			let m, tdef, pos = (try Interp.decode_type_def v with Interp.Invalid_expr -> Interp.exc (Interp.VString "Invalid type definition")) in
-			let mdep = Typeload.type_module ctx m ctx.m.curmod.m_extra.m_file [tdef,pos] pos in
-			mdep.m_extra.m_kind <- MFake;
-			add_dependency mdep ctx.m.curmod;
+			let prev = (try Some (Hashtbl.find ctx.g.modules m) with Not_found -> None) in
+			let mnew = Typeload.type_module ctx m ctx.m.curmod.m_extra.m_file [tdef,pos] pos in
+			add_dependency mnew ctx.m.curmod;
+			(* if we defined a type in an existing module, let's move the types here *)
+			(match prev with
+			| None ->
+				mnew.m_extra.m_kind <- MFake;
+			| Some mold ->
+				Hashtbl.replace ctx.g.modules mnew.m_path mold;
+				mold.m_types <- mold.m_types @ mnew.m_types;
+				mnew.m_extra.m_kind <- MSub;
+				add_dependency mold mnew;
+			);
+		);
+		Interp.define_module = (fun m types ->
+			let types = List.map (fun v ->
+				let _, tdef, pos = (try Interp.decode_type_def v with Interp.Invalid_expr -> Interp.exc (Interp.VString "Invalid type definition")) in
+				tdef, pos
+			) types in
+			let m = Ast.parse_path m in
+			let pos = (match types with [] -> Ast.null_pos | (_,p) :: _ -> p) in
+			let prev = (try Some (Hashtbl.find ctx.g.modules m) with Not_found -> None) in
+			let mnew = Typeload.type_module ctx m ctx.m.curmod.m_extra.m_file types pos in
+			add_dependency mnew ctx.m.curmod;
+			(* if we defined a type in an existing module, let's move the types here *)
+			(match prev with
+			| None ->
+				mnew.m_extra.m_kind <- MFake;
+			| Some mold ->
+				Hashtbl.replace ctx.g.modules mnew.m_path mold;
+				mold.m_types <- mold.m_types @ mnew.m_types;
+				mnew.m_extra.m_kind <- MSub;
+				add_dependency mold mnew;
+			);
 		);
 		Interp.module_dependency = (fun mpath file ismacro ->
 			let m = typing_timer ctx (fun() -> Typeload.load_module ctx (parse_path mpath) p) in

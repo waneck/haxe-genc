@@ -595,7 +595,8 @@ module DefaultValues = struct
 		| TConst TNull -> Yes
 		| TConst _ | TObjectDecl _ | TArrayDecl _ | TFunction _ -> No
 		| TParenthesis e1 | TMeta(_,e1) | TCast(e1,None) -> is_null_expr e1
-		| _ -> Maybe
+		| _ ->
+			if not (is_nullable e.etype) then No else Maybe
 
 	let mk_known_call con c cf stat el =
 		match cf.cf_expr with
@@ -2800,18 +2801,14 @@ let generate com =
 		| TAbstractDecl a ->
 			begin match a.a_path with
 			| ["c"],"ConstSizeArray" ->
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				acc
 			| ["c"],"Pointer" ->
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				{acc with t_pointer = fun t -> TAbstract(a,[t])}
 			| ["c"],"ConstPointer" ->
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				{acc with t_const_pointer = fun t -> TAbstract(a,[t])}
 			| ["c"],"FunctionPointer" ->
 				{acc with t_func_pointer = fun t -> TAbstract(a,[t])}
 			| ["c"],"Int64" ->
-				a.a_meta <- (Meta.CoreType,[],Ast.null_pos) :: a.a_meta;
 				{acc with t_int64 = fun t -> TAbstract(a,[t])}
 			| ["c"],"VarArg" ->
 				{acc with t_vararg = TAbstract(a,[])}
