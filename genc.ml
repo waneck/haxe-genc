@@ -86,6 +86,7 @@ and gen_context = {
 	gcom : Common.context;
 	gcon : context;
 	mutable gfield : tclass_field;
+	mutable gstat  : bool;
 	mutable mtype : module_type option;
 	(* call this function instead of Type.map_expr () *)
 	mutable map : texpr -> texpr;
@@ -93,7 +94,7 @@ and gen_context = {
 	mutable declare_var : (tvar * texpr option) -> unit;
 	mutable declare_temp : t -> texpr option -> tvar;
 	(* runs a filter on the specified class field *)
-	mutable run_filter : tclass_field -> unit;
+	mutable run_filter : tclass_field -> bool -> unit;
 	(* adds a field to the specified class *)
 	mutable add_field : tclass -> tclass_field -> bool -> unit;
 }
@@ -337,24 +338,27 @@ module Filters = struct
 		gen.declare_var <- old_declare;
 		ret
 
-	let run_filters_field gen cf =
+	let run_filters_field gen stat cf =
 		gen.gfield <- cf;
+		gen.gstat  <- stat;
 		match cf.cf_expr with
 		| None -> ()
 		| Some e ->
 			cf.cf_expr <- Some (run_filters gen e)
 
 	let mk_gen_context con =
-		let gen = {
+		let rec gen = {
 			gcom = con.com;
 			gcon = con;
 			gfield = null_field;
+			gstat  = false;
 			mtype = None;
 			map = (function _ -> assert false);
 			declare_var = (fun _ -> assert false);
 			declare_temp = (fun _ _ -> assert false);
-			run_filter = (fun _ -> assert false);
+			run_filter = (fun _ _ -> assert false);
 			add_field = (fun c cf stat ->
+				gen.run_filter cf stat;
 				if stat then
 					c.cl_ordered_statics <- cf :: c.cl_ordered_statics
 				else
@@ -369,23 +373,23 @@ module Filters = struct
 				gen.mtype <- Some md;
 				let added = ref [] in
 				let old_run_filter = gen.run_filter in
-				gen.run_filter <- (fun cf ->
-					added := cf :: !added);
+				gen.run_filter <- (fun cf stat ->
+					added := (cf,stat) :: !added);
 
 				let fields = c.cl_ordered_fields in
 				let statics = c.cl_ordered_statics in
-				Option.may (run_filters_field gen) c.cl_constructor;
-				List.iter (run_filters_field gen) fields;
-				List.iter (run_filters_field gen) statics;
+				Option.may (run_filters_field gen false) c.cl_constructor;
+				List.iter (run_filters_field gen false) fields;
+				List.iter (run_filters_field gen true) statics;
 				gen.gfield <- null_field;
 				c.cl_init <- Option.map (run_filters gen) c.cl_init;
 
 				(* run all added fields *)
 				let rec loop () = match !added with
 					| [] -> ()
-					| hd :: tl ->
+					| (hd,stat) :: tl ->
 						added := tl;
-						run_filters_field gen hd;
+						run_filters_field gen stat hd;
 						loop ()
 				in
 				loop();
@@ -852,7 +856,7 @@ module ClosureHandler = struct
 	let add_closure_field gen c tf ethis p =
 		let cf,e_init = mk_closure_field gen tf ethis p in
 		gen.add_field c cf true;
-		gen.run_filter cf;
+		(*gen.run_filter cf;*)
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
 		Expr.wrap_function gen.gcon e_init e_field
 
@@ -1027,7 +1031,7 @@ module ExprTransformation = struct
 		cf.cf_expr <- Some efun;
 		let c = match gen.mtype with Some (TClassDecl c) -> c | _ -> assert false in
 		gen.add_field c cf true;
-		gen.run_filter cf;
+		(*gen.run_filter cf;*)
 		Expr.mk_static_call c cf el p
 
 	let filter gen e =
