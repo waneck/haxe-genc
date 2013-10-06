@@ -595,7 +595,8 @@ module DefaultValues = struct
 		| TConst TNull -> Yes
 		| TConst _ | TObjectDecl _ | TArrayDecl _ | TFunction _ -> No
 		| TParenthesis e1 | TMeta(_,e1) | TCast(e1,None) -> is_null_expr e1
-		| _ -> Maybe
+		| _ ->
+			if not (is_nullable e.etype) then No else Maybe
 
 	let mk_known_call con c cf stat el =
 		match cf.cf_expr with
