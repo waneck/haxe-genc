@@ -157,6 +157,12 @@ let alloc_temp_func con =
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
 	name, id
 
+let is_base_type t = match follow t with
+	| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
+		true
+	| _ ->
+		false
+
 module Expr = struct
 
 	let t_path t = match follow t with
@@ -1470,16 +1476,32 @@ end
 
 (* Helper *)
 
-let rec is_value_type t = match follow t with
-	| TAbstract({ a_impl = None }, _) -> true
-	| TInst(c,_) -> has_meta Meta.Struct c.cl_meta
-	| TEnum(en,_) -> Meta.has Meta.FlatEnum en.e_meta
+let rec is_value_type t =
+	match t with
+	| TType({t_path=[],"Null"},[t]) when is_base_type t ->
+		false
+	| TMono r ->
+		begin match !r with
+			| Some t -> is_value_type t
+			| _ -> false
+		end
+	| TLazy f ->
+		is_value_type (!f())
+	| TType (t,tl) ->
+		is_value_type (apply_params t.t_types tl t.t_type)
+	| TAbstract({ a_impl = None }, _) ->
+		true
+	| TInst(c,_) ->
+		has_meta Meta.Struct c.cl_meta
+	| TEnum(en,_) ->
+		Meta.has Meta.FlatEnum en.e_meta
 	| TAbstract(a,tl) ->
 		if has_meta Meta.NotNull a.a_meta then
 			true
 		else
 			is_value_type (Codegen.Abstract.get_underlying_type a tl)
-	| _ -> false
+	| _ ->
+		false
 
 let begin_loop ctx =
 	ctx.fctx.loop_stack <- None :: ctx.fctx.loop_stack;
