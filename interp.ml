@@ -115,6 +115,7 @@ type extern_api = {
 	get_build_fields : unit -> value;
 	get_pattern_locals : Ast.expr -> Type.t -> (string,Type.tvar * Ast.pos) PMap.t;
 	define_type : value -> unit;
+	define_module : string -> value list -> unit;
 	module_dependency : string -> string -> bool -> unit;
 	current_module : unit -> module_def;
 	delayed_macro : int -> (unit -> (unit -> value));
@@ -2050,7 +2051,7 @@ let haxe_float f p =
     else if (f <> f) then
         (Ast.EField (math, "NaN"), p)
     else
-        (Ast.EConst (Ast.Float (string_of_float f)), p)
+        (Ast.EConst (Ast.Float (float_repres f)), p)
 
 let macro_lib =
 	let error() =
@@ -2368,6 +2369,10 @@ let macro_lib =
 				VNull
 			| _ -> error()
 		);
+		"local_module", Fun0 (fun() ->
+			let m = (get_ctx()).curapi.current_module() in
+			VString (Ast.s_type_path m.m_path);
+		);
 		"local_type", Fun0 (fun() ->
 			match (get_ctx()).curapi.get_local_type() with
 			| None -> VNull
@@ -2408,6 +2413,14 @@ let macro_lib =
 		"define_type", Fun1 (fun v ->
 			(get_ctx()).curapi.define_type v;
 			VNull
+		);
+		"define_module", Fun2 (fun p v ->
+			match p, v with
+			| VString path, VArray vl ->
+				(get_ctx()).curapi.define_module path (Array.to_list vl);
+				VNull
+			| _ ->
+				error()
 		);
 		"add_class_path", Fun1 (fun v ->
 			match v with
@@ -3251,7 +3264,7 @@ let rec to_string ctx n v =
 	| VInt i -> string_of_int i
 	| VInt32 i -> Int32.to_string i
 	| VFloat f ->
-		let s = string_of_float f in
+		let s = float_repres f in
 		let len = String.length s in
 		if String.unsafe_get s (len - 1) = '.' then String.sub s 0 (len - 1) else s
 	| VString s -> s
@@ -3897,7 +3910,7 @@ let rec decode_path t =
 	{
 		tpackage = List.map dec_string (dec_array (field t "pack"));
 		tname = dec_string (field t "name");
-		tparams = List.map decode_tparam (dec_array (field t "params"));
+		tparams = (match field t "params" with VNull -> [] | a -> List.map decode_tparam (dec_array a));
 		tsub = opt dec_string (field t "sub");
 	}
 
@@ -3906,19 +3919,23 @@ and decode_tparam v =
 	| 0,[t] -> TPType (decode_ctype t)
 	| 1,[e] -> TPExpr (decode_expr e)
 	| _ -> raise Invalid_expr
+	
+and decode_tparams = function
+	| VNull -> []
+	| a -> List.map decode_tparam_decl (dec_array a)
 
 and decode_tparam_decl v =
 	{
 		tp_name = dec_string (field v "name");
 		tp_constraints = (match field v "constraints" with VNull -> [] | a -> List.map decode_ctype (dec_array a));
-		tp_params = (match field v "params" with VNull -> [] | a -> List.map decode_tparam_decl (dec_array a));
+		tp_params = decode_tparams (field v "params");
 	}
 
 and decode_fun v =
 	{
-		f_params = List.map decode_tparam_decl (dec_array (field v "params"));
+		f_params = decode_tparams (field v "params");
 		f_args = List.map (fun o ->
-			(dec_string (field o "name"),dec_bool (field o "opt"),opt decode_ctype (field o "type"),opt decode_expr (field o "value"))
+			(dec_string (field o "name"),(match field o "opt" with VNull -> false | v -> dec_bool v),opt decode_ctype (field o "type"),opt decode_expr (field o "value"))
 		) (dec_array (field v "args"));
 		f_type = opt decode_ctype (field v "ret");
 		f_expr = opt decode_expr (field v "expr");
@@ -3936,10 +3953,11 @@ and decode_access v =
 	| _ -> raise Invalid_expr
 
 and decode_meta_entry v =
-	MetaInfo.from_string (dec_string (field v "name")), List.map decode_expr (dec_array (field v "params")), decode_pos (field v "pos")
+	MetaInfo.from_string (dec_string (field v "name")), (match field v "params" with VNull -> [] | a -> List.map decode_expr (dec_array a)), decode_pos (field v "pos")
 
-and decode_meta_content v =
-	List.map decode_meta_entry (dec_array v)
+and decode_meta_content = function
+	| VNull -> []
+	| v -> List.map decode_meta_entry (dec_array v)
 
 and decode_field v =
 	let fkind = match decode_enum (field v "kind") with
@@ -4344,13 +4362,13 @@ let decode_type_def v =
 	let name = dec_string (field v "name") in
 	let meta = decode_meta_content (field v "meta") in
 	let pos = decode_pos (field v "pos") in
-	let isExtern = dec_bool (field v "isExtern") in
+	let isExtern = (match field v "isExtern" with VNull -> false | v -> dec_bool v) in
 	let fields = List.map decode_field (dec_array (field v "fields")) in
 	let mk fl dl =
 		{
 			d_name = name;
 			d_doc = None;
-			d_params = List.map decode_tparam_decl (dec_array (field v "params"));
+			d_params = decode_tparams (field v "params");
 			d_meta = meta;
 			d_flags = fl;
 			d_data = dl;
@@ -4397,6 +4415,11 @@ let decode_type_def v =
 		EAbstract(mk flags fields)
 	| _ ->
 		raise Invalid_expr
+	) in
+	(* if our package ends with an uppercase letter, then it's the module name *)
+	let pack,name = (match List.rev pack with
+		| last :: l when not (is_lower_ident last) -> List.rev l, last
+		| _ -> pack, name
 	) in
 	(pack, name), tdef, pos
 
