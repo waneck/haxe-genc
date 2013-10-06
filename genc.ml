@@ -104,6 +104,11 @@ and gen_context = {
 
 and filter = gen_context->(texpr->texpr)
 
+type answer =
+	| Yes
+	| No
+	| Maybe
+
 let rec follow t =
 	match t with
 	| TMono r ->
@@ -271,7 +276,12 @@ module Expr = struct
 			| TType({t_path=[],"Null"},[t]) when is_base_type t ->
 				e
 			| _ ->
-				mk_cast (mk_obj_decl ["value",e] e.epos) (com.basic.tnull e.etype)
+				let e_null = mk (TConst TNull) (mk_mono()) e.epos in
+				let e_cond = mk_binop OpEq e_null e e.etype e.epos in
+				let e_obj = mk_obj_decl ["value",e] e.epos in
+				let t_null = com.basic.tnull e.etype in
+				let e_if = mk (TIf(e_cond,e_null,Some e_obj)) t_null e.epos in
+				e_if
 
 	let unbox com e =
 		match e.eexpr,e.etype with
@@ -575,6 +585,12 @@ module DefaultValues = struct
 		| _ ->
 			Type.map_expr gen.map e
 
+	let rec is_null_expr e = match e.eexpr with
+		| TConst TNull -> Yes
+		| TConst _ | TObjectDecl _ | TArrayDecl _ | TFunction _ -> No
+		| TParenthesis e1 | TMeta(_,e1) | TCast(e1,None) -> is_null_expr e1
+		| _ -> Maybe
+
 	let mk_known_call con c cf el =
 		match cf.cf_expr with
 		| Some ({eexpr = TFunction tf}) ->
@@ -582,6 +598,8 @@ module DefaultValues = struct
 				| (_,Some co) :: args,([] as el | ({eexpr = TConst TNull} :: el)) ->
 					(Codegen.mk_const_texpr con.com cf.cf_pos co) :: loop args el
 				| _ :: args,e :: el ->
+					(* cancel if we cannot tell whether or not the argument is null *)
+					if is_null_expr e = Maybe then raise Exit;
 					e :: loop args el
 				| [],[] ->
 					[]
@@ -595,12 +613,13 @@ module DefaultValues = struct
 			let el = loop tf.tf_args el in
 			Expr.mk_static_call_2 c name el cf.cf_pos
 		| _ ->
-			assert false
+			raise Exit
 
 	let handle_call_site gen = function e ->
 		match e.eexpr with
  		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta && cf.cf_name <> "new" ->
-			gen.map (mk_known_call gen.gcon c cf el)
+			begin try gen.map (mk_known_call gen.gcon c cf el)
+			with Exit -> e end
 		| _ ->
 			Type.map_expr gen.map e
 end
