@@ -73,7 +73,7 @@ import c.CString.memcmp;
 	}
 
 
-	public function indexOf( str : String, ?startIndex : Int ):Int {
+	public function indexOf( str : String, ?startIndex:Int = 0 ):Int {
 		if (str.length == 0){
 			return 0;
 		}
@@ -88,7 +88,7 @@ import c.CString.memcmp;
 		return ret > -1 ? startIndex+ret : -1;
 	}
 
-	public function lastIndexOf( str : String, ?startIndex : Int ):Int {
+	public function lastIndexOf( str : String, ?startIndex : Int = 0 ):Int {
 		if (str.length == 0)
 			return length-1;
 		else if (str.length < 0 || str.length > length)
