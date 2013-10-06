@@ -378,10 +378,13 @@ module Filters = struct
 			run_filter = (fun _ _ -> assert false);
 			add_field = (fun c cf stat ->
 				gen.run_filter cf stat;
-				if stat then
-					c.cl_ordered_statics <- cf :: c.cl_ordered_statics
-				else
-					c.cl_ordered_fields <- cf :: c.cl_ordered_fields);
+				if stat then begin
+					c.cl_ordered_statics <- cf :: c.cl_ordered_statics;
+					c.cl_statics <- PMap.add cf.cf_name cf c.cl_statics;
+				end else begin
+					c.cl_ordered_fields <- cf :: c.cl_ordered_fields;
+					c.cl_fields <- PMap.add cf.cf_name cf c.cl_fields;
+				end);
 		} in
 		gen
 
