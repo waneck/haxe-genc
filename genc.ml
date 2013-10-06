@@ -157,7 +157,7 @@ let alloc_temp_func con =
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
 	name, id
 
-let is_base_type t = match follow t with
+let is_base_type t = match t with
 	| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
 		true
 	| _ ->
@@ -1696,6 +1696,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			ctx.con.com.error ("Unknown Lib function: " ^ cf.cf_name) e.epos
 		end
 	| TField(_,FStatic({cl_path = ["c"],"Lib"}, {cf_name="callMain"})),[] ->
+		add_dependency ctx DFull (["c"],"Init");
 		begin match ctx.con.com.main with
 			| Some e -> generate_expr ctx false e
 			| None -> ()
@@ -2391,7 +2392,7 @@ let generate_anon con name fields =
 let generate_init_file con =
 	let ctx = mk_type_context con (["c"],"Init") in
 	ctx.buf <- ctx.buf_c;
-	print ctx "void _hx_init() {";
+	spr ctx "void _hx_init() {";
 	let b = open_block ctx in
 	List.iter (fun path ->
 		add_dependency ctx DForward path;
@@ -2401,6 +2402,8 @@ let generate_init_file con =
 	b();
 	newline ctx;
 	spr ctx "}";
+	ctx.buf <- ctx.buf_h;
+	spr ctx "void _hx_init();";
 	close_type_context ctx
 
 let generate_make_file con =
