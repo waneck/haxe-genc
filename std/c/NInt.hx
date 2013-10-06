@@ -1,6 +1,7 @@
 
 package c;
 
+@:coreType
 @:int("int64")
 abstract Int64(Int) from Int {
 	@:extern public inline function new(v:Int){

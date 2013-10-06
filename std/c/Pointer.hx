@@ -24,6 +24,7 @@ package c;
 import c.Types;
 
 @:runtimeValue
+@:coreType
 abstract Pointer<T>(Int) {
 	public inline function new(i:Int) {
 		this = untyped i;
@@ -67,6 +68,7 @@ abstract Pointer<T>(Int) {
 	}
 }
 
+@:coreType
 abstract ConstPointer<T>(Pointer<T>) {
 	public inline function new(ptr) this = ptr;
 

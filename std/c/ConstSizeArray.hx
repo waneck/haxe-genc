@@ -21,6 +21,7 @@
  */
 package c;
 
+@:coreType
 @:runtimeValue
 abstract ConstSizeArray<T, Const>(Pointer<T>)
 {
