@@ -157,6 +157,12 @@ let alloc_temp_func con =
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
 	name, id
 
+let is_base_type t = match t with
+	| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
+		true
+	| _ ->
+		false
+
 module Expr = struct
 
 	let t_path t = match follow t with
@@ -433,7 +439,7 @@ module DefaultValues = struct
 				| Some c ->
 					let eloc = Expr.mk_local v e.epos in
 					let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono()) e.epos) eloc gen.gcom.basic.tbool e.epos) in
-					let eassign = Codegen.binop OpAssign eloc (mk (TConst c) v.v_type e.epos) v.v_type e.epos in
+					let eassign = Codegen.binop OpAssign eloc (mk (TConst c) (follow v.v_type) e.epos) v.v_type e.epos in
 					let eif = mk (TIf(econd,eassign,None)) gen.gcom.basic.tvoid e.epos in
 					Codegen.concat eif e
 			) tf.tf_expr tf.tf_args in
@@ -475,32 +481,36 @@ module TypeChecker = struct
 
 	let box com e =
 		match e.etype with
-			| TType({t_path=[],"Null"},_) ->
+			| TType({t_path=[],"Null"},[t]) when is_base_type t ->
 				e
 			| _ ->
-				com.warning "Box!" e.epos;
-				{e with etype = com.basic.tnull e.etype}
+				Expr.mk_cast (Expr.mk_obj_decl ["value",e] e.epos) (com.basic.tnull e.etype)
 
 	let unbox com e =
-		match e.etype with
-			| TType({t_path=[],"Null"},[t]) ->
-				com.warning "Unbox!" e.epos;
-				{e with etype = t}
+		match e.eexpr,e.etype with
+			| TConst TNull,_ ->
+				e
+			| _,TType({t_path=[],"Null"},[t]) when is_base_type t ->
+				mk (TField(e,FDynamic "value")) t e.epos
 			| _ ->
 				e
 
 	let rec check gen e t =
-		match e.etype,t with
-		| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_),TType({t_path=[],"Null"},_) ->
-			begin match e.eexpr with
-				| TConst TNull ->
-					e
-				| _ ->
-					box gen.gcom e
-			end
-		| TType({t_path=[],"Null"},_),TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
-			unbox gen.gcom e
-		| _ ->
+		let e = match e.etype,t with
+			| _,TType({t_path=[],"Null"},_) when is_base_type e.etype ->
+				begin match e.eexpr with
+					| TConst TNull ->
+						e
+					| _ ->
+						box gen.gcom e
+				end
+			| TType({t_path=[],"Null"},_),_ when is_base_type t ->
+				unbox gen.gcom e
+			| TType({t_path=[],"Null"},_),TAbstract({a_path = ["c"],"VarArg"},_) ->
+				unbox gen.gcom e
+			| _ ->
+				e
+		in
 		match e.eexpr,follow t with
 		| TObjectDecl fl,(TAnon an as ta) ->
 			let fields = sort_anon_fields (pmap_to_list an.a_fields) in
@@ -548,11 +558,14 @@ module TypeChecker = struct
 		List.rev (loop [] el tl)
 
 	let fstack = ref []
+	let is_call_expr = ref false
 
 	let filter gen = function e ->
 		match e.eexpr with
 		| TBinop(OpAssign,e1,e2) ->
 			{e with eexpr = TBinop(OpAssign,gen.map e1,check gen (gen.map e2) e1.etype)}
+		| TBinop(OpEq | OpNotEq as op,e1,e2) ->
+			{e with eexpr = TBinop(op,gen.map e1,gen.map e2)}
 		| TBinop(op,e1,e2) ->
 			{e with eexpr = TBinop(op,gen.map (unbox gen.gcom e1),gen.map (unbox gen.gcom e2))}
 		| TVars vl ->
@@ -566,9 +579,12 @@ module TypeChecker = struct
 		| TLocal v ->
 			{ e with etype = v.v_type }
 		| TCall(e1,el) ->
+			is_call_expr := true;
+			let e1 = gen.map e1 in
+			is_call_expr := false;
 			begin match follow e1.etype with
 				| TFun(args,_) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,_)]) ->
-					{e with eexpr = TCall(gen.map e1,check_call_params gen el args)}
+					{e with eexpr = TCall(e1,check_call_params gen el args)}
 				| _ -> Type.map_expr gen.map e
 			end
 		| TNew(c,tl,el) ->
@@ -614,6 +630,9 @@ module TypeChecker = struct
 			etf
 		| TThrow e1 ->
 			{ e with eexpr = TThrow (check gen e1 e1.etype) }
+(* 		| TField(e1,(FInstance(_) as fa)) when not !is_call_expr ->
+			let e1 = gen.map e1 in
+			Expr.mk_cast {e with eexpr = TField(e1,fa)} e.etype *)
 		| _ ->
 			Type.map_expr gen.map e
 
@@ -903,15 +922,15 @@ end
 
 module ArrayHandler = struct
 
-	let get_type_size tp = match tp with
+	let get_type_size hxc tp = match tp with
 	| TAbstract ( { a_path =[], "Int" } ,_ )
-	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32"
-	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16") } ,_ ) -> "16"
-	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hc_char" | "hx_uchar") } ,_ ) -> "8"
+	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32",(fun e -> e)
+	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16") } ,_ ) -> "16",(fun e -> e)
+	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hc_char" | "hx_uchar") } ,_ ) -> "8",(fun e -> e)
 	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
-	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64"
+	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))
 	(* FIXME: should we include ConstSizeArray here? *)
-	| _ -> "64"
+	| _ -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))
 
 	let rec mk_specialization_call c n suffix ethis el p =
 		let name = if suffix = "" then n else n ^ "_" ^ suffix in
@@ -936,7 +955,7 @@ module ArrayHandler = struct
 				| TAbstract({a_path=["c"], "Pointer"},[t]) ->
 					{e with eexpr = TArray(gen.map e1, gen.map e2)}
 				| TInst(c,[tp]) ->
-					let suffix = get_type_size (follow tp) in
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
 					Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(gen.map e1,[tp])) [gen.map e2] e.epos) tp
 				| _ ->
 					raise Not_found
@@ -947,8 +966,8 @@ module ArrayHandler = struct
 			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
-					let suffix = get_type_size (follow tp) in
-					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [gen.map e2; Expr.mk_cast (gen.map ev) tp] e.epos
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
+					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [gen.map e2; cast (gen.map ev)] e.epos
 				| _ ->
 					raise Not_found
 			end with Not_found ->
@@ -957,7 +976,7 @@ module ArrayHandler = struct
 		| TCall( ({eexpr = (TField (ethis,FInstance(c,({cf_name = cfname })))) }) ,el) ->
 			begin try begin match follow ethis.etype with
 				| TInst({cl_path = [],"Array"},[tp]) ->
-					let suffix = get_type_size (follow tp) in
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
 					Expr.mk_cast (mk_specialization_call c cfname suffix (Some(ethis,[tp])) (List.map gen.map el) e.epos) e.etype
 				| _ ->
 					raise Not_found
@@ -992,7 +1011,8 @@ module ExprTransformation = struct
 			(v :: vl,e :: el,i + 1)
 		) ([],[eret],0) el in
 		let vars = List.rev vars in
-		let enew = ArrayHandler.mk_specialization_call c_array "__new" (ArrayHandler.get_type_size tparam) None [Expr.mk_int gen.gcon.com arity p] p in
+		let suffix,_ = ArrayHandler.get_type_size gen.gcon.hxc tparam in
+		let enew = ArrayHandler.mk_specialization_call c_array "__new" suffix  None [Expr.mk_int gen.gcon.com arity p] p in
 		let evar = mk (TVars [v,Some enew]) gen.gcom.basic.tvoid p in
 		let e = mk (TBlock (evar :: einit)) t p in
 		let tf = {
@@ -1161,9 +1181,6 @@ let close_type_context ctx =
 	let relpath path = path_to_file_path ((get_relative_path ctx.type_path path),snd path) in
 	spr (Printf.sprintf "#ifndef %s\n" n);
 	spr (Printf.sprintf "#define %s\n" n);
-	spr "#include <stdio.h>\n";
-	spr "#include <stdlib.h>\n";
-	spr "#include <string.h>\n";
 	if ctx.type_path <> ([],"hxc") then spr (Printf.sprintf "#include \"%s.h\"\n" (relpath ([],"hxc")));
 
 	PMap.iter (fun path dept ->
@@ -1470,16 +1487,32 @@ end
 
 (* Helper *)
 
-let rec is_value_type t = match follow t with
-	| TAbstract({ a_impl = None }, _) -> true
-	| TInst(c,_) -> has_meta Meta.Struct c.cl_meta
-	| TEnum(en,_) -> Meta.has Meta.FlatEnum en.e_meta
+let rec is_value_type t =
+	match t with
+	| TType({t_path=[],"Null"},[t]) when is_base_type t ->
+		false
+	| TMono r ->
+		begin match !r with
+			| Some t -> is_value_type t
+			| _ -> false
+		end
+	| TLazy f ->
+		is_value_type (!f())
+	| TType (t,tl) ->
+		is_value_type (apply_params t.t_types tl t.t_type)
+	| TAbstract({ a_impl = None }, _) ->
+		true
+	| TInst(c,_) ->
+		has_meta Meta.Struct c.cl_meta
+	| TEnum(en,_) ->
+		Meta.has Meta.FlatEnum en.e_meta
 	| TAbstract(a,tl) ->
 		if has_meta Meta.NotNull a.a_meta then
 			true
 		else
 			is_value_type (Codegen.Abstract.get_underlying_type a tl)
-	| _ -> false
+	| _ ->
+		false
 
 let begin_loop ctx =
 	ctx.fctx.loop_stack <- None :: ctx.fctx.loop_stack;
@@ -1530,6 +1563,13 @@ let escape_name n =
 (* Type signature *)
 
 let rec s_type ctx t =
+	match t with
+	| TType({t_path=[],"Null"},[t]) when is_base_type t ->
+		s_type ctx (TAnon {
+			a_status = ref Closed;
+			a_fields = PMap.add "value" (Expr.mk_class_field "value" t true Ast.null_pos (Var {v_read = AccNormal;v_write=AccNormal}) []) PMap.empty (* TODO: this is a bit silly *)
+		})
+	| _ ->
 	match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
@@ -1661,16 +1701,19 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			ctx.con.com.error ("Unknown Lib function: " ^ cf.cf_name) e.epos
 		end
 	| TField(_,FStatic({cl_path = ["c"],"Lib"}, {cf_name="callMain"})),[] ->
+		add_dependency ctx DFull (["c"],"Init");
 		begin match ctx.con.com.main with
 			| Some e -> generate_expr ctx false e
 			| None -> ()
 		end
 	| TField(_,FStatic(c,({cf_name = name} as cf))),el when Meta.has Meta.Plain cf.cf_meta ->
+		add_class_dependency ctx c;
 		ignore(check_include_meta ctx c.cl_meta);
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
-	| TField(_,FStatic(_,cf)),el when Meta.has Meta.Native cf.cf_meta ->
+	| TField(_,FStatic(c,cf)),el when Meta.has Meta.Native cf.cf_meta ->
+		add_class_dependency ctx c;
 		let name = match get_native_name cf.cf_meta with
 			| Some s -> s
 			| None -> ctx.con.com.error "String argument expected for @:native" e.epos; "_"
@@ -2356,7 +2399,7 @@ let generate_anon con name fields =
 let generate_init_file con =
 	let ctx = mk_type_context con (["c"],"Init") in
 	ctx.buf <- ctx.buf_c;
-	print ctx "void _hx_init() {";
+	spr ctx "void _hx_init() {";
 	let b = open_block ctx in
 	List.iter (fun path ->
 		add_dependency ctx DForward path;
@@ -2366,6 +2409,8 @@ let generate_init_file con =
 	b();
 	newline ctx;
 	spr ctx "}";
+	ctx.buf <- ctx.buf_h;
+	spr ctx "void _hx_init();";
 	close_type_context ctx
 
 let generate_make_file con =
