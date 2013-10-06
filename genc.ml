@@ -477,9 +477,12 @@ module DefaultValues = struct
 		with Exit ->
 			Mixed
 
+	let fstack = ref []
+
 	let filter gen = function e ->
 		match e.eexpr with
 		| TFunction tf ->
+			fstack := tf :: !fstack;
 			let replace_locals subst e =
 				let rec replace e = match e.eexpr with
 					| TLocal v ->
@@ -523,14 +526,10 @@ module DefaultValues = struct
 				let el = (replace_locals subst e) :: el in
 				Expr.mk_block gen.gcon e.epos (List.rev el)
 			in
-			begin match get_fmode tf e.etype with
-				| Mixed ->
-					let e = handle_default_assign tf.tf_expr in
-					{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
-				| Given ->
-					e
+			let e = match get_fmode tf e.etype with
 				| Default ->
-					let name = alloc_temp_func gen.gcon in
+					let is_field_func = match !fstack with [_] -> true | _ -> false in
+					let name = if is_field_func then (mk_runtime_prefix ("known_" ^ gen.gfield.cf_name)) else alloc_temp_func gen.gcon in
 					let subst,tf_args = List.fold_left (fun (subst,args) (v,_) ->
 						let vr = alloc_var v.v_name (follow v.v_type) in
 						((v,vr) :: subst),((vr,None) :: args)
@@ -550,7 +549,14 @@ module DefaultValues = struct
 					let e_call = Expr.mk_static_call gen.gclass cf_given e_args e.epos in
 					let e_call = handle_default_assign e_call in
 					{ e with eexpr = TFunction({tf with tf_expr = e_call})}
-			end
+				| Given ->
+					e
+				| Mixed ->
+					let e = handle_default_assign tf.tf_expr in
+					{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
+			in
+			fstack := List.tl !fstack;
+			e
 		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
 			let s = match follow e1.etype with
 				| TAbstract({a_path=[],"Int"},_) -> "i"
