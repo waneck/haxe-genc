@@ -2576,7 +2576,7 @@ let initialize_constructor con c cf =
 				tf_type = con.com.basic.tvoid;
 				tf_expr = map_this tf.tf_expr;
 			} in
-			cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) t_dynamic p);
+			cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) cf_ctor.cf_type p);
 			c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
 			c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
 			let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
