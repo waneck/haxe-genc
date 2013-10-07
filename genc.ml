@@ -85,11 +85,8 @@ and gen_context = {
 	gcom : Common.context;
 	gcon : context;
 	mutable gfield : tclass_field;
-
 	mutable gstat  : bool;
-
 	mutable gclass : tclass;
-
 	(* call this function instead of Type.map_expr () *)
 	mutable map : texpr -> texpr;
 	(* tvar_decl -> unit; declares a variable on the current block *)
@@ -122,17 +119,6 @@ let rec follow t =
 	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
 		follow (Codegen.Abstract.get_underlying_type a pl)
 	| _ -> t
-
-(*module Analyzer = struct
-	let assigns_to_trace = ref false
-
-	let rec run e =
-		match e.eexpr with
-		| TBinop(OpAssign, {eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"}, {cf_name = "trace"}))}, _) ->
-			assigns_to_trace := true
-		| _ ->
-			Type.iter run e
-end*)
 
 
 (* Helper *)
@@ -203,9 +189,9 @@ module Expr = struct
 	let mk_local v p =
 		{ eexpr = TLocal v; etype = v.v_type; epos = p }
 
-	let mk_block con p el =
+	let mk_block com p el =
 		let t = match List.rev el with
-			| [] -> con.com.basic.tvoid
+			| [] -> com.basic.tvoid
 			| hd :: _ -> hd.etype
 		in
 		mk (TBlock el) t p
@@ -213,8 +199,8 @@ module Expr = struct
 	let mk_cast e t =
 		{ e with eexpr = TCast(e, None); etype = t }
 
-	let mk_deref con p e =
-		mk_static_call con.hxc.c_lib con.hxc.cf_deref [e] p
+	let mk_deref hxc p e =
+		mk_static_call hxc.c_lib hxc.cf_deref [e] p
 
 	let mk_ccode con s p =
 		mk_static_call_2 con.hxc.c_lib "cCode" [mk (TConst (TString s)) con.com.basic.tstring p] p
@@ -260,13 +246,13 @@ module Expr = struct
 		) ([],false) el in
 		mk (TBlock (List.rev el)) e.etype e.epos,found
 
-	let wrap_function con ethis efunc =
-		let c,t = match con.hxc.t_closure t_dynamic with TInst(c,_) as t -> c,t | _ -> assert false in
+	let wrap_function hxc ethis efunc =
+		let c,t = match hxc.t_closure t_dynamic with TInst(c,_) as t -> c,t | _ -> assert false in
 		let cf_func = PMap.find "_func" c.cl_fields in
 		mk (TNew(c,[efunc.etype],[mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
 
-	let wrap_static_function con efunc =
-		wrap_function con (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
+	let wrap_static_function hxc efunc =
+		wrap_function hxc (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
 
 	let add_meta m e =
 		mk (TMeta((m,[],e.epos),e)) e.etype e.epos
@@ -445,7 +431,7 @@ module VarDeclarations = struct
 			) tvars in
 			(match el with
 			| [e] -> e
-			| _ -> Expr.mk_block gen.gcon e.epos el)
+			| _ -> Expr.mk_block gen.gcom e.epos el)
 		| _ ->
 			Type.map_expr gen.map e
 
@@ -535,7 +521,7 @@ module DefaultValues = struct
 						subst,(eif :: el)
 				) ([],[]) tf.tf_args in
 				let el = (fst (replace_locals subst e)) :: el in
-				Expr.mk_block gen.gcon p (List.rev el)
+				Expr.mk_block gen.gcom p (List.rev el)
 			in
 			let e = match get_fmode tf e.etype with
 				| Default ->
@@ -676,6 +662,7 @@ end
 	It may perform the following transformations:
 		- pad TObjectDecl with null for optional arguments
 		- use Array as argument list to "rest" argument
+		- box and unbox basic types
 *)
 module TypeChecker = struct
 
@@ -817,7 +804,6 @@ end
 	- wraps String literals in String
 	- translates String OpAdd to String.concat
 	- translates String == String to String.equals
-	- translates switch(String) to if-chain
 *)
 module StringHandler = struct
 	let is_string t = match follow t with
@@ -851,6 +837,10 @@ module StringHandler = struct
 			Type.map_expr gen.map e
 end
 
+(*
+	- converts TPatMatch to TSwitch
+	- converts TSwitch on String to an if/else chain
+*)
 module SwitchHandler = struct
 	let filter gen e =
 		match e.eexpr with
@@ -898,7 +888,7 @@ module SwitchHandler = struct
 				let edt = mk_dt dt in
 				(Codegen.concat elabel edt) :: acc,i + 1
 			) ([],0) dt.dt_dt_lookup in
-			let e = gen.map (Expr.mk_block gen.gcon e.epos el) in
+			let e = gen.map (Expr.mk_block gen.gcom e.epos el) in
 			let e = Expr.add_meta (Meta.Custom ":patternMatching") e in
 			List.iter (fun (v,_) -> check_var_name v) dt.dt_var_init;
 			let einit = mk (TVars dt.dt_var_init) gen.gcom.basic.tvoid e.epos in
@@ -1027,7 +1017,7 @@ module ClosureHandler = struct
 		let cf,e_init = mk_closure_field gen tf ethis p in
 		gen.add_field c cf true;
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
-		Expr.wrap_function gen.gcon e_init e_field
+		Expr.wrap_function gen.gcon.hxc e_init e_field
 
 	let is_call_expr = ref false
 	let is_extern = ref false
@@ -1084,13 +1074,18 @@ module ClosureHandler = struct
 			is_extern := snd old;
 			e
 		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not !is_extern ->
-			Expr.wrap_static_function gen.gcon (Expr.mk_static_field c cf e.epos)
+			Expr.wrap_static_function gen.gcon.hxc (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
 			Type.map_expr gen.map e
 end
 
+(*
+	- translates a[b] to a.__get(b) if such a method exists
+	- translates a[b] = c to a.__set(b, c) if such a method exists
+	- finds specialization calls and applies their suffix
+*)
 module ArrayHandler = struct
 
 	let get_type_size hxc tp = match tp with
@@ -1206,7 +1201,7 @@ module ExprTransformation = struct
 			let p = e.epos in
 			let hxc = gen.gcon.hxc in
 			let epush = Expr.mk_static_call_2 hxc.c_exception "push" [] p in
-			let esubj = Codegen.mk_parent (Expr.mk_static_call_2 hxc.c_csetjmp "setjmp" [Expr.mk_deref gen.gcon p epush] p) in
+			let esubj = Codegen.mk_parent (Expr.mk_static_call_2 hxc.c_csetjmp "setjmp" [Expr.mk_deref gen.gcon.hxc p epush] p) in
 			let epop = Expr.mk_static_call_2 hxc.c_exception "pop" [] p in
 			let loc = gen.declare_temp (hxc.t_pointer hxc.t_jmp_buf) None in
 			let epopassign = mk (TVars [loc,Some epop]) gen.gcon.com.basic.tvoid p in
@@ -1232,7 +1227,7 @@ module ExprTransformation = struct
 			let p = e.epos in
 			let eassign = Codegen.binop OpAssign (Expr.mk_static_field_2 gen.gcon.hxc.c_exception "thrownObject" p) e1 e1.etype e1.epos in
 			let epeek = Expr.mk_static_call_2 gen.gcon.hxc.c_exception "peek" [] p in
-			let el = [Expr.mk_deref gen.gcon p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
+			let el = [Expr.mk_deref gen.gcon.hxc p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
 			let ejmp = Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p in
 			Codegen.concat eassign ejmp
 		| TArrayDecl [] ->
@@ -1248,6 +1243,9 @@ module ExprTransformation = struct
 
 end
 
+(*
+	- translates TFor to TWhile
+*)
 module ExprTransformation2 = struct
 
 	let filter gen e =
@@ -1329,21 +1327,21 @@ let mk_type_context con path =
 
 let path_to_file_path (pack,name) = match pack with [] -> name | _ -> String.concat "/" pack ^ "/" ^ name
 
-let get_relative_path source target =
-	let rec loop pl1 pl2 acc = match pl1,pl2 with
-		| s1 :: pl1,[] ->
-			loop pl1 [] (".." :: acc)
-		| [],s2 :: pl2 ->
-			loop [] pl2 (s2 :: acc)
-		| s1 :: pl1,s2 :: pl2 ->
-			if s1 = s2 then loop pl1 pl2 acc
-			else (List.map (fun _ -> "..") (s1 :: pl1)) @ [s2] @ pl2
-		| [],[] ->
-			List.rev acc
-	in
-	loop (fst source) (fst target) []
-
 let close_type_context ctx =
+	let get_relative_path source target =
+		let rec loop pl1 pl2 acc = match pl1,pl2 with
+			| s1 :: pl1,[] ->
+				loop pl1 [] (".." :: acc)
+			| [],s2 :: pl2 ->
+				loop [] pl2 (s2 :: acc)
+			| s1 :: pl1,s2 :: pl2 ->
+				if s1 = s2 then loop pl1 pl2 acc
+				else (List.map (fun _ -> "..") (s1 :: pl1)) @ [s2] @ pl2
+			| [],[] ->
+				List.rev acc
+		in
+		loop (fst source) (fst target) []
+	in
 	ctx.con.generated_types <- ctx :: ctx.con.generated_types;
 	let buf = Buffer.create (Buffer.length ctx.buf_h) in
 	let spr = Buffer.add_string buf in
@@ -1393,9 +1391,6 @@ let close_type_context ctx =
 
 (* Dependency handling *)
 
-let add_dependency ctx dept path =
-	if path <> ctx.type_path then ctx.dependencies <- PMap.add path dept ctx.dependencies
-
 let parse_include com s p =
 	if s.[0] = '<' then begin
 		if s.[String.length s - 1] <> '>' then com.error "Invalid include directive" p;
@@ -1408,6 +1403,9 @@ let parse_include com s p =
 		([],String.sub s 1 i),DCStd
 	end else
 		([],s),DForward
+
+let add_dependency ctx dept path =
+	if path <> ctx.type_path then ctx.dependencies <- PMap.add path dept ctx.dependencies
 
 let check_include_meta ctx meta =
 	try
@@ -1452,8 +1450,6 @@ let add_type_dependency ctx t = match follow t with
 	| _ ->
 		(* TODO: that doesn't seem quite right *)
 		add_dependency ctx DForward ([],"Dynamic")
-
-
 
 
 module VTableHandler = struct
@@ -1631,7 +1627,7 @@ module VTableHandler = struct
 				) t_int null_pos in
 			let e_alloc = Expr.mk_static_call_2 cstdlib "malloc" [e_allocsize] null_pos in
 			let e_assign_ptr = (Expr.mk_binop OpAssign e_vt e_alloc t_voidp null_pos) in
-			let e_block =  Expr.mk_block con null_pos (e_assign_ptr :: l_easgn) in
+			let e_block =  Expr.mk_block con.com null_pos (e_assign_ptr :: l_easgn) in
 			c.cl_init <- ( match c.cl_init with
 			| Some code -> Some (Codegen.concat e_block code)
 			| None      -> Some e_block )
@@ -1735,6 +1731,7 @@ let keywords =
 
 let escape_name n =
 	if Hashtbl.mem keywords n then mk_runtime_prefix n else n
+
 
 (* Type signature *)
 
@@ -2231,8 +2228,6 @@ let generate_method ctx c cf stat =
 	newline ctx;
 	spr ctx "\n"
 
-
-(*let mk_class_field name t public pos kind params =*)
 let generate_header_fields ctx =
 	let v = Var {v_read=AccNormal;v_write=AccNormal} in
 	let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable" )
@@ -2240,8 +2235,6 @@ let generate_header_fields ctx =
 	let cf_hd = Expr.mk_class_field (mk_runtime_prefix "header" )
 		(ctx.con.hxc.t_int64 t_dynamic) false null_pos v [] in
 	[cf_vt;cf_hd]
-
-
 
 let generate_class ctx c =
 	let vars = DynArray.create () in
@@ -2298,7 +2291,6 @@ let generate_class ctx c =
 			f.cf_expr <- Some (mk (TFunction tf) t c.cl_pos);
 			DynArray.add methods (f,true)
 	end;
-
 
 
 	ctx.buf <- ctx.buf_c;
@@ -2513,7 +2505,7 @@ let generate_type con mt = match mt with
 	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
 		let ctx = mk_type_context con a.a_path in
 		ctx.buf <- ctx.buf_c;
-		spr ctx " ";
+		spr ctx " "; (* write something so the .c file is generated *)
 		close_type_context ctx
 	| _ ->
 		()
@@ -2639,7 +2631,7 @@ let initialize_class con c =
 				c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
 				let ef1 = Expr.mk_static_field c cf cf.cf_pos in
 				let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
-				let ef2 = Expr.wrap_static_function con ef2 in
+				let ef2 = Expr.wrap_static_function con.hxc ef2 in
 				add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
 			end else begin
 				c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
@@ -2769,7 +2761,7 @@ let initialize_constructor con c cf =
 		let tf = {
 			tf_args = tf.tf_args;
 			tf_type = t_class;
-			tf_expr = Expr.mk_block con p (e_vars :: el_vt @ [e_init;e_return]);
+			tf_expr = Expr.mk_block con.com p (e_vars :: el_vt @ [e_init;e_return]);
 		} in
 		cf.cf_expr <- Some {e with eexpr = TFunction tf};
 		cf.cf_type <- TFun(args, t_class)
@@ -2894,7 +2886,7 @@ let generate com =
 
 	let gen = Filters.mk_gen_context con in
 	List.iter (Filters.add_filter gen) filters;
-	ignore(Filters.run_filters_types gen);
+	Filters.run_filters_types gen;
 	let filters = [
 		VarDeclarations.filter;
 		ExprTransformation.filter;
@@ -2907,7 +2899,7 @@ let generate com =
 	] in
 	let gen = Filters.mk_gen_context con in
 	List.iter (Filters.add_filter gen) filters;
-	ignore(Filters.run_filters_types gen);
+	Filters.run_filters_types gen;
 
 	List.iter (generate_type con) com.types;
 	let rec loop () =
