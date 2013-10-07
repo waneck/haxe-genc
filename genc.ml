@@ -1902,6 +1902,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			spr ctx (full_field_name c cf)
 		else
 			let (meta,el,epos) = Meta.get (Meta.Custom ":overridden") cf.cf_meta in
+			add_class_dependency ctx ctx.con.hxc.c_vtable;
 			(match (meta,el,pos) with
 			| (_,[EConst(Int idx),p],_) ->
 				let oldbuf = ctx.buf in
@@ -2289,7 +2290,6 @@ let generate_class ctx c =
 
 	let path = path_to_name c.cl_path in
 
-	if Meta.has (Meta.Custom ":hasvtable") c.cl_meta then
 		List.iter(fun v ->
 			DynArray.insert vars 0 v;
 			c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
@@ -2513,8 +2513,7 @@ let generate_type con mt = match mt with
 		else
 			generate_enum ctx en;
 		close_type_context ctx;
-	| TAbstractDecl { a_path = [],"Void" }
-	| TAbstractDecl { a_path = ["c"],"ConstSizeArray" } -> ()
+	| TAbstractDecl { a_path = [],"Void" } -> ()
 	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
 		let ctx = mk_type_context con a.a_path in
 		ctx.buf <- ctx.buf_c;
