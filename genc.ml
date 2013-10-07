@@ -1424,8 +1424,11 @@ let check_include_meta ctx meta =
 		false
 
 let add_class_dependency ctx c =
-	if not (check_include_meta ctx c.cl_meta) && not c.cl_extern then
-		add_dependency ctx (if Meta.has Meta.Struct c.cl_meta then DFull else DForward) c.cl_path
+	match c.cl_kind with
+	| KTypeParameter _ -> ()
+	| _ ->
+		if not (check_include_meta ctx c.cl_meta) && not c.cl_extern then
+			add_dependency ctx (if Meta.has Meta.Struct c.cl_meta then DFull else DForward) c.cl_path
 
 let add_enum_dependency ctx en =
 	if not (check_include_meta ctx en.e_meta) && not en.e_extern then
