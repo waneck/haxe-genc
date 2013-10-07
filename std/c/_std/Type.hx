@@ -46,14 +46,19 @@ enum ValueType {
 	}
 
 	public static function getClassName( c : Class<Dynamic> ) : String {
-		return null;
+		var t:c.TypeReference<Dynamic> = cast c;
+		return untyped String.ofPointerCopyNT(t.name);
 	}
 
 	public static function getEnumName( e : Enum<Dynamic> ) : String {
 		return null;
 	}
 
-	public static function resolveClass( name : String ) : Class<Dynamic> untyped {
+	public static function resolveClass( name : String ) : Class<Dynamic> {
+		var raw = untyped String.raw(name);
+		for (typeref in c.Boot.typeReferences) {
+			if (c.CString.strcmp(raw, typeref.name) == 0) return cast typeref;
+		}
 		return null;
 	}
 
@@ -61,7 +66,7 @@ enum ValueType {
 		return null;
 	}
 
-	public static function createInstance<T>( cl : Class<T>, args : Array<Dynamic> ) : T untyped {
+	public static function createInstance<T>( cl : Class<T>, args : Array<Dynamic> ) : T {
 		return null;
 	}
 
