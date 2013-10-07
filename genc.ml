@@ -1672,6 +1672,8 @@ let rec is_value_type t =
 		is_value_type (!f())
 	| TType (t,tl) ->
 		is_value_type (apply_params t.t_types tl t.t_type)
+	| TAbstract({a_path=[],"Class"},_) ->
+		false
 	| TAbstract({ a_impl = None }, _) ->
 		true
 	| TInst(c,_) ->
