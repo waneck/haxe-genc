@@ -3,15 +3,27 @@ package c;
 import c.Pointer;
 import c.Types;
 
-@:native("typeref")
-@:keep class TypeReference<T>
-{
-	/** reference to the type's null value **/
-	private var nullval(default, never):T;
-	/** represents the size, in bytes, of a reference to that type; on reference types, it should be equal to word size **/
-	public var refSize(default, never):Int;
-	/** the fully qualified name of the type **/
+@:keep
+class TypeReference<T> {
+	/**
+		The fully qualified dot-path of the type.
+	**/
 	public var name(default, never):ConstPointer<Char>;
+	
+	/**
+		The type's default value.
+	**/
+	public var defaultValue(default, never):T;
+	
+	/**
+		The size of references to this type.
+	**/
+	public var refSize(default, never):Int;
 
+	/**
+		Pointer to the constructor of this type.
+	**/
+	public var constructor:FunctionPointer<Void -> Pointer<Void>>;
+	
 	@:extern public function new() {}
 }
