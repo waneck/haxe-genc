@@ -2265,10 +2265,11 @@ let generate_class ctx c =
 
 	let path = path_to_name c.cl_path in
 
-	List.iter(fun v ->
-		DynArray.insert vars 0 v;
-		c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
-	) (generate_header_fields ctx);
+	if Meta.has (Meta.Custom ":hasvtable") c.cl_meta then
+		List.iter(fun v ->
+			DynArray.insert vars 0 v;
+			c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
+		) (generate_header_fields ctx);
 
 	(* add constructor as function *)
 	begin match c.cl_constructor with
