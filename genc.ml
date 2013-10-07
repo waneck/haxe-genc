@@ -2006,6 +2006,8 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TField(e1,FDynamic "index") when (match follow e1.etype with TEnum(en,_) -> Meta.has Meta.FlatEnum en.e_meta | _ -> false) ->
 		generate_expr ctx need_val e1
 	| TField(e1,fa) ->
+		add_type_dependency ctx e.etype;
+		add_type_dependency ctx e1.etype;
 		let n = field_name fa in
 		spr ctx "(";
 		generate_expr ctx true e1;
