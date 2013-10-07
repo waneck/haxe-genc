@@ -1580,7 +1580,7 @@ module VTableHandler = struct
 						 vtables = PMap.empty;
 						 next    = 0} tps in
 
-		let _ = Analyzer.run_analyzer tps in
+		(* let _ = Analyzer.run_analyzer tps in *)
 
 		let add_vtable con c vtable =
 			(* helpers *)
@@ -1755,7 +1755,7 @@ let rec s_type ctx t =
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))
-	| TInst(({cl_path = [],"typeref"} as c),_) ->
+	| TInst(({cl_path = ["c"],"TypeReference"} as c),_) ->
 		add_class_dependency ctx c;
 		"const " ^ (path_to_name c.cl_path) ^ "*"
 	| TAbstract({a_path = [],"Bool"},[]) -> "int"
@@ -1850,7 +1850,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		| "sizeof" ->
 			(* get TypeReference's type *)
 			let t = match follow e1.etype with
-				| TInst({cl_path = [],"typeref"},[t]) -> follow t
+				| TInst({cl_path = ["c"],"TypeReference"},[t]) -> follow t
 				| t -> t
 			in
 			print ctx "sizeof(%s)" (s_type ctx t);
@@ -2192,18 +2192,38 @@ let generate_function_header ctx c cf stat =
 	let sargs = if stat then sargs else (s_type_with_name ctx (monofy_class c) "this") :: sargs in
 	print ctx "%s(%s)" (s_type_with_name ctx tf.tf_type (full_field_name c cf)) (String.concat "," sargs)
 
-let get_typeref_forward ctx path =
-	Printf.sprintf "extern const typeref %s__typeref" (path_to_name path)
+let get_typeref_name name =
+	Printf.sprintf "%s_%s" name (mk_runtime_prefix "typeref")
 
-let generate_typedef_declaration ctx t =
-	let path = Expr.t_path t in
+let generate_typeref_forward ctx path =
+	print ctx "extern const c_TypeReference %s" (get_typeref_name (path_to_name path))
+
+let generate_typeref_declaration ctx mt =
+	let path = t_path mt in
+	let name = path_to_name path in
+	let ctor = match mt with
+		| TClassDecl c ->
+			begin match c.cl_constructor with
+				| Some cf -> full_field_name c cf
+				| None -> "NULL"
+			end
+		| _ ->
+			"NULL"
+	in
+	print ctx "const c_TypeReference %s = {\n" (get_typeref_name name);
+	print ctx "\t\"%s\",\n" (s_type_path path);
+	spr ctx "\tNULL,\n";
+	print ctx "\tsizeof(%s),\n" name;
+	print ctx "\t%s\n" ctor;
+	spr ctx "};\n"
+(* 	let path = Expr.t_path t in
 	if is_value_type t then
 		print ctx "const %s %s__default = { 0 }; //default" (s_type ctx t) (path_to_name path)
 	else
 		print ctx "const void* %s__default = NULL; //default" (path_to_name path);
 	newline ctx;
 	let nullval = Printf.sprintf "&%s__default" (path_to_name path) in
-	Printf.sprintf "const typeref %s__typeref = { \"%s\", %s, sizeof(%s) }; //typeref declaration" (path_to_name path) (s_type_path path) nullval (s_type ctx t)
+	Printf.sprintf "const typeref %s__typeref = { \"%s\", %s, sizeof(%s) }; //typeref declaration" (path_to_name path) (s_type_path path) nullval (s_type ctx t) *)
 
 let generate_method ctx c cf stat =
 	let e = match cf.cf_expr with
@@ -2297,11 +2317,9 @@ let generate_class ctx c =
 			DynArray.add methods (f,true)
 	end;
 
-
 	ctx.buf <- ctx.buf_c;
 
-	(* spr ctx (generate_typedef_declaration ctx (TInst(c,List.map snd c.cl_types))); *)
-	(* newline ctx; *)
+	generate_typeref_declaration ctx (TClassDecl c);
 
 	(* generate static vars *)
 	if not (DynArray.empty svars) then begin
@@ -2370,8 +2388,8 @@ let generate_class ctx c =
 		) methods;
 	end;
 
-(* 	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx c.cl_path); *)
+	add_dependency ctx DForward (["c"],"TypeReference");
+	generate_typeref_forward ctx c.cl_path;
 	newline ctx
 
 let generate_flat_enum ctx en =
@@ -2386,7 +2404,7 @@ let generate_flat_enum ctx en =
 let generate_enum ctx en =
 	ctx.buf <- ctx.buf_h;
 (* 	add_dependency ctx DForward ([],"typeref");
-	spr ctx (get_typeref_forward ctx en.e_path); *)
+	spr ctx (generate_typeref_forward ctx en.e_path); *)
 	(* newline ctx; *)
 
 	let ctors = List.map (fun s -> PMap.find s en.e_constrs) en.e_names in
@@ -2480,16 +2498,6 @@ let generate_enum ctx en =
 		| _ ->
 			assert false
 	) ctors
-
-(* let generate_typeref con t =
-	let path = Expr.t_path t in
-	let ctx = mk_type_context con path in
-	ctx.buf <- ctx.buf_c;
-	spr ctx (generate_typedef_declaration ctx t);
-	newline ctx;
-	ctx.buf <- ctx.buf_h;
-	newline ctx;
-	close_type_context ctx *)
 
 let generate_type con mt = match mt with
 	| TClassDecl {cl_kind = KAbstractImpl a} when Meta.has Meta.MultiType a.a_meta ->
@@ -2784,11 +2792,11 @@ let generate com =
 	let hxc = List.fold_left (fun acc mt -> match mt with
 		| TClassDecl c ->
 			begin match c.cl_path with
-				| [],"typeref" -> {acc with t_typeref = fun t -> TInst(c,[t])}
 				| [],"jmp_buf" -> {acc with t_jmp_buf = TInst(c,[])}
 				| [],"hxc" -> {acc with c_boot = c}
 				| [],"String" -> {acc with c_string = c}
 				| [],"Array" -> {acc with c_array = c}
+				| ["c"],"TypeReference" -> {acc with t_typeref = fun t -> TInst(c,[t])}
 				| ["c"],"FixedArray" -> {acc with c_fixed_array = c}
 				| ["c"],"Exception" -> {acc with c_exception = c}
 				| ["c"],"Closure" -> {acc with t_closure = fun t -> TInst(c,[t])}
