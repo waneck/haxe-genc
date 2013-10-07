@@ -2290,6 +2290,7 @@ let generate_class ctx c =
 
 	let path = path_to_name c.cl_path in
 
+	if not (Meta.has (Meta.Custom ":noVTable") c.cl_meta) then
 		List.iter(fun v ->
 			DynArray.insert vars 0 v;
 			c.cl_fields <- PMap.add v.cf_name v c.cl_fields;
@@ -2718,6 +2719,13 @@ let initialize_class con c =
 		| _ -> ()
 	end;
 
+	if not (Meta.has (Meta.Custom ":noVTable") c.cl_meta) then begin
+		let v = Var {v_read=AccNormal;v_write=AccNormal} in
+		let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable") (TInst(con.hxc.c_vtable,[])) false null_pos v [] in
+		let cf_hd = Expr.mk_class_field (mk_runtime_prefix "header") (con.hxc.t_int64 t_dynamic) false null_pos v [] in
+		c.cl_ordered_fields <- cf_vt :: cf_hd :: c.cl_ordered_fields;
+		c.cl_fields <- PMap.add cf_vt.cf_name cf_vt (PMap.add cf_hd.cf_name cf_hd c.cl_fields);
+	end;
 
 	let e_typeref = Expr.mk_ccode con ("&" ^ (get_typeref_name (path_to_name c.cl_path))) c.cl_pos in
 	let e_init = Expr.mk_static_call_2 con.hxc.c_boot "registerType" [e_typeref] c.cl_pos in

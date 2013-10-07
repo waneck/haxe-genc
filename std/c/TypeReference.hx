@@ -4,6 +4,7 @@ import c.Pointer;
 import c.Types;
 
 @:keep
+@:noVTable
 class TypeReference<T> {
 	/**
 		The fully qualified dot-path of the type.
