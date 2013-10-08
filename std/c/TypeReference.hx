@@ -26,5 +26,10 @@ class TypeReference<T> {
 	**/
 	public var constructor:FunctionPointer<Void -> Pointer<Void>>;
 	
+	/**
+		Pointer to the allocator of this type.
+	**/
+	public var allocator:FunctionPointer<Void -> Pointer<Void>>;
+	
 	@:extern public function new() {}
 }

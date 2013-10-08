@@ -1022,8 +1022,13 @@ module ClosureHandler = struct
 	let is_call_expr = ref false
 	let is_extern = ref false
 
+	let is_native_function_pointer t =
+		match t with
+			| TAbstract( { a_path = ["c"],"FunctionPointer" }, _ ) -> true
+			| _ -> false
+
 	let rec is_closure_expr e =
-		match e.eexpr with
+		not (is_native_function_pointer e.etype) && match e.eexpr with
 			| TMeta(_,e1) | TParenthesis(e1) | TCast(e1,None) ->
 				is_closure_expr e1
 			| TField(_,(FStatic(_,cf) | FInstance(_,cf))) ->
@@ -1050,9 +1055,7 @@ module ClosureHandler = struct
 			in
 			fstack := List.tl !fstack;
 			e1
-		| _ when (match follow e.etype with
-				| TAbstract( { a_path = ["c"],"FunctionPointer" }, _ ) -> true
-				| _ -> false) ->
+		| _ when is_native_function_pointer e.etype ->
 			e
 		| TCall(e1,el) ->
 			let old = !is_call_expr,!is_extern in
@@ -1900,7 +1903,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		spr ctx ")";
 	| TField({eexpr = TConst TSuper} as e1, FInstance(c,cf)),el ->
 		generate_expr ctx need_val (Expr.mk_static_call c cf (e1 :: el) e.epos)
-	| TField(e1,FInstance(c,cf)), el ->
+	| TField(e1,FInstance(c,cf)),el when not (ClosureHandler.is_native_function_pointer cf.cf_type) ->
 		add_class_dependency ctx c;
 		let _ = if not (Meta.has (Meta.Custom ":overridden") cf.cf_meta) then
 			spr ctx (full_field_name c cf)
