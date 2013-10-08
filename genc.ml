@@ -1939,7 +1939,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			| TInst(c,_) -> c
 			| _ -> assert false
 		in
-		let n = (mk_runtime_prefix "ctor") in
+		let n = (mk_runtime_prefix "initInstance") in
 		let e = Expr.mk_static_call_2 csup n ((Expr.mk_local (alloc_var "this" t_dynamic) e1.epos) :: el) e1.epos in
 		generate_expr ctx false e
 	| _ ->
@@ -2206,20 +2206,27 @@ let generate_typeref_forward ctx path =
 let generate_typeref_declaration ctx mt =
 	let path = t_path mt in
 	let name = path_to_name path in
-	let ctor = match mt with
+	let ctor,alloc = match mt with
 		| TClassDecl c ->
-			begin match c.cl_constructor with
+			let s_alloc = try
+				full_field_name c (PMap.find (mk_runtime_prefix "alloc") c.cl_statics)
+			with Not_found ->
+				"NULL"
+			in
+			let s_ctor = match c.cl_constructor with
 				| Some cf -> full_field_name c cf
 				| None -> "NULL"
-			end
+			in
+			s_ctor,s_alloc
 		| _ ->
-			"NULL"
+			"NULL","NULL"
 	in
 	print ctx "const c_TypeReference %s = {\n" (get_typeref_name name);
 	print ctx "\t\"%s\",\n" (s_type_path path);
 	spr ctx "\tNULL,\n";
 	print ctx "\tsizeof(%s),\n" name;
-	print ctx "\t%s\n" ctor;
+	print ctx "\t%s,\n" ctor;
+	print ctx "\t%s\n" alloc;
 	spr ctx "};\n"
 (* 	let path = Expr.t_path t in
 	if is_value_type t then
@@ -2758,7 +2765,7 @@ let initialize_constructor con c cf =
 		in
 		let args = List.map (fun (v,_) -> v.v_name,false,v.v_type) tf.tf_args in
 		let mk_ctor_init () =
-			let cf_ctor = Expr.mk_class_field (mk_runtime_prefix "ctor") (TFun((v_this.v_name,false,v_this.v_type) :: args,con.com.basic.tvoid)) false p (Method MethNormal) [] in
+			let cf_init = Expr.mk_class_field (mk_runtime_prefix "initInstance") (TFun((v_this.v_name,false,v_this.v_type) :: args,con.com.basic.tvoid)) false p (Method MethNormal) [] in
 			let rec map_this e = match e.eexpr with
 				| TConst TThis -> e_this
 				| _ -> Type.map_expr map_this e
@@ -2768,11 +2775,11 @@ let initialize_constructor con c cf =
 				tf_type = con.com.basic.tvoid;
 				tf_expr = map_this tf.tf_expr;
 			} in
-			cf_ctor.cf_expr <- Some (mk (TFunction tf_ctor) cf_ctor.cf_type p);
-			c.cl_ordered_statics <- cf_ctor :: c.cl_ordered_statics;
-			c.cl_statics <- PMap.add cf_ctor.cf_name cf_ctor c.cl_statics;
+			cf_init.cf_expr <- Some (mk (TFunction tf_ctor) cf_init.cf_type p);
+			c.cl_ordered_statics <- cf_init :: c.cl_ordered_statics;
+			c.cl_statics <- PMap.add cf_init.cf_name cf_init c.cl_statics;
 			let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
-			Expr.mk_static_call c cf_ctor (e_this :: ctor_args) p
+			Expr.mk_static_call c cf_init (e_this :: ctor_args) p
 		in
 		let e_vars = mk (TVars [v_this,Some e_alloc]) con.com.basic.tvoid p in
 		let e_return = mk (TReturn (Some e_this)) t_dynamic p in
@@ -2781,10 +2788,23 @@ let initialize_constructor con c cf =
 		else
 			mk_ctor_init ()
 		in
+		let tf_alloc = {
+			tf_args = [];
+			tf_type = t_class;
+			tf_expr = Expr.mk_block con.com p (e_vars :: el_vt @ [e_return]);
+		} in
+		let cf_alloc = Expr.mk_class_field (mk_runtime_prefix "alloc") (tfun [] t_class) false p (Method MethNormal) [] in
+		cf_alloc.cf_expr <- Some (mk (TFunction tf_alloc) cf_alloc.cf_type cf_alloc.cf_pos);
+		c.cl_ordered_statics <- cf_alloc :: c.cl_ordered_statics;
+		c.cl_statics <- PMap.add cf_alloc.cf_name cf_alloc c.cl_statics;
 		let tf = {
 			tf_args = tf.tf_args;
 			tf_type = t_class;
-			tf_expr = Expr.mk_block con.com p (e_vars :: el_vt @ [e_init;e_return]);
+			tf_expr = mk (TBlock [
+				mk (TVars [v_this,Some (Expr.mk_static_call c cf_alloc [] p)]) con.com.basic.tvoid p;
+				e_init;
+				e_return
+			]) t_class p;
 		} in
 		cf.cf_expr <- Some {e with eexpr = TFunction tf};
 		cf.cf_type <- TFun(args, t_class)
