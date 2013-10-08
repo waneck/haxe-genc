@@ -817,6 +817,13 @@ module StringHandler = struct
 			e
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
+		| TCall({eexpr = TField(_,FStatic({cl_path=[],"Std"},{cf_name = "string"}))},[e1]) ->
+			begin match follow e1.etype with
+				| TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) ->
+					Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [e1] e.epos
+				| _ ->
+					e
+			end
 		| TBinop((OpEq | OpNotEq) as op,e1,e2) when is_string e1.etype ->
 			Expr.mk_binop op
 				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "equals" [gen.map e1; gen.map e2] e1.epos)

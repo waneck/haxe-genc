@@ -51,7 +51,7 @@ class Boot {
 			c.Lib.callMain();
 			return 0;
 		} catch(e:Dynamic) {
-			trace("Something went wrong");
+			trace(Std.string(e));
 			return 1;
 		}
 	}
