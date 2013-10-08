@@ -2310,100 +2310,72 @@ struct
 end;;
 
 let explode_expressions com gen_temp e =
-	let block_stack = ref [] in
-	let push_top e =
-		match !block_stack with
-		| el :: _ ->
-			el := e :: !el
-		| [] ->
-			let el = ref [e] in
-			block_stack := el :: !block_stack;
-	in
+	let block_el = ref [] in
+	let push e = block_el := e :: !block_el in
 	let declare_temp t eo p =
 		let v = gen_temp t in
+		begin match follow t,eo with
+			| TAbstract({a_path=[],"Void"},_),Some e -> com.warning (s_expr (s_type (print_context())) e) p;
+			| _ -> ()
+		end;
 		let e = mk (TVars [v,eo]) com.basic.tvoid p in
-		push_top e;
+		push e;
 		mk (TLocal v) t p
 	in
 	let push_block () =
-		let el = ref [] in
-		block_stack := el :: !block_stack;
-		(fun e -> el := e :: !el),
+		let cur = !block_el in
+		block_el := [];
 		fun () ->
-			block_stack := List.tl !block_stack;
-			List.rev !el
+			let added = !block_el in
+			block_el := cur;
+			List.rev added
 	in
-	let opt f o = match o with None -> None | Some v -> Some (f v) in
-	let rec loop e = match e.eexpr with
+	let rec block f el =
+		let close = push_block() in
+		List.iter (fun e ->
+			push (f e)
+		) el;
+		close()
+	and loop e = match e.eexpr with
 		| TBlock el ->
-			let push,close = push_block() in
-			List.iter (fun e ->
-				push (loop e)
-			) el;
-			{ e with eexpr = TBlock (close())}
-		| TWhile(e1,e2,wt) ->
-			let _,close = push_block() in
-			let e1 = simplify e1 in
-			let e2 = loop e2 in
-			let el = close() in
-			(* move var declarations to outer scope so while condition can access it *)
-			let el = List.map (fun e ->
-				match e.eexpr with
-				| TVars vl ->
-					let vl,el = List.fold_left (fun (vl,el) (v,eo) ->
-						((v,match wt with DoWhile -> None | _ -> eo) :: vl),match eo with
-							| None -> el
-							| Some e ->
-								let ev = mk (TLocal v) v.v_type e.epos in
-								(mk (TBinop(OpAssign,ev,e)) e.etype e.epos) :: el
-					) ([],[]) vl in
-					push_top {e with eexpr = TVars vl};
-					mk (TBlock el) t_dynamic e.epos
-				| _ ->
-					e
-			) el in
-			let e2 = concat e2 (mk (TBlock el) e2.etype e2.epos) in
-			{ e with eexpr = TWhile(e1,e2,wt)}
-		| TIf(e1,e2,e3) ->
-			let e1 = simplify e1 in
-			{e with eexpr = TIf(e1,loop e2,opt loop e3)}
-		| TCall({eexpr = TCall(e2,_)} as e1,el1) ->
-			let et = declare_temp e1.etype (Some (loop e1)) e1.epos in
-			{e with eexpr = TCall(et,List.map simplify el1)}
+			{e with eexpr = TBlock (block loop el)}
+		| TCall(e1,[ea]) ->
+			{e with eexpr = TCall(loop e1,[loop (no_statements ea)])}
 		| TCall(e1,el) ->
-			{e with eexpr = TCall(loop e1,List.map simplify el)}
-		| TNew(c,tp,el) ->
-			{e with eexpr = TNew(c,tp,List.map simplify el)}
-		| TBinop(OpAssign,e1,e2) ->
-			{e with eexpr = TBinop(OpAssign,e1,simplify e2)}
-		| TBinop(op,e1,e2) ->
-			{e with eexpr = TBinop(op, simplify e1, simplify e2)}
+			{e with eexpr = TCall(loop e1, List.map (fun e -> loop (no_statements (no_side_effects e))) el)}
+		| TNew(c,tl,el) ->
+			{e with eexpr = TNew(c, tl, List.map (fun e -> loop (no_statements (no_side_effects e))) el)}
 		| TFunction tf ->
 			{e with eexpr = TFunction {tf with tf_expr = loop (mk_block tf.tf_expr) }}
+		| TBinop(op,e1,e2) ->
+			{e with eexpr = TBinop(op,loop (no_statements e1),loop (no_statements e2))}
+		| TIf(e1,e2,eo) ->
+			{e with eexpr = TIf(loop (no_statements e1),loop e2,match eo with None -> None | Some e -> Some (loop e))}
+		| TWhile(e1,e2,flag) ->
+			{e with eexpr = TWhile(loop (no_statements e1),loop e2,flag)}
 		| _ ->
 			Type.map_expr loop e
-	and simplify e = match e.eexpr with
-		(* "statements" *)
-		| TIf _ | TSwitch _ | TPatMatch _ | TBlock _ ->
+	and no_statements e = match e.eexpr with
+		| TSwitch _ | TPatMatch _ | TBlock _ | TIf _ ->
 			declare_temp e.etype (Some (loop e)) e.epos
-		(* side-effects *)
-		| TNew _ | TCall _ | TUnop((Decrement | Increment),_,_) | TBinop((OpAssign | OpAssignOp _),_,_) ->
-			declare_temp e.etype (Some (loop e)) e.epos
-		(* no side-effects *)
-		| TConst _ | TLocal _ | TTypeExpr _ | TFunction _ ->
+		| TVars _ | TFunction _ ->
 			e
-		(* invalid value node *)
 		| TWhile _ | TFor _ ->
 			assert false
-		(* this one SHOULD not happen, but sometimes does *)
-		| TVars _ ->
-			e
 		| _ ->
-			Type.map_expr simplify e
+			Type.map_expr no_statements e
+	and no_side_effects e = match e.eexpr with
+		| TNew _ | TCall _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) ->
+			declare_temp e.etype (Some (loop e)) e.epos
+		| TConst _ | TLocal _ | TTypeExpr _ | TFunction _
+		| TReturn _ | TBreak | TContinue | TThrow _ | TCast (_,Some _) ->
+			e
+		| TBlock el ->
+			{e with eexpr = TBlock (block no_side_effects el)}
+		| TWhile _ | TFor _ ->
+			assert false
+		| _ ->
+			Type.map_expr no_side_effects e
 	in
-	let e = loop e in
-	match !block_stack with
-	| [] -> e
-	| el :: [] -> mk (TBlock (!el @ [e])) e.etype e.epos
-	| _ -> assert false
+	loop e
 ;;
