@@ -1024,15 +1024,19 @@ module ClosureHandler = struct
 
 	let rec is_closure_expr e =
 		match e.eexpr with
-			| TLocal _
-			| TField(_,(FInstance(_,{cf_kind = Var _ }) | FStatic(_,{cf_kind = Var _ }))) ->
-				true
-			| TField(_,FAnon _) ->
-				true
 			| TMeta(_,e1) | TParenthesis(e1) | TCast(e1,None) ->
 				is_closure_expr e1
-			| _ ->
+			| TField(_,(FStatic(_,cf) | FInstance(_,cf))) ->
+				begin match cf.cf_kind with
+					| Var _ -> true
+					| _ -> false
+				end
+			| TField(_,FEnum _) ->
 				false
+			| TConst TSuper ->
+				false
+			| _ ->
+				true
 
 	let filter gen e =
 		match e.eexpr with
