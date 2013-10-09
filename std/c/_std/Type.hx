@@ -41,8 +41,9 @@ enum ValueType {
 	}
 
 
-	public static function getSuperClass( c : Class<Dynamic> ) : Class<Dynamic> untyped {
-		return null;
+	public static function getSuperClass( c : Class<Dynamic> ) : Class<Dynamic> {
+		var t:c.TypeReference<Dynamic> = cast c;
+		return cast t.parentClass;
 	}
 
 	public static function getClassName( c : Class<Dynamic> ) : String {

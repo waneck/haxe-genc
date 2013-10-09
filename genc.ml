@@ -2216,7 +2216,7 @@ let generate_typeref_forward ctx path =
 let generate_typeref_declaration ctx mt =
 	let path = t_path mt in
 	let name = path_to_name path in
-	let ctor,alloc = match mt with
+	let ctor,alloc,super = match mt with
 		| TClassDecl c ->
 			let s_alloc = try
 				full_field_name c (PMap.find (mk_runtime_prefix "alloc") c.cl_statics)
@@ -2227,16 +2227,23 @@ let generate_typeref_declaration ctx mt =
 				| Some cf -> full_field_name c cf
 				| None -> "NULL"
 			in
-			s_ctor,s_alloc
+			let s_super = match c.cl_super with
+				| None -> "NULL"
+				| Some (csup,_) ->
+					add_class_dependency ctx csup;
+					"&" ^ (get_typeref_name (path_to_name csup.cl_path))
+			in
+			s_ctor,s_alloc,s_super
 		| _ ->
-			"NULL","NULL"
+			"NULL","NULL","NULL"
 	in
 	print ctx "const c_TypeReference %s = {\n" (get_typeref_name name);
 	print ctx "\t\"%s\",\n" (s_type_path path);
 	spr ctx "\tNULL,\n";
 	print ctx "\tsizeof(%s),\n" name;
 	print ctx "\t%s,\n" ctor;
-	print ctx "\t%s\n" alloc;
+	print ctx "\t%s,\n" alloc;
+	print ctx "\t%s\n" super;
 	spr ctx "};\n"
 (* 	let path = Expr.t_path t in
 	if is_value_type t then

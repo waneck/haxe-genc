@@ -31,5 +31,10 @@ class TypeReference<T> {
 	**/
 	public var allocator:FunctionPointer<Void -> Pointer<Void>>;
 	
+	/**
+		Reference to the `TypeReference` of the parent class if exists.
+	**/
+	public var parentClass:Null<TypeReference<Dynamic>>;
+	
 	@:extern public function new() {}
 }
