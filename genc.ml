@@ -1733,6 +1733,9 @@ let full_field_name c cf =
 
 let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 
+let get_typeref_name name =
+	Printf.sprintf "%s_%s" name (mk_runtime_prefix "typeref")
+
 let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
 
 let keywords =
@@ -2003,7 +2006,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TCall(e1,el) ->
 		generate_call ctx e true e1 el
 	| TTypeExpr (TClassDecl c) ->
-		spr ctx (path_to_name c.cl_path);
+		print ctx "&%s" (get_typeref_name (path_to_name c.cl_path));
 	| TTypeExpr (TEnumDecl e) ->
 		add_enum_dependency ctx e;
 		spr ctx (path_to_name e.e_path);
@@ -2206,9 +2209,6 @@ let generate_function_header ctx c cf stat =
 	let sargs = List.map (fun (v,_) -> s_type_with_name ctx v.v_type v.v_name) tf.tf_args in
 	let sargs = if stat then sargs else (s_type_with_name ctx (monofy_class c) "this") :: sargs in
 	print ctx "%s(%s)" (s_type_with_name ctx tf.tf_type (full_field_name c cf)) (String.concat "," sargs)
-
-let get_typeref_name name =
-	Printf.sprintf "%s_%s" name (mk_runtime_prefix "typeref")
 
 let generate_typeref_forward ctx path =
 	print ctx "extern const c_TypeReference %s" (get_typeref_name (path_to_name path))
