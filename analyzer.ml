@@ -10,19 +10,25 @@ open Type
 		| _ ->
 			Type.iter run e
 
+
 type gconstant_t = int
 and gtype_t = int
 and gvar_t  = Type.tvar
 and ganon_t = int
-and gclass_t = int
+and gclass_t = Type.tclass
 and gfunc_t = (Type.tfunc * gexpr_t)
-and gfield_access_t = int
+and gfield_access_t = tfield_access
 and gmodule_type_t = int
 and gdecision_tree_t = int
 and genum_field_t = int
 and gnode_t =
 	| GNone
 	| GWhatever of (int * gexpr_t)
+
+and gdata_value =
+	| GDInst of int * tclass
+	| GDEnum of int * tenum
+	| GDAnon of int * tanon
 
 and gdata_t =
 	| GDNone
@@ -71,15 +77,17 @@ and gexpr_expr_t    =
 	| GEnumParameter of gexpr_t * genum_field_t * int
 	| GNode of gnode_t
 
+
+
 let fdefault v:'a = 0
-let id       v:'a = v
+let fid      v:'a = v
 let ftype          = fdefault
 let fconstant      = fdefault
-let fvar           = id
+let fvar           = fid
 let fexpr          = fdefault
 let fanon          = fdefault
-let fclass         = fdefault
-let ffield_access  = fdefault
+let fclass         = fid
+let ffield_access  = fid
 let fmodule_type   = fdefault
 let fdecision_tree = fdefault
 let fenum_field    = fdefault
@@ -305,6 +313,284 @@ let iter_gexpr f e : unit = match e.gexpr with
 		| GReturn eo ->
 			(match eo with None -> () | Some e -> f e)
 
+
+(* ---------------------------------------------------------------------- *)
+
+
+(*
+
+	how do values get into scope?
+
+	1. they are constructed in scope.
+	2. they are passed via function arguments
+	3. they are fields of the class instance
+	3. they are static fields
+
+
+
+	how are values accessed?
+(* 	when accessing a static fieldzdfzd *)
+
+	accessed value id via path from scope id
+
+
+	access this.field.field
+	access typeexpr.field.field.
+
+
+*)
+
+
+(* ----------------------------  Interpreter  --------------------------- *)
+type gr_id  = int
+type gr_tid = int
+type gr_iid = int
+
+type gr_func = gexpr_t
+
+and gr_ctx = {
+	gr_classes : gr_sclass  DynArray.t;
+	gr_enums   : gr_senum   DynArray.t;
+	gr_anons   : gr_sanon   DynArray.t;
+
+	gr_iclasses: gr_class   DynArray.t;
+	gr_ienums  : gr_enum    DynArray.t;
+	gr_ianon   : gr_anon    DynArray.t;
+	gr_iclosure: gr_closure DynArray.t;
+
+}
+
+and gr_scope = {
+	gsc_id    : gr_id;
+	gsc_vars  : gr_value DynArray.t;
+}
+
+and gr_function_ctx = {
+	mutable gr_  : int;
+
+}
+
+and gr_fields = {
+	gf_size   : int;
+	gf_values : (int,int) Hashtbl.t;
+}
+
+and gr_class = {
+	gcl_id     : gr_tid;
+	gcl_iid    : gr_iid;
+	gcl_vars   : gr_value DynArray.t;
+}
+and gr_sclass = {
+	gcl_tid       : gr_tid;
+	gcl_sfields   : gr_value DynArray.t;
+
+	gcl_var_map   : gr_fields;
+	gcl_svar_map  : gr_fields;
+
+	gcl_methods   : gr_func DynArray.t;
+	gcl_smethods  : gr_func DynArray.t;
+}
+
+and gr_closure = {
+	gclr_id   : gr_tid;
+	gclr_iid  : gr_iid;
+	gclr_ctx  : gr_value DynArray.t;
+	gclr_func : gr_func;
+}
+
+and gr_enum = {
+	gen_id       : gr_tid;
+	gen_iid      : gr_iid;
+	gen_idx      : int;
+	gen_fields   : gr_value DynArray.t;
+}
+
+and gr_senum = {
+	gen_tid     : gr_tid;
+	gen_con_map : (int,gr_fields) Hashtbl.t;
+}
+
+and gr_anon = {
+	ga_id        : gr_tid;
+	ga_iid       : gr_iid;
+	ga_fields    : gr_value DynArray.t;
+}
+
+and gr_sanon = {
+	ga_tid      : gr_tid;
+	ga_var_map  : gr_fields;
+}
+
+and gr_value_t =
+	| GRClass   of gr_class
+	| GRSClass  of gr_sclass
+	| GRAnon    of gr_anon
+	| GREnum    of gr_enum
+	| GRArray   of int DynArray.t
+	| GRClosure of gr_closure
+	| GRString  of string
+	| GRInt     of Int32.t
+	| GRInt64   of Int64.t
+	| GRFloat   of string
+	| GRBool    of bool
+	| GRNull
+
+
+and gr_value = {
+	grv_val   : gr_value_t;
+	grv_refs  : gr_value_t list;
+
+}
+
+let gr_null_val = { grv_val = GRNull; grv_refs = []}
+
+let gf_set_field fields idx v =
+	DynArray.unsafe_set fields idx v
+
+let gf_get_field fields idx =
+	DynArray.unsafe_get fields idx
+
+let gr_set_field ctx self n v = try ( match self with
+	| GRClass c ->
+		let scl  = DynArray.unsafe_get ctx.gr_classes c.gcl_id in
+		let fidx = Hashtbl.find scl.gcl_var_map.gf_values n in
+		gf_set_field c.gcl_vars fidx v
+	| GRAnon a ->
+		let s  = DynArray.unsafe_get ctx.gr_anons a.ga_id in
+		let fidx = Hashtbl.find s.ga_var_map.gf_values n in
+		gf_set_field a.ga_fields fidx v
+	| _ -> assert false
+	) with Not_found -> assert false
+
+let gr_get_field ctx self n = try ( match self with
+	| GRClass c ->
+		let scl  = DynArray.unsafe_get ctx.gr_classes c.gcl_id in
+		let fidx = Hashtbl.find scl.gcl_var_map.gf_values n in
+		gf_get_field c.gcl_vars fidx
+	| GRAnon a ->
+		let s  = DynArray.unsafe_get ctx.gr_anons a.ga_id in
+		let fidx = Hashtbl.find s.ga_var_map.gf_values n in
+		gf_get_field a.ga_fields fidx
+	| _ -> assert false
+	) with Not_found -> assert false
+
+let gcl_init_class ctx tid =
+	let scl  = DynArray.unsafe_get ctx.gr_classes tid in
+	let v = {
+		gcl_id     = scl.gcl_tid;
+		gcl_iid    = DynArray.length ctx.gr_iclasses;
+		gcl_vars   = DynArray.init scl.gcl_var_map.gf_size (fun _-> gr_null_val)
+	} in
+	DynArray.add ctx.gr_iclasses v;
+	v
+
+let gen_init_enum ctx tid eidx =
+	let s  = DynArray.unsafe_get ctx.gr_enums tid in
+	let gfields = Hashtbl.find s.gen_con_map eidx in
+	let v = {
+		gen_id     = tid;
+		gen_iid    = DynArray.length ctx.gr_ienums;
+		gen_idx    = eidx;
+		gen_fields = DynArray.init gfields.gf_size (fun _-> gr_null_val)
+	} in
+	DynArray.add ctx.gr_ienums v;
+	v
+
+
+(*
+ctx requires:
+- this
+- super
+- current scope
+- state
+*)
+
+let gr_new_var ctx = ()
+	(*ctx.scope*)
+
+let gr_open_scope ctx = ()
+	(*let ctx = { ctx with scope = }*)
+
+let gr_close_scope ctx = ()
+
+
+
+let gr_getval_var v : gr_value = gr_null_val
+
+let gr_getval_typeexpr : gr_value = gr_null_val
+
+let ctx_open_branch ctx = ()
+
+let ctx_close_branch ctx = ()
+
+(*let eval_gexpr f ctx e : gr_value = match e.gexpr with
+	| GConst c -> (*(match c with
+		| TInt v   -> GRInt v
+		| TFloat v -> GRFloat v
+		| TBool v  -> GRBool v
+		| TNull    -> GRNull
+		| TThis    -> ctx.gr_this
+		| TSuper   -> ctx.gr_super
+	)*) gr_null_val
+	| GLocal v -> gr_null_val
+	| GBreak
+	| GContinue
+	| GTypeExpr _ ->
+		GRNull
+	| GArray (e1,e2)
+	| GBinop (_,e1,e2)
+	| GFor (_,e1,e2)
+	| GWhile (e1,e2,_) ->
+		f e1;
+		f e2;
+	| GThrow e
+	| GField (e,_)
+	| GEnumParameter (e,_,_)
+	| GParenthesis e
+	| GCast (e,_)
+	| GUnop (_,_,e)
+	| GMeta(_,e) ->
+		f e
+	| GArrayDecl el
+	| GNew (_,_,el)
+	| GBlock el ->
+		List.iter f el
+	| GObjectDecl fl ->
+		List.iter (fun (_,e) -> f e) fl
+	| GCall (e,el) ->
+		f e;
+		List.iter f el
+	| GVars vl ->
+		List.iter (fun (_,e) -> match e with None -> gr_null_val | Some e -> f e) vl
+	| GNVar v -> gr_null_val
+	| GSVar (v, e) -> f e
+	| GFunction (tf, e) ->
+		f e
+
+	| GIf (e,e1,e2) ->
+		f e;
+		f e1;
+		(match e2 with None -> gr_null_val | Some e -> f e)
+
+	| GSwitch (e,cases,def) ->
+		f e;
+		List.iter (fun (el,e2) -> List.iter f el; f e2) cases;
+		(match def with None -> gr_null_val | Some e -> f e)
+	| GPatMatch dt -> GRNull
+	| GTry (e,catches) ->
+		f e;
+		List.iter (fun (_,e) -> f e) catches
+	| GReturn eo ->
+		(match eo with None -> GRNull | Some e -> f e)*)
+
+
+(* ---------------------------------------------------------------------- *)
+
+
+
+
+
+
 type blockinfogctx = {
 	mutable blockid : int;
 }
@@ -325,18 +611,62 @@ let p_blockinfo xs =
 	in
 	List.iter (loop 0) xs
 
+let s_type t = Type.s_type (print_context()) t
+let s_types tl = String.concat ", " (List.map s_type tl)
+let s_path (p,n) = (String.concat "." p) ^ "."  ^ n
+let s_tparms xs = String.concat ", " (List.map (fun (s,t) -> (s ^ ":" ^(s_type t))) xs)
+
+let s_class c =
+    (s_path c.cl_path) ^ "<" ^ (s_tparms c.cl_types) ^">"
+let p_call c cf el =
+	let _ = print_endline ( "call " ^ (s_path c.cl_path) ^ "." ^ cf.cf_name ^"<"^ (s_tparms c.cl_types) ^">"^ (s_tparms cf.cf_params) ^ "" ) in
+	let _ = print_endline (s_types (List.map (fun e -> e.gtype) el)) in
+	let _ = (match cf.cf_type with
+		| TFun (args,ret) ->
+			let _ = print_endline (s_types (List.map (fun (_,_,t) -> t) args)) in ()
+		| _ -> ()
+		) in
+	let _ = print_endline " --- " in
+	()
+
+let s_var v =
+	(String.concat " " ["var";string_of_int v.v_id;v.v_name;s_type v.v_type])
+
+
+let p_assign lhs rhs =
+	let lhs = match lhs.gexpr with
+	| GField (e1,(FInstance(c,cf)|FStatic(c,cf))) ->
+		print_endline (String.concat " " ["assign to field:";s_class c;".";cf.cf_name;s_expr_kind e1.g_te;s_type e1.gtype])
+	| GLocal v ->
+		print_endline (String.concat " " ["assign to local:";string_of_int v.v_id;v.v_name;s_type v.v_type])
+	|_ ->
+		print_endline (String.concat " " [s_expr s_type lhs.g_te;"=";s_expr s_type rhs.g_te])
+	in ()
 
 let collect_block_info e =
 	let rec f (gctx,ctx) e : gexpr_t = match e.gexpr with
+	| GNew (c, [], el)   -> e
+	| GNew (c, tl, el) ->
+		let _ = print_endline ( "class " ^ (s_path c.cl_path) ^ "<" ^ (s_types tl) ^ ">" ) in
+		let _ = Option.map (fun cf -> p_call c cf el) c.cl_constructor in
+		e
+	| GCall (e1, el) -> ( match e1.gexpr with
+		| GField (_,(FInstance(c,cf)(*|FStatic(c,cf)*))) ->
+			let _ = p_call c cf el in
+			e
+		| _ -> e
+		)
 	| GBlock el ->
 		let _,nctx = (gctx,{ blocks = [] }) in
-		let _ = List.map (f (gctx,nctx)) el in
 		let id = gctx.blockid in
 		let _  = gctx.blockid <- id + 1 in
+		let _ = List.map (f (gctx,nctx)) el in
 		let data = GDBlockInfo (id, nctx.blocks ) in
 		let _ = ctx.blocks <- data :: ctx.blocks in
 		{ e with gdata = data }
-
+	| GBinop (OpAssign,lhs,rhs) ->
+			p_assign lhs rhs;
+			e
 	|_ -> map_gexpr (f (gctx,ctx)) e in
 	let gctx,ctx = {blockid = 0},{blocks= []} in
 	let _ = f (gctx,ctx) e in
