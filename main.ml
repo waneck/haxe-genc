@@ -1222,7 +1222,7 @@ try
 		com.modules <- modules;
 		let filters = [
 			Codegen.Abstract.handle_abstract_casts tctx;
-			Codegen.explode_expressions com (fun t -> Typecore.gen_local tctx t);
+			(match com.platform with Cpp | C -> Codegen.handle_side_effects com (Typecore.gen_local tctx) | _ -> fun e -> e);
 			Codegen.promote_complex_rhs com;
 			if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else Optimizer.sanitize tctx;
 			Codegen.check_local_vars_init;
