@@ -2341,10 +2341,10 @@ let explode_expressions com gen_temp e =
 			{e with eexpr = TBlock (block loop el)}
 		| TCall(e1,[ea]) ->
 			{e with eexpr = TCall(loop e1,[loop (no_statements ea)])}
-		| TCall(e1,el) ->
-			{e with eexpr = TCall(loop e1, List.map (fun e -> loop (no_statements (no_side_effects e))) el)}
+ 		| TCall(e1,el) ->
+			{e with eexpr = TCall(loop e1, List.map loop (no_side_effects_list (List.map no_statements el)))}
 		| TNew(c,tl,el) ->
-			{e with eexpr = TNew(c, tl, List.map (fun e -> loop (no_statements (no_side_effects e))) el)}
+			{e with eexpr = TNew(c, tl, List.map loop (no_side_effects_list (List.map no_statements el)))}
 		| TFunction tf ->
 			{e with eexpr = TFunction {tf with tf_expr = loop (mk_block tf.tf_expr) }}
 		| TBinop(op,e1,e2) ->
@@ -2364,18 +2364,36 @@ let explode_expressions com gen_temp e =
 			assert false
 		| _ ->
 			Type.map_expr no_statements e
-	and no_side_effects e = match e.eexpr with
-		| TNew _ | TCall _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) ->
-			declare_temp e.etype (Some (loop e)) e.epos
-		| TConst _ | TLocal _ | TTypeExpr _ | TFunction _
-		| TReturn _ | TBreak | TContinue | TThrow _ | TCast (_,Some _) ->
-			e
-		| TBlock el ->
-			{e with eexpr = TBlock (block no_side_effects el)}
-		| TWhile _ | TFor _ ->
-			assert false
-		| _ ->
-			Type.map_expr no_side_effects e
+	and no_side_effects_list el =
+		let had_side_effect = ref false in
+		let rec no_side_effects e = match e.eexpr with
+			| TNew _ | TCall _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) ->
+				if not !had_side_effect then begin
+					had_side_effect := true;
+					e;
+				end else
+					declare_temp e.etype (Some (loop e)) e.epos
+			| TConst _ | TLocal _ | TTypeExpr _ | TFunction _
+			| TReturn _ | TBreak | TContinue | TThrow _ | TCast (_,Some _) ->
+				e
+			| TBlock el ->
+				{e with eexpr = TBlock (block no_side_effects el)}
+			| TWhile _ | TFor _ ->
+				assert false
+			| _ ->
+				Type.map_expr no_side_effects e
+		in
+		let rec loop acc el = match el with
+			| e :: el ->
+				let e = no_side_effects e in
+				if !had_side_effect then
+					(List.map no_side_effects (List.rev el)) @ e :: acc
+				else
+					loop (e :: acc) el
+			| [] ->
+				acc
+		in
+		loop [] (List.rev el)
 	in
 	loop e
 ;;
