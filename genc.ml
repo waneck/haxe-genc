@@ -152,12 +152,6 @@ let alloc_temp_func con =
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
 	name
 
-let is_base_type t = match follow t with
-	| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
-		true
-	| _ ->
-		false
-
 module Expr = struct
 
 	let t_path t = match follow t with
@@ -246,31 +240,58 @@ module Expr = struct
 		) ([],false) el in
 		mk (TBlock (List.rev el)) e.etype e.epos,found
 
+	let add_meta m e =
+		mk (TMeta((m,[],e.epos),e)) e.etype e.epos
+
+end
+
+module Wrap = struct
+
+	let box_field_name =
+		mk_runtime_prefix "value"
+
+	let mk_box_field t =
+		Expr.mk_class_field box_field_name t true Ast.null_pos (Var {v_read = AccNormal;v_write=AccNormal}) []
+
+ 	let mk_box_type t =
+	 	TAnon {
+			a_status = ref Closed;
+			a_fields = PMap.add box_field_name (mk_box_field t) PMap.empty
+		}
+
+	let requires_wrapping t = match follow t with
+		| TAbstract({a_path=[],("Int" | "Float" | "Bool")},_) ->
+			true
+		| _ ->
+			false
+
+	let box_basic_value e =
+		if is_null e.etype || not (requires_wrapping e.etype) then
+			e
+		else begin
+			let t = follow e.etype in
+			let e = Expr.mk_obj_decl [box_field_name,{e with etype = t}] e.epos in
+			Expr.mk_cast e t
+		end
+
+	let unbox_basic_value e =
+		if not (is_null e.etype) || not (requires_wrapping e.etype) then
+			e
+		else begin
+			let t = follow e.etype in
+			let cf = mk_box_field t in
+			let e = mk (TField(e,FAnon cf)) t e.epos in
+			Expr.mk_cast e t
+		end
+
 	let wrap_function hxc ethis efunc =
 		let c,t = match hxc.t_closure t_dynamic with TInst(c,_) as t -> c,t | _ -> assert false in
 		let cf_func = PMap.find "_func" c.cl_fields in
-		mk (TNew(c,[efunc.etype],[mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
+		mk (TNew(c,[efunc.etype],[Expr.mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
 
 	let wrap_static_function hxc efunc =
 		wrap_function hxc (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
 
-	let add_meta m e =
-		mk (TMeta((m,[],e.epos),e)) e.etype e.epos
-
-	let box com e =
-		if is_null e.etype then
-			e
-		else begin
-			let t = com.basic.tnull e.etype in
-			mk_cast (mk_obj_decl ["value",e] e.epos) t
-		end
-
-	let unbox com e =
-		if is_null e.etype then begin
-			let t = follow e.etype in
-			mk_cast (mk (TField(e,FDynamic "value")) t e.epos) t
-		end else
-			e
 end
 
 
@@ -503,7 +524,7 @@ module DefaultValues = struct
 						subst,el
 					| Some c ->
 						let e_loc_v = Expr.mk_local v p in
-						let e_loc_v2,subst = if is_base_type v.v_type then begin
+						let e_loc_v2,subst = if Wrap.requires_wrapping v.v_type then begin
 							let temp = gen.declare_temp (follow v.v_type) None in
 							Expr.mk_local temp p,((v,temp) :: subst)
 						end else
@@ -512,8 +533,8 @@ module DefaultValues = struct
 						let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono())p) e_loc_v gen.gcom.basic.tbool p) in
 						let mk_assign e2 = Codegen.binop OpAssign e_loc_v2 e2 e2.etype p in
 						let eassign = mk_assign (mk (TConst c) (follow v.v_type) p) in
-						let eelse = if is_base_type v.v_type then begin
-							Some (mk_assign (Expr.unbox gen.gcom e_loc_v))
+						let eelse = if Wrap.requires_wrapping v.v_type then begin
+							Some (mk_assign (Wrap.unbox_basic_value e_loc_v))
 						end else
 							None
 						in
@@ -667,11 +688,12 @@ end
 module TypeChecker = struct
 
 	let rec check gen e t =
+		(* if e.epos.pfile = "src/Main.hx" then gen.gcom.warning (Printf.sprintf "%s %s %b %b" (s_type (print_context()) e.etype) (s_type (print_context()) t) (Expr.is_box_type e.etype) (Expr.is_box_type t)) e.epos; *)
 		let e = match is_null e.etype,is_null t with
 			| true,true
 			| false,false -> e
-			| true,false -> Expr.unbox gen.gcom e
-			| false,true -> Expr.box gen.gcom e
+			| true,false -> Wrap.unbox_basic_value e
+			| false,true -> Wrap.box_basic_value e
 		in
 		match e.eexpr,follow t with
 		| TObjectDecl fl,(TAnon an as ta) ->
@@ -729,7 +751,7 @@ module TypeChecker = struct
 		| TBinop(OpEq | OpNotEq as op,e1,e2) ->
 			{e with eexpr = TBinop(op,gen.map e1,gen.map e2)}
 		| TBinop(op,e1,e2) ->
-			{e with eexpr = TBinop(op,gen.map (Expr.unbox gen.gcom e1),gen.map (Expr.unbox gen.gcom e2))}
+			{e with eexpr = TBinop(op,gen.map (Wrap.unbox_basic_value e1),gen.map (Wrap.unbox_basic_value e2))}
 		| TVars vl ->
 			let vl = ExtList.List.filter_map (fun (v,eo) ->
 				match eo with
@@ -1024,7 +1046,7 @@ module ClosureHandler = struct
 		let cf,e_init = mk_closure_field gen tf ethis p in
 		gen.add_field c cf true;
 		let e_field = mk (TField(e_init,FStatic(c,cf))) cf.cf_type p in
-		Expr.wrap_function gen.gcon.hxc e_init e_field
+		Wrap.wrap_function gen.gcon.hxc e_init e_field
 
 	let is_call_expr = ref false
 	let is_extern = ref false
@@ -1088,7 +1110,7 @@ module ClosureHandler = struct
 			is_extern := snd old;
 			e
 		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not !is_extern ->
-			Expr.wrap_static_function gen.gcon.hxc (Expr.mk_static_field c cf e.epos)
+			Wrap.wrap_static_function gen.gcon.hxc (Expr.mk_static_field c cf e.epos)
 		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
@@ -1756,10 +1778,7 @@ let escape_name n =
 
 let rec s_type ctx t =
 	if is_null t then
-		s_type ctx (TAnon {
-			a_status = ref Closed;
-			a_fields = PMap.add "value" (Expr.mk_class_field "value" t true Ast.null_pos (Var {v_read = AccNormal;v_write=AccNormal}) []) PMap.empty (* TODO: this is a bit silly *)
-		})
+		s_type ctx (Wrap.mk_box_type t)
 	else match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
@@ -2023,6 +2042,10 @@ and generate_expr ctx need_val e = match e.eexpr with
 		print ctx "new_%s()" (full_enum_field_name en ef)
 	| TField(e1,FDynamic "index") when (match follow e1.etype with TEnum(en,_) -> Meta.has Meta.FlatEnum en.e_meta | _ -> false) ->
 		generate_expr ctx need_val e1
+(* 	| TField(e1,FDynamic s) ->
+		ctx.con.com.warning "dynamic" e.epos;
+		generate_expr ctx true e1;
+		print ctx "->%s" s; *)
 	| TField(e1,fa) ->
 		add_type_dependency ctx e.etype;
 		add_type_dependency ctx e1.etype;
@@ -2672,7 +2695,7 @@ let initialize_class con c =
 				c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
 				let ef1 = Expr.mk_static_field c cf cf.cf_pos in
 				let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
-				let ef2 = Expr.wrap_static_function con.hxc ef2 in
+				let ef2 = Wrap.wrap_static_function con.hxc ef2 in
 				add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
 			end else begin
 				c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
