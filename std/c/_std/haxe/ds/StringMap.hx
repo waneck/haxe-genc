@@ -26,21 +26,21 @@ class StringMap<T> implements Map.IMap<String,T> {
 
 	var tree:haxe.ds.BalancedTree<String, T>;
 	
-	public inline function new() {
+	@:keep public function new() {
 		tree = new haxe.ds.BalancedTree<String, T>(untyped String.compare);
 	}
 
 	/**
 		See `Map.set`
 	**/
-	public inline function set( key : String, value : T ) {
+	@:keep public function set( key : String, value : T ) {
 		tree.set(key, value);
 	}
 
 	/**
 		See `Map.get`
 	**/
-	public inline function get( key : String ) {
+	@:keep public function get( key : String ) {
 		return tree.get(key);
 	}
 

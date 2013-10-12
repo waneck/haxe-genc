@@ -50,6 +50,9 @@ type hxc = {
 	c_cstdlib : tclass;
 	c_cstdio : tclass;
 	c_vtable : tclass;
+	c_string_map : tclass;
+	c_access : tclass;
+	c_std : tclass;
 
 	cf_deref : tclass_field;
 	cf_addressof : tclass_field;
@@ -59,6 +62,7 @@ type hxc = {
 type context = {
 	com : Common.context;
 	hxc : hxc;
+	mutable mk_class : path -> (tclass * (unit -> unit));
 	mutable num_temp_funcs : int;
 	mutable num_labels : int;
 	mutable num_identified_types : int;
@@ -251,6 +255,7 @@ end
 module Wrap = struct
 
 	(* string wrapping *)
+
 	let wrap_string hxc e =
 		Expr.mk_static_call_2 hxc.c_string "ofPointerCopyNT" [e] e.epos
 
@@ -303,6 +308,19 @@ module Wrap = struct
 	let wrap_static_function hxc efunc =
 		wrap_function hxc (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
 
+	let call_closure con e1 el tr =
+		let p = e1.epos in
+		let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
+		let mk_cast e = mk (TCast(e,None)) (con.hxc.t_func_pointer e.etype) p in
+		let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) p in
+		let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
+		let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic p in
+		let eif = Codegen.mk_parent (Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) p) con.com.basic.tbool p) in
+		let ethen = mk (TCall(mk_cast efunc2,ethis :: el)) tr p in
+		let eelse = mk (TCall(mk_cast efunc,el)) tr p in
+		let e = mk (TIf(eif,ethen,Some eelse)) tr p in
+		Expr.mk_cast e r
+
 	(* dynamic wrapping *)
 
 	let st = s_type (print_context())
@@ -311,13 +329,162 @@ module Wrap = struct
 		| TDynamic _ -> true
 		| _ -> false
 
-	let wrap_dynamic con e =
-		con.com.warning (Printf.sprintf "Wrapping dynamic %s" (st e.etype)) e.epos;
-		e
+	let rec build_wrap_class con c t =
+		c.cl_meta <- (Meta.Custom ":noVTable",[],c.cl_pos) :: c.cl_meta;
+		let get_known_fields t =
+			match follow t with
+				| TAnon an ->
+					an.a_fields,(fun e cf -> mk (TField(e, FAnon cf)) cf.cf_type e.epos)
+				| TInst(c,_) ->
+					let acc = ref PMap.empty in
+					let rec loop c =
+						List.iter (fun cf -> acc := PMap.add cf.cf_name cf !acc) c.cl_ordered_fields;
+						match c.cl_super with
+						| None -> ()
+						| Some (csup,_) ->
+							loop csup
+					in
+					loop c;
+					!acc,(fun e cf ->
+						let fa = match cf.cf_kind with
+						| Method MethNormal -> FStatic(c,cf)
+						| _ -> FInstance(c,cf)
+						in
+						mk (TField(e,fa)) cf.cf_type e.epos)
+				| _ ->
+					PMap.empty,(fun _ _ -> assert false)
+		in
+		let p = c.cl_pos in
+		let c_string_map = con.hxc.c_string_map in
+		let vnormal = Var {v_read = AccNormal;v_write = AccNormal} in
+		let t_string = con.com.basic.tstring in
+		let t_void = con.com.basic.tvoid in
+		let cf_fields = Expr.mk_class_field "fields" (TInst(c_string_map,[t_dynamic])) false p vnormal [] in
+		let cf_value = Expr.mk_class_field "value" t false p vnormal [] in
+		let cf_ctor = Expr.mk_class_field "new" (tfun [t] t) true p (Method MethNormal) [] in
+		let cf_get = Expr.mk_class_field "get" (tfun [t_string] t_dynamic) true p (Method MethDynamic) [] in
+		let cf_set = Expr.mk_class_field "set" (tfun [t_string;t_dynamic] t_void) true p (Method MethDynamic) [] in
+		cf_get.cf_meta <- (Meta.Custom ":hackhackhack",[],p) :: cf_get.cf_meta;
+		cf_set.cf_meta <- (Meta.Custom ":hackhackhack",[],p) :: cf_set.cf_meta;
+		let e_this = mk (TConst TThis) (TInst(c,[])) p in
+		let ef_value = mk (TField(e_this, FInstance(c,cf_value))) cf_value.cf_type p in
+		let ef_fields = mk (TField(e_this, FInstance(c,cf_fields))) cf_fields.cf_type p in
 
-	let unwrap_dynamic con e t =
-		con.com.warning (Printf.sprintf "Unwrapping dynamic %s" (s_expr_pretty "" st e)) e.epos;
-		e
+		(* ctor *)
+		let v_obj = alloc_var "obj" t in
+		let e_obj = Expr.mk_local v_obj p in
+		let e_tf_ctor = mk (TFunction {
+			tf_args = [v_obj,None];
+			tf_type = t;
+			tf_expr = mk (TBlock [
+				Expr.mk_binop OpAssign ef_value e_obj e_obj.etype p;
+				Expr.mk_binop OpAssign ef_fields (mk (TNew(c_string_map,[],[])) ef_fields.etype p) ef_fields.etype p;
+			]) t_void p
+		}) cf_ctor.cf_type p in
+		cf_ctor.cf_expr <- Some e_tf_ctor;
+		let known,f = get_known_fields t in
+		let mk_return e = mk (TReturn (Some e)) e.etype e.epos in
+		let v_name = alloc_var "name" t_string in
+		let e_name = Expr.mk_local v_name p in
+
+		(* get *)
+		let ef_get = mk (TField(ef_fields,FInstance(c_string_map,PMap.find "get" c_string_map.cl_fields))) cf_get.cf_type p in
+		let e_get_default = mk_return (mk (TCall(ef_get,[e_name])) t_dynamic p) in
+		let e_get = if (PMap.is_empty known) then
+			e_get_default
+		else
+			PMap.fold (fun cf acc ->
+				match cf.cf_kind with
+				| Var _ when cf.cf_name <> mk_runtime_prefix "header" && cf.cf_name <> mk_runtime_prefix "vtable" ->
+					let e_eq = Expr.mk_binop OpEq
+						(Expr.mk_static_call_2 con.hxc.c_string "equals" [e_name; wrap_string con.hxc (Expr.mk_string con.com cf.cf_name p)] p)
+						(mk (TConst (TBool true)) con.com.basic.tbool p)
+						con.com.basic.tbool
+						p
+					in
+					let e_then = mk_return (wrap_dynamic con (f ef_value cf)) in
+					mk (TIf(Codegen.mk_parent e_eq,e_then,Some acc)) t_void p
+				| _ ->
+					acc
+			) known e_get_default
+		in
+		let e_tf_get = mk (TFunction {
+			tf_args = [v_name,None];
+			tf_type = t_dynamic;
+			tf_expr = mk_block e_get
+		}) cf_get.cf_type p in
+		cf_get.cf_expr <- Some e_tf_get;
+
+		(* set *)
+ 		let v_value = alloc_var "v" t_dynamic in
+		let e_value = Expr.mk_local v_value p in
+		let ef_set = mk (TField(ef_fields,FInstance(c_string_map,PMap.find "set" c_string_map.cl_fields))) cf_set.cf_type p in
+		let e_set_default = mk (TCall(ef_set,[e_name;e_value])) t_void p in
+		let e_set = if (PMap.is_empty known) then
+			e_set_default
+		else
+			PMap.fold (fun cf acc ->
+				match cf.cf_kind with
+				| Var _ when cf.cf_name <> mk_runtime_prefix "header" && cf.cf_name <> mk_runtime_prefix "vtable" ->
+					let e_eq = Expr.mk_binop OpEq
+						(Expr.mk_static_call_2 con.hxc.c_string "equals" [e_name; wrap_string con.hxc (Expr.mk_string con.com cf.cf_name p)] p)
+						(mk (TConst (TBool true)) con.com.basic.tbool p)
+						con.com.basic.tbool
+						p
+					in
+					let e_then = Expr.mk_binop OpAssign (f ef_value cf) (unwrap_dynamic con e_value cf.cf_type) e_value.etype p in
+					mk (TIf(Codegen.mk_parent e_eq,e_then,Some acc)) t_void p
+				| _ ->
+					acc
+			) known e_set_default
+		in
+		let e_tf_set = mk (TFunction {
+			tf_args = [v_name,None;v_value,None];
+			tf_type = t_void;
+			tf_expr = mk_block e_set
+		}) cf_set.cf_type p in
+		cf_set.cf_expr <- Some e_tf_set;
+
+		(* add fields *)
+		let add_cf cf =
+			c.cl_fields <- PMap.add cf.cf_name cf c.cl_fields;
+			c.cl_ordered_fields <- cf :: c.cl_ordered_fields;
+		in
+		c.cl_constructor <- Some cf_ctor;
+		add_cf cf_set;
+		add_cf cf_get;
+		add_cf cf_fields;
+		add_cf cf_value;
+		()
+
+	and get_wrap_class =
+		let wrap_classes = Hashtbl.create 0 in
+		let num_wraps = ref 0 in
+		fun con t ->
+			let type_id = get_type_id con t in
+			try
+				Hashtbl.find wrap_classes type_id
+			with Not_found ->
+				let id = !num_wraps in
+				incr num_wraps;
+				let c,init = con.mk_class (["c"],mk_runtime_prefix ("wrap_" ^ (string_of_int id))) in
+				Printf.printf "Wrapped %s in %s\n" (s_type (print_context()) t) (s_type_path c.cl_path);
+				Hashtbl.add wrap_classes type_id c;
+				build_wrap_class con c t;
+				con.com.types <- TClassDecl c :: con.com.types;
+				init();
+				c
+
+	and wrap_dynamic con e =
+		let c = get_wrap_class con e.etype in
+		mk (TNew(c,[e.etype],[e])) (TInst(c,[e.etype])) e.epos
+
+	and unwrap_dynamic con e t =
+		let c = get_wrap_class con t in
+		let cf = PMap.find "value" c.cl_fields in
+		let e = Expr.mk_cast e (TInst(c,[t])) in
+		mk (TField(e,FInstance(c,cf))) t e.epos
+
 end
 
 
@@ -611,12 +778,12 @@ module DefaultValues = struct
 			fstack := List.tl !fstack;
 			e
 		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
-			let s = match follow e1.etype with
-				| TAbstract({a_path=[],"Int"},_) -> "i"
-				| TInst({cl_path=[],"String"},_) -> "s"
+			let s,e1 = match follow e1.etype with
+				| TAbstract({a_path=[],"Int"},_) -> "i",e1
+				| TInst({cl_path=[],"String"},_) -> "s",e1
 				| _ ->
-					gen.gcom.warning "This will probably not work as expected" e.epos;
-					"s"
+					let e1 = Expr.mk_static_call_2 gen.gcon.hxc.c_std "string" [e1] e1.epos in
+					"s",e1
 			in
 			let eformat = mk (TConst (TString ("%s:%ld: %" ^ s ^ "\\n"))) gen.gcom.basic.tstring e.epos in
 			let eargs = mk (TArrayDecl [List.assoc "fileName" fl;List.assoc "lineNumber" fl;gen.map e1]) (gen.gcom.basic.tarray gen.gcon.hxc.t_vararg) e.epos in
@@ -787,6 +954,18 @@ module TypeChecker = struct
 
 	let filter gen = function e ->
 		match e.eexpr with
+		| TBinop(OpAssign, {eexpr = TField(e1,FDynamic s)}, e2) when Wrap.is_dynamic e1.etype ->
+			let cf = PMap.find "set" gen.gcon.hxc.c_access.cl_fields in
+			let ef = mk (TField(gen.map e1,FAnon cf)) cf.cf_type e.epos in
+			let ef = Expr.mk_cast ef ef.etype in
+			let es = Expr.mk_string gen.gcom s e.epos in
+			mk (TCall(ef,[e1;Wrap.wrap_string gen.gcon.hxc es;check gen (gen.map e2) t_dynamic])) e.etype e.epos
+		| TField(e1,FDynamic s) when Wrap.is_dynamic e1.etype ->
+			let cf = PMap.find "get" gen.gcon.hxc.c_access.cl_fields in
+			let ef = mk (TField(gen.map e1,FAnon cf)) cf.cf_type e.epos in
+			let ef = Expr.mk_cast ef ef.etype in
+			let es = Expr.mk_string gen.gcom s e.epos in
+			mk (TCall(ef,[e1;Wrap.wrap_string gen.gcon.hxc es])) e.etype e.epos
 		| TBinop(OpAssign,e1,e2) ->
 			{e with eexpr = TBinop(OpAssign,gen.map e1,check gen (gen.map e2) e1.etype)}
 		| TBinop(OpEq | OpNotEq as op,e1,e2) ->
@@ -1135,16 +1314,7 @@ module ClosureHandler = struct
 			is_call_expr := fst old;
 			let el = List.map gen.map el in
 			let e = if not !is_extern && is_closure_expr e1 then begin
-				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
-				let mk_cast e = mk (TCast(e,None)) (gen.gcon.hxc.t_func_pointer e.etype) e.epos in
-				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
-				let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
-				let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic e.epos in
-				let eif = Codegen.mk_parent (Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos) in
-				let ethen = mk (TCall(mk_cast efunc2,ethis :: el)) e.etype e.epos in
-				let eelse = mk (TCall(mk_cast efunc,el)) e.etype e.epos in
-				let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
-				Expr.mk_cast e r
+				Wrap.call_closure gen.gcon e1 el e.etype
 			end else
 				{e with eexpr = TCall(e1,el)}
 			in
@@ -1523,7 +1693,7 @@ let add_type_dependency ctx t = match follow t with
 	| TAbstract(a,_) ->
 		add_abstract_dependency ctx a
 	| TDynamic _ ->
-		add_dependency ctx DForward ([],"Dynamic")
+		add_dependency ctx DForward (["c"],"Access")
 	| _ ->
 		(* TODO: that doesn't seem quite right *)
 		add_dependency ctx DForward ([],"Dynamic")
@@ -1880,6 +2050,8 @@ let rec s_type ctx t =
 		let t = ctx.con.hxc.t_closure t in
 		add_type_dependency ctx t;
 		s_type ctx t
+	| TDynamic _ ->
+		"c_Access*"
 	| _ -> "void*"
 
 let rec s_type_with_name ctx t n =
@@ -2112,7 +2284,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx ")";
 	| TNew(c,tl,el) ->
 		add_class_dependency ctx c;
-		spr ctx (full_field_name c (match c.cl_constructor with None -> assert false | Some cf -> cf));
+		spr ctx (full_field_name c (match c.cl_constructor with None -> failwith ("No constructor found on " ^ (s_type_path c.cl_path)) | Some cf -> cf));
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
@@ -2749,14 +2921,17 @@ let initialize_class con c =
 				let ethis = mk (TConst TThis) (monofy_class c) p in
 				let ef1 = mk (TField(ethis,FInstance(c,cf))) cf.cf_type p in
 				let ef2 = mk (TField(ethis,FStatic(c,cf2))) cf2.cf_type p in
-				let ef2 = Wrap.wrap_function con.hxc ethis ef2 in
+				let ef2 = if Meta.has (Meta.Custom ":hackhackhack") cf.cf_meta then
+					ef2
+				else
+					Wrap.wrap_function con.hxc ethis ef2
+				in
 				add_member_init (Codegen.binop OpAssign ef1 ef2 ef1.etype p);
 				c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
 				c.cl_fields <- PMap.add cf2.cf_name cf2 c.cl_fields
 			end;
 			cf.cf_expr <- None;
 			cf.cf_kind <- Var {v_read = AccNormal; v_write = AccNormal};
-			cf.cf_type <- con.hxc.t_closure cf.cf_type;
 		| _ ->
 			()
 	in
@@ -2919,6 +3094,7 @@ let generate com =
 				| [],"hxc" -> {acc with c_boot = c}
 				| [],"String" -> {acc with c_string = c}
 				| [],"Array" -> {acc with c_array = c}
+				| [],"Std" -> {acc with c_std = c}
 				| ["c"],"TypeReference" -> {acc with t_typeref = fun t -> TInst(c,[t])}
 				| ["c"],"FixedArray" -> {acc with c_fixed_array = c}
 				| ["c"],"Exception" -> {acc with c_exception = c}
@@ -2928,6 +3104,8 @@ let generate com =
 				| ["c"],"CSetjmp" -> {acc with c_csetjmp = c}
 				| ["c"],"CStdio" -> {acc with c_cstdio = c}
 				| ["c"],"VTable" -> {acc with c_vtable = c}
+				| ["c"],"Access" -> {acc with c_access = c}
+				| ["haxe";"ds"],"StringMap" -> {acc with c_string_map = c}
 				| _ -> acc
 			end
 		| TAbstractDecl a ->
@@ -2972,6 +3150,9 @@ let generate com =
 		c_cstdlib = null_class;
 		c_cstdio = null_class;
 		c_vtable = null_class;
+		c_string_map = null_class;
+		c_access = null_class;
+		c_std = null_class;
 	} com.types in
 	let anons = ref PMap.empty in
 	let added_anons = ref PMap.empty in
@@ -2997,6 +3178,7 @@ let generate com =
 		hxc = hxc;
 		num_temp_funcs = 0;
 		num_labels = 0;
+		mk_class = (fun _ -> assert false);
 		(* this has to start at 0 so the first type id is 1 *)
 		num_identified_types = 0;
 		type_ids = PMap.empty;
@@ -3005,6 +3187,13 @@ let generate com =
 		generated_types = [];
 		get_anon_signature = get_anon;
 	} in
+	con.mk_class <- begin fun path ->
+		let c = mk_class null_module path null_pos in
+		c,fun () ->
+			initialize_class con c;
+			VTableHandler.get_chains con com.types;
+			(match c.cl_constructor with None -> () | Some cf -> initialize_constructor con c cf);
+	end;
 	List.iter (fun mt -> match mt with
 		| TClassDecl c -> initialize_class con c
 		| _ -> ()
@@ -3019,7 +3208,6 @@ let generate com =
 		DefaultValues.filter;
 		ExprTransformation2.filter
 	] in
-
 	let gen = Filters.mk_gen_context con in
 	List.iter (Filters.add_filter gen) filters;
 	Filters.run_filters_types gen;
