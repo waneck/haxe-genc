@@ -349,7 +349,8 @@ type gr_iid = int
 
 type gr_func = gexpr_t
 
-and gr_ctx = {
+and gr_global_ctx = {
+
 	gr_classes : gr_sclass  DynArray.t;
 	gr_enums   : gr_senum   DynArray.t;
 	gr_anons   : gr_sanon   DynArray.t;
@@ -359,6 +360,28 @@ and gr_ctx = {
 	gr_ianon   : gr_anon    DynArray.t;
 	gr_iclosure: gr_closure DynArray.t;
 
+}
+
+and gr_origin_t =
+    | GROStatic
+    | GROInst
+    | GROArg
+    | GROLocal
+
+and gr_op_t =
+	| GRONew    of gr_value
+	| GROAssign of gr_value * gr_value
+	| GROCall   of gr_value * gr_value list
+	| GROAccess of gr_value
+
+and gr_function_ctx = {
+	gr_fcx_id     : gr_id;
+	gr_fcx_locals : (int,gr_value) PMap.t;
+}
+
+and gr_branch_ctx = {
+	gr_bcx_id  : gr_id;
+	gr_bcx_ops : gr_operation list;
 }
 
 and gr_scope = {
@@ -506,6 +529,8 @@ ctx requires:
 - state
 *)
 
+
+
 let gr_new_var ctx = ()
 	(*ctx.scope*)
 
@@ -520,9 +545,14 @@ let gr_getval_var v : gr_value = gr_null_val
 
 let gr_getval_typeexpr : gr_value = gr_null_val
 
-let ctx_open_branch ctx = ()
+(*
+	What we do is:
+	1.
+*)
+let gr_open_branch ctx  = ()
 
-let ctx_close_branch ctx = ()
+
+let gr_close_branch ctx = ()
 
 (*let eval_gexpr f ctx e : gr_value = match e.gexpr with
 	| GConst c -> (*(match c with
