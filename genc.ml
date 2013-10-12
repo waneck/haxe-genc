@@ -2686,18 +2686,30 @@ let initialize_class con c =
 		| None -> c.cl_init <- Some e
 		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
 	in
+	let add_member_init e = match c.cl_constructor with
+		| Some ({cf_expr = Some ({eexpr = TFunction tf} as ef)} as cf) ->
+			cf.cf_expr <- Some ({ef with eexpr = TFunction {tf with tf_expr = Codegen.concat tf.tf_expr e}})
+		| _ ->
+			failwith "uhm..."
+	in
 	let check_dynamic cf stat = match cf.cf_kind with
 		| Method MethDynamic ->
 			(* create implementation field *)
+			let p = cf.cf_pos in
 			let cf2 = {cf with cf_name = mk_runtime_prefix cf.cf_name; cf_kind = Method MethNormal } in
 			if stat then begin
 				c.cl_ordered_statics <- cf2 :: c.cl_ordered_statics;
 				c.cl_statics <- PMap.add cf2.cf_name cf2 c.cl_statics;
-				let ef1 = Expr.mk_static_field c cf cf.cf_pos in
-				let ef2 = Expr.mk_static_field c cf2 cf2.cf_pos in
+				let ef1 = Expr.mk_static_field c cf p in
+				let ef2 = Expr.mk_static_field c cf2 p in
 				let ef2 = Wrap.wrap_static_function con.hxc ef2 in
-				add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype ef1.epos);
+				add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype p);
 			end else begin
+				let ethis = mk (TConst TThis) (monofy_class c) p in
+				let ef1 = mk (TField(ethis,FInstance(c,cf))) cf.cf_type p in
+				let ef2 = mk (TField(ethis,FStatic(c,cf2))) cf2.cf_type p in
+				let ef2 = Wrap.wrap_function con.hxc ethis ef2 in
+				add_member_init (Codegen.binop OpAssign ef1 ef2 ef1.etype p);
 				c.cl_ordered_fields <- cf2 :: c.cl_ordered_fields;
 				c.cl_fields <- PMap.add cf2.cf_name cf2 c.cl_fields
 			end;
