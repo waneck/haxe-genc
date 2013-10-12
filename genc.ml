@@ -202,6 +202,9 @@ module Expr = struct
 	let mk_int com i p =
 		mk (TConst (TInt (Int32.of_int i))) com.basic.tint p
 
+	let mk_string com s p =
+		mk (TConst (TString s)) com.basic.tstring p
+
 	let debug ctx e =
 		Printf.sprintf "%s: %s" ctx.fctx.field.cf_name (s_expr (s_type (print_context())) e)
 
@@ -246,6 +249,10 @@ module Expr = struct
 end
 
 module Wrap = struct
+
+	(* string wrapping *)
+	let wrap_string hxc e =
+		Expr.mk_static_call_2 hxc.c_string "ofPointerCopyNT" [e] e.epos
 
 	(* basic type wrapping *)
 
@@ -872,11 +879,11 @@ module StringHandler = struct
 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"String"},{cf_name = "raw"}))},[{eexpr = TConst(TString s)} as e]) ->
 			e
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
-			Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [mk (TConst (TString s)) e.etype e.epos] e.epos
+			Wrap.wrap_string gen.gcon.hxc (mk (TConst (TString s)) e.etype e.epos)
 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"Std"},{cf_name = "string"}))},[e1]) ->
 			begin match follow e1.etype with
 				| TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) ->
-					Expr.mk_static_call_2 gen.gcon.hxc.c_string "ofPointerCopyNT" [e1] e.epos
+					Wrap.wrap_string gen.gcon.hxc e1
 				| _ ->
 					e
 			end
