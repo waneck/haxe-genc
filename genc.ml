@@ -209,6 +209,9 @@ module Expr = struct
 	let mk_string com s p =
 		mk (TConst (TString s)) com.basic.tstring p
 
+	let mk_null ?(t=mk_mono()) p =
+		mk (TConst TNull) t p
+
 	let debug ctx e =
 		Printf.sprintf "%s: %s" ctx.fctx.field.cf_name (s_expr (s_type (print_context())) e)
 
@@ -310,7 +313,7 @@ module Wrap = struct
 		mk (TNew(c,[efunc.etype],[Expr.mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
 
 	let wrap_static_function hxc efunc =
-		wrap_function hxc (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
+		wrap_function hxc (Expr.mk_null efunc.epos) efunc
 
 	let call_closure con e1 el tr =
 		let p = e1.epos in
@@ -319,7 +322,7 @@ module Wrap = struct
 		let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) p in
 		let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
 		let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic p in
-		let eif = Codegen.mk_parent (Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) p) con.com.basic.tbool p) in
+		let eif = Codegen.mk_parent (Expr.mk_binop OpNotEq ethis (Expr.mk_null p) con.com.basic.tbool p) in
 		let ethen = mk (TCall(mk_cast efunc2,ethis :: el)) tr p in
 		let eelse = mk (TCall(mk_cast efunc,el)) tr p in
 		let e = mk (TIf(eif,ethen,Some eelse)) tr p in
@@ -727,7 +730,7 @@ module DefaultValues = struct
 						end else
 							e_loc_v,subst
 						in
-						let econd = Codegen.mk_parent (Codegen.binop OpEq (mk (TConst TNull) (mk_mono())p) e_loc_v gen.gcom.basic.tbool p) in
+						let econd = Codegen.mk_parent (Codegen.binop OpEq (Expr.mk_null p) e_loc_v gen.gcom.basic.tbool p) in
 						let mk_assign e2 = Codegen.binop OpAssign e_loc_v2 e2 e2.etype p in
 						let eassign = mk_assign (mk (TConst c) (follow v.v_type) p) in
 						let eelse = if Wrap.requires_wrapping v.v_type then begin
@@ -912,7 +915,7 @@ module TypeChecker = struct
 			let fields = sort_anon_fields (pmap_to_list an.a_fields) in
 			let fl = List.map (fun cf ->
 				try cf.cf_name,List.assoc cf.cf_name fl
-				with Not_found -> cf.cf_name,mk (TConst TNull) (mk_mono()) e.epos
+				with Not_found -> cf.cf_name,Expr.mk_null e.epos
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
 		(* literal String assigned to const char* = pass through *)
@@ -1872,7 +1875,7 @@ module VTableHandler = struct
 				(max mx vidx, esetidx :: acc)
 			) vtable (0,[]) in
 
-			let sizeof t = Expr.mk_static_call clib con.hxc.cf_sizeof [(mk (TConst TNull) t null_pos)] null_pos in
+			let sizeof t = Expr.mk_static_call clib con.hxc.cf_sizeof [Expr.mk_null ~t:t null_pos] null_pos in
 			let vt_size = mx+1 in
 			let e_vtsize = (Expr.mk_int con.com vt_size null_pos) in
 			(* sizeof(vtable_t) + vt_size * sizeof(void ( * )())  *)
