@@ -381,17 +381,12 @@ and gr_function_ctx = {
 
 and gr_branch_ctx = {
 	gr_bcx_id  : gr_id;
-	gr_bcx_ops : gr_operation list;
+	gr_bcx_ops : gr_op_t list;
 }
 
 and gr_scope = {
 	gsc_id    : gr_id;
 	gsc_vars  : gr_value DynArray.t;
-}
-
-and gr_function_ctx = {
-	mutable gr_  : int;
-
 }
 
 and gr_fields = {
@@ -464,6 +459,11 @@ and gr_value = {
 	grv_val   : gr_value_t;
 	grv_refs  : gr_value_t list;
 
+}
+
+and gr_state = {
+	gst_id  : gr_id;
+	gst_pid : gr_id;
 }
 
 let gr_null_val = { grv_val = GRNull; grv_refs = []}
@@ -553,6 +553,85 @@ let gr_open_branch ctx  = ()
 
 
 let gr_close_branch ctx = ()
+
+type gr_state_ctx = {
+	xxx : int;
+}
+
+(*let eval_gexpr f ctx e : gr_value = match e.gexpr with
+	| GIf (e,e1,e2) ->
+		f e;
+		f e1;
+		(match e2 with None -> gr_null_val | Some e -> f e)
+
+	| GSwitch (e,cases,def) ->
+		f e;
+		List.iter (fun (el,e2) -> List.iter f el; f e2) cases;
+		(match def with None -> gr_null_val | Some e -> f e)
+
+	| _ ->*)
+
+type grstate = int
+
+let eval_merge (states : gr_state list) ( f : gr_state -> gexpr_t -> gr_state list ) e =
+let nstates = List.fold_left ( fun acc st -> (f st e) :: acc ) [] states in
+	List.flatten nstates
+
+let eval_merge_seq states f el =
+	List.fold_left ( fun acc e ->
+		eval_merge acc f e
+	) states el
+
+let eval_map states f e =
+	List.map (fun st -> f st) states
+
+let eval_branches states e =
+	let rec f ctx states e : gr_state list = match e.gexpr with
+	| GIf (e,e1,e2) ->
+		let rstates List.map ( fun st->
+			(* eval the condition *)
+			let cond_states = f ctx st e in
+			let if_states   = eval_merge cond_states (f ctx) e1 in (match e2 with
+				| None -> (*
+					we have no else, this means that we have to consider
+					two state sets, the one modified by if AND the condition and the one
+					only modified by condition
+				*)
+				List.flatten [cond_states;if_states]
+				| Some e -> (*
+					we have an else, this means that we have to consider
+					two state sets, the one modified by
+					if AND the condition and the one modified by
+					else AND the condition
+				*)
+				let else_states = eval_merge cond_states (f ctx) e in
+				List.flatten [if_states;else_states]
+			)
+		) states;
+	| GSwitch (e,cases,def) ->
+		let cond_states = f ctx st e in
+		let case_cond_states,case_states = List.fold_left ( fun (states,rstates) (el,e2) ->
+			(* the condition evaluation modifies global state unconditionally *)
+			let case_cond_states = eval_merge_seq states (f ctx) el in
+			let case_states      = eval_merge case_cond_states (f ctx) e2 in
+			(case_cond_states, case_states :: rstates)
+		) (cond_states,[]) cases
+		in
+		let rstates = ( match def with
+			| None -> case_states
+			| Some e ->
+				let def_case_states = eval_merge case_cond_states (f ctx) e in
+				def_case_states :: case_states
+		)
+		in List.flatten rstates
+
+	| _ ->
+		let f = ( fun acc e -> )
+		fold_gexpr
+	iter_gexpr (f ctx) e
+	in f (1) st e
+
+
 
 (*let eval_gexpr f ctx e : gr_value = match e.gexpr with
 	| GConst c -> (*(match c with
