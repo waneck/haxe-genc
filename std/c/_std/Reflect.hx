@@ -30,10 +30,11 @@ class Reflect {
 	}
 
 	public static function field( o : Dynamic, field : String ) : Dynamic {
-		return null;
+		return untyped o[field];
 	}
 	
 	public static function setField( o : Dynamic, field : String, value : Dynamic ) : Void {
+		untyped o[field] = value;
 	}
 
 	public static function getProperty( o : Dynamic, field : String ) : Dynamic {

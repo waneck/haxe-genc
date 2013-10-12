@@ -256,6 +256,10 @@ module Wrap = struct
 
 	(* string wrapping *)
 
+	let is_string t = match follow t with
+		| TInst({cl_path = [],"String"},_) -> true
+		| _ -> false
+
 	let wrap_string hxc e =
 		Expr.mk_static_call_2 hxc.c_string "ofPointerCopyNT" [e] e.epos
 
@@ -952,20 +956,28 @@ module TypeChecker = struct
 	let fstack = ref []
 	let is_call_expr = ref false
 
+	let mk_dynamic_set con e1 es e2 t p =
+		let cf = PMap.find "set" con.hxc.c_access.cl_fields in
+		let ef = mk (TField(e1,FAnon cf)) cf.cf_type p in
+		let ef = Expr.mk_cast ef ef.etype in
+		mk (TCall(ef,[e1;es;e2])) t p
+
+	let mk_dynamic_get con e1 es t p =
+		let cf = PMap.find "get" con.hxc.c_access.cl_fields in
+		let ef = mk (TField(e1,FAnon cf)) cf.cf_type p in
+		let ef = Expr.mk_cast ef ef.etype in
+		mk (TCall(ef,[e1;es])) t p
+
 	let filter gen = function e ->
 		match e.eexpr with
 		| TBinop(OpAssign, {eexpr = TField(e1,FDynamic s)}, e2) when Wrap.is_dynamic e1.etype ->
-			let cf = PMap.find "set" gen.gcon.hxc.c_access.cl_fields in
-			let ef = mk (TField(gen.map e1,FAnon cf)) cf.cf_type e.epos in
-			let ef = Expr.mk_cast ef ef.etype in
-			let es = Expr.mk_string gen.gcom s e.epos in
-			mk (TCall(ef,[e1;Wrap.wrap_string gen.gcon.hxc es;check gen (gen.map e2) t_dynamic])) e.etype e.epos
+			mk_dynamic_set gen.gcon (gen.map e1) (Wrap.wrap_string gen.gcon.hxc (Expr.mk_string gen.gcon.com s e.epos)) (check gen (gen.map e2) t_dynamic) e.etype e.epos
 		| TField(e1,FDynamic s) when Wrap.is_dynamic e1.etype ->
-			let cf = PMap.find "get" gen.gcon.hxc.c_access.cl_fields in
-			let ef = mk (TField(gen.map e1,FAnon cf)) cf.cf_type e.epos in
-			let ef = Expr.mk_cast ef ef.etype in
-			let es = Expr.mk_string gen.gcom s e.epos in
-			mk (TCall(ef,[e1;Wrap.wrap_string gen.gcon.hxc es])) e.etype e.epos
+			mk_dynamic_get gen.gcon (gen.map e1) (Wrap.wrap_string gen.gcon.hxc (Expr.mk_string gen.gcon.com s e.epos)) e.etype e.epos
+		| TBinop(OpAssign, {eexpr = TArray(e1,e2)}, e3) when Wrap.is_string e2.etype ->
+			mk_dynamic_set gen.gcon (gen.map e1) (gen.map e2) (check gen (gen.map e3) t_dynamic) e.etype e.epos
+		| TArray(e1,e2) when Wrap.is_string e2.etype ->
+			mk_dynamic_get gen.gcon (gen.map e1) (gen.map e2) e.etype e.epos
 		| TBinop(OpAssign,e1,e2) ->
 			{e with eexpr = TBinop(OpAssign,gen.map e1,check gen (gen.map e2) e1.etype)}
 		| TBinop(OpEq | OpNotEq as op,e1,e2) ->
@@ -1048,9 +1060,6 @@ end
 	- translates String == String to String.equals
 *)
 module StringHandler = struct
-	let is_string t = match follow t with
-		| TInst({cl_path = [],"String"},_) -> true
-		| _ -> false
 
 	let filter gen e =
 		match e.eexpr with
@@ -1066,15 +1075,15 @@ module StringHandler = struct
 				| _ ->
 					e
 			end
-		| TBinop((OpEq | OpNotEq) as op,e1,e2) when is_string e1.etype ->
+		| TBinop((OpEq | OpNotEq) as op,e1,e2) when Wrap.is_string e1.etype ->
 			Expr.mk_binop op
 				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "equals" [gen.map e1; gen.map e2] e1.epos)
 				(mk (TConst (TBool true)) gen.gcom.basic.tbool e1.epos)
 				e.etype
 				e.epos
-		| TBinop(OpAdd,e1,e2) when is_string e1.etype ->
+		| TBinop(OpAdd,e1,e2) when Wrap.is_string e1.etype ->
 			Expr.mk_static_call_2 gen.gcon.hxc.c_string "concat" [gen.map e1; gen.map e2] e1.epos
-		| TBinop(OpAssignOp(OpAdd),e1,e2) when is_string e1.etype ->
+		| TBinop(OpAssignOp(OpAdd),e1,e2) when Wrap.is_string e1.etype ->
 			(* TODO: we have to cache e1 in a temp var and handle the assignment correctly *)
 			Expr.mk_binop
 				OpAssign
@@ -1147,7 +1156,7 @@ module SwitchHandler = struct
 				e1
 			else
 				Codegen.concat (mk_goto_meta dt.dt_first) e1
-		| TSwitch(e1,cases,def) when StringHandler.is_string e1.etype ->
+		| TSwitch(e1,cases,def) when Wrap.is_string e1.etype ->
 			let length_map = Hashtbl.create 0 in
 			List.iter (fun (el,e) ->
 				List.iter (fun es ->
