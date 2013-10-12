@@ -490,7 +490,9 @@ module Wrap = struct
 		let c = get_wrap_class con t in
 		let cf = PMap.find "value" c.cl_fields in
 		let e = Expr.mk_cast e (TInst(c,[t])) in
-		mk (TField(e,FInstance(c,cf))) t e.epos
+		let e_if = Expr.mk_binop OpEq e (Expr.mk_null e.epos) con.com.basic.tbool e.epos in
+		let ef = mk (TField(e,FInstance(c,cf))) t e.epos in
+		mk (TIf(e_if,Expr.mk_null e.epos,Some ef)) t e.epos
 
 end
 
