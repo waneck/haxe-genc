@@ -247,6 +247,8 @@ end
 
 module Wrap = struct
 
+	(* basic type wrapping *)
+
 	let box_field_name =
 		mk_runtime_prefix "value"
 
@@ -284,14 +286,31 @@ module Wrap = struct
 			Expr.mk_cast e t
 		end
 
+	(* closure wrapping *)
+
 	let wrap_function hxc ethis efunc =
-		let c,t = match hxc.t_closure t_dynamic with TInst(c,_) as t -> c,t | _ -> assert false in
+		let c,t = match hxc.t_closure efunc.etype with TInst(c,_) as t -> c,t | _ -> assert false in
 		let cf_func = PMap.find "_func" c.cl_fields in
 		mk (TNew(c,[efunc.etype],[Expr.mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
 
 	let wrap_static_function hxc efunc =
 		wrap_function hxc (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
 
+	(* dynamic wrapping *)
+
+	let st = s_type (print_context())
+
+	let is_dynamic t = match follow t with
+		| TDynamic _ -> true
+		| _ -> false
+
+	let wrap_dynamic con e =
+		con.com.warning (Printf.sprintf "Wrapping dynamic %s" (st e.etype)) e.epos;
+		e
+
+	let unwrap_dynamic con e t =
+		con.com.warning (Printf.sprintf "Unwrapping dynamic %s" (s_expr_pretty "" st e)) e.epos;
+		e
 end
 
 
@@ -688,12 +707,27 @@ end
 module TypeChecker = struct
 
 	let rec check gen e t =
-		(* if e.epos.pfile = "src/Main.hx" then gen.gcom.warning (Printf.sprintf "%s %s %b %b" (s_type (print_context()) e.etype) (s_type (print_context()) t) (Expr.is_box_type e.etype) (Expr.is_box_type t)) e.epos; *)
 		let e = match is_null e.etype,is_null t with
 			| true,true
 			| false,false -> e
 			| true,false -> Wrap.unbox_basic_value e
 			| false,true -> Wrap.box_basic_value e
+		in
+		let e = match Wrap.is_dynamic e.etype,Wrap.is_dynamic t with
+			| true,true
+			| false,false -> e
+			| true,false ->
+				begin match follow e.etype,follow t with
+					| TMono _,_
+					| _,TMono _ -> e
+					| _ -> Wrap.unwrap_dynamic gen.gcon e t
+				end
+			| false,true ->
+				begin match follow e.etype,follow t with
+					| TMono _,_
+					| _,TMono _ -> e
+					| _ -> Wrap.wrap_dynamic gen.gcon e
+				end
 		in
 		match e.eexpr,follow t with
 		| TObjectDecl fl,(TAnon an as ta) ->
@@ -988,7 +1022,7 @@ module ClosureHandler = struct
 		let add_local v = if not (PMap.mem v.v_name !locals) then locals := PMap.add v.v_name v !locals in
 		let add_unknown v = if not (PMap.mem v.v_name !unknown) then unknown := PMap.add v.v_name v !unknown in
 		List.iter (fun (v,_) -> add_local v) tf.tf_args;
-		let v_this = alloc_var "this" t_dynamic in
+		let v_this = alloc_var "this" (match ethis with Some e -> e.etype | _ -> mk_mono()) in
 		let t_ctx = mk_mono() in
 		let v_ctx = alloc_var ctx_name t_ctx in
 		let e_ctx = mk (TLocal v_ctx) v_ctx.v_type p in
@@ -1972,7 +2006,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			| _ -> assert false
 		in
 		let n = (mk_runtime_prefix "initInstance") in
-		let e = Expr.mk_static_call_2 csup n ((Expr.mk_local (alloc_var "this" t_dynamic) e1.epos) :: el) e1.epos in
+		let e = Expr.mk_static_call_2 csup n ((Expr.mk_local (alloc_var "this" e1.etype) e1.epos) :: el) e1.epos in
 		generate_expr ctx false e
 	| _ ->
 		generate_expr ctx true e1;
@@ -2309,7 +2343,7 @@ let generate_header_fields ctx =
 	let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable" )
 		(TInst(ctx.con.hxc.c_vtable,[])) false null_pos v [] in
 	let cf_hd = Expr.mk_class_field (mk_runtime_prefix "header" )
-		(ctx.con.hxc.t_int64 t_dynamic) false null_pos v [] in
+		(ctx.con.hxc.t_int64 (mk_mono())) false null_pos v [] in
 	[cf_vt;cf_hd]
 
 let generate_class ctx c =
@@ -2785,7 +2819,7 @@ let initialize_class con c =
 	if not (Meta.has (Meta.Custom ":noVTable") c.cl_meta) then begin
 		let v = Var {v_read=AccNormal;v_write=AccNormal} in
 		let cf_vt = Expr.mk_class_field (mk_runtime_prefix "vtable") (TInst(con.hxc.c_vtable,[])) false null_pos v [] in
-		let cf_hd = Expr.mk_class_field (mk_runtime_prefix "header") (con.hxc.t_int64 t_dynamic) false null_pos v [] in
+		let cf_hd = Expr.mk_class_field (mk_runtime_prefix "header") (con.hxc.t_int64 (mk_mono())) false null_pos v [] in
 		c.cl_ordered_fields <- cf_vt :: cf_hd :: c.cl_ordered_fields;
 		c.cl_fields <- PMap.add cf_vt.cf_name cf_vt (PMap.add cf_hd.cf_name cf_hd c.cl_fields);
 	end;

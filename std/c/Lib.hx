@@ -12,7 +12,7 @@ extern class Lib {
 	
 	public static function alloca(i:Int):Pointer<Void>;
 	
-	public static function cCode(s:ConstPointer<Char>):Dynamic;
+	public static function cCode<T>(s:ConstPointer<Char>):T;
 	
 	public static function callMain():Void;
 }
