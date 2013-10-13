@@ -2426,9 +2426,9 @@ and generate_expr ctx need_val e = match e.eexpr with
 		| TInst(c,_) when Meta.has Meta.Struct c.cl_meta -> generate_expr ctx true e1;
 		| TAbstract({a_path = ["c"],"Pointer"},[t]) when ((s_type ctx e.etype) = "int") -> generate_expr ctx true e1;
 		| _ ->
-			print ctx "((%s) (" (s_type ctx e.etype);
+			print ctx "HX_CAST(%s," (s_type ctx e.etype);
 			generate_expr ctx true e1;
-			spr ctx "))"
+			spr ctx ")"
 		end
 	| TEnumParameter (e1,ef,i) ->
 		generate_expr ctx true e1;

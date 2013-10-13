@@ -21,6 +21,8 @@ import c.Access;
 	#define ALLOCA(n) _alloca(n)
 #endif
 
+#define HX_CAST(a,b) ((a)b)
+
 typedef unsigned char hx_uchar;
 typedef char hx_char;
 typedef unsigned int hx_uint;
