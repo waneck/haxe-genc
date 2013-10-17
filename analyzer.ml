@@ -30,15 +30,38 @@ and gdata_value =
 	| GDEnum of int * tenum
 	| GDAnon of int * tanon
 
+and gdbranch_instruction_t = {
+
+	mutable gdb_idx : int;   (* index of currently evaluated branch always < gdb_max*)
+
+	gdb_max   : int;         (* number of alternative branches *)
+
+	gdb_exprs : gexpr_t array; (* the child expressions of this branch in an array, for random access *)
+
+	gdb_seq   : gdbranch_instruction_t array array;
+							 (* an array for each sequence of branch instructions per child expressison *)
+
+	mutable gdb_cur : int;   (* index of currently evaluated execution path, always < gdb_total*)
+
+	gdb_total : int;         (* total number of execution paths when iterating over this branch *)
+}
+
+and gdbranch_t =
+	| GDBIf
+	| GDBIfElse
+	| GDBSwitch
+
 and gdata_t =
 	| GDNone
 	| GDBlockInfo of ( int * gdata_t list )
+	| GDBranchDone
+	| GDBranchState of gdbranch_instruction_t
 
 and gexpr_t = {
 	g_te  : Type.texpr;
 	gtype : Type.t;
 	gexpr : gexpr_expr_t;
-	gdata : gdata_t;
+	mutable gdata : gdata_t;
 }
 	(*| GE of (texpr * gexpr_expr_t)
 	| GMergeBlock of (texpr * gexpr_expr_t) list*)
@@ -77,7 +100,11 @@ and gexpr_expr_t    =
 	| GEnumParameter of gexpr_t * genum_field_t * int
 	| GNode of gnode_t
 
-
+let s_gdata v = match v with
+	| GDNone -> "no data"
+	| GDBranchDone -> "brdone data"
+	| GDBranchState _ -> "brstate data"
+	| GDBlockInfo _ -> "blockinfo data"
 
 let fdefault v:'a = 0
 let fid      v:'a = v
@@ -206,6 +233,7 @@ let map_gexpr f e : gexpr_t = match e.gexpr with
 			{ e with gexpr =   GCast (f e1, match t with None -> None | Some mt -> Some (mt)) }
 		| GMeta (m,e1) ->
 			{ e with gexpr =   GMeta(m,f e1) }
+		| GNode _ -> assert false
 
 
 let fold_gexpr (f : 'a -> gexpr_t -> 'a) (acc : 'a) ( e : gexpr_t)  : 'a = match e.gexpr with
@@ -260,6 +288,7 @@ let fold_gexpr (f : 'a -> gexpr_t -> 'a) (acc : 'a) ( e : gexpr_t)  : 'a = match
 			List.fold_left (fun acc (_,e) -> f acc e) acc catches
 		| GReturn eo ->
 			(match eo with None -> acc | Some e -> f acc e)
+		| GNode _ -> assert false
 
 
 let iter_gexpr f e : unit = match e.gexpr with
@@ -312,7 +341,65 @@ let iter_gexpr f e : unit = match e.gexpr with
 			List.iter (fun (_,e) -> f e) catches
 		| GReturn eo ->
 			(match eo with None -> () | Some e -> f e)
+		| GNode _ -> assert false
 
+let s_gexpr e  = match e.gexpr with
+		| GConst _ -> "GConst"
+		| GLocal v -> "GLocal " ^ v.v_name
+		| GBreak -> "GBreak"
+		| GContinue -> "GContinue"
+		| GVars _ -> "GVars"
+		| GCall _ -> "GCall"
+		| GBinop _ -> "GBinop"
+		| GUnop _ -> "GUnop"
+		| GNew (c,_,_) -> "GNew " ^ (snd c.cl_path)
+		| _ -> ""
+(*		| GTypeExpr _ ->
+			()
+		| GArray (e1,e2)
+		| GBinop (_,e1,e2)
+		| GFor (_,e1,e2)
+		| GWhile (e1,e2,_) ->
+			f e1;
+			f e2;
+		| GThrow e
+		| GField (e,_)
+		| GEnumParameter (e,_,_)
+		| GParenthesis e
+		| GCast (e,_)
+		| GUnop (_,_,e)
+		| GMeta(_,e) ->
+			f e
+		| GArrayDecl el
+		| GNew (_,_,el)
+		| GBlock el ->
+			List.iter f el
+		| GObjectDecl fl ->
+			List.iter (fun (_,e) -> f e) fl
+		| GCall (e,el) ->
+			f e;
+			List.iter f el
+		| GVars vl ->
+			List.iter (fun (_,e) -> match e with None -> () | Some e -> f e) vl
+		| GNVar v -> ()
+		| GSVar (v, e) -> f e
+		| GFunction (tf, e) ->
+			f e
+		| GIf (e,e1,e2) ->
+			f e;
+			f e1;
+			(match e2 with None -> () | Some e -> f e)
+		| GSwitch (e,cases,def) ->
+			f e;
+			List.iter (fun (el,e2) -> List.iter f el; f e2) cases;
+			(match def with None -> () | Some e -> f e)
+		| GPatMatch dt -> ()
+		| GTry (e,catches) ->
+			f e;
+			List.iter (fun (_,e) -> f e) catches
+		| GReturn eo ->
+			(match eo with None -> () | Some e -> f e)
+		| GNode _ -> assert false*)
 
 (* ---------------------------------------------------------------------- *)
 
@@ -338,7 +425,16 @@ let iter_gexpr f e : unit = match e.gexpr with
 	access typeexpr.field.field.
 
 
+	3     0       0       1       1       2       2
+	2     0       1       0       1       0       1
+	4     0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
+
+
 *)
+
+
+
+
 
 
 (* ----------------------------  Interpreter  --------------------------- *)
@@ -463,7 +559,7 @@ and gr_value = {
 
 and gr_state = {
 	gst_id  : gr_id;
-	gst_pid : gr_id;
+	(*gst_pid : gr_id;*)
 }
 
 let gr_null_val = { grv_val = GRNull; grv_refs = []}
@@ -573,64 +669,319 @@ type gr_state_ctx = {
 
 type grstate = int
 
-let eval_merge (states : gr_state list) ( f : gr_state -> gexpr_t -> gr_state list ) e =
+(*
+let eval_merge (states : gr_state list) ( f : gr_state list -> gexpr_t -> gr_state list ) e =
 let nstates = List.fold_left ( fun acc st -> (f st e) :: acc ) [] states in
 	List.flatten nstates
 
 let eval_merge_seq states f el =
 	List.fold_left ( fun acc e ->
 		eval_merge acc f e
-	) states el
+	) states el*)
+
+let flatten xxs =
+	let rec inner xs acc = match xs with
+	| x :: xs -> inner xs (x :: acc)
+	| []      -> acc
+	in
+	let rec outer xxs acc = match xxs with
+	| xs :: xxs -> outer xxs (inner xs acc)
+	| [] -> acc
+	in match xxs with
+	| xs :: xxs -> (outer xxs xs)
+	| [] -> []
+
+
+let eval_seq states f el =
+	List.fold_left ( fun acc e -> f states e ) states el
 
 let eval_map states f e =
 	List.map (fun st -> f st) states
 
+(*
+let eval_func f ctx states e = match e.gexpr with
+	| *)
+
+
+
 let eval_branches states e =
 	let rec f ctx states e : gr_state list = match e.gexpr with
 	| GIf (e,e1,e2) ->
-		let rstates List.map ( fun st->
-			(* eval the condition *)
-			let cond_states = f ctx st e in
-			let if_states   = eval_merge cond_states (f ctx) e1 in (match e2 with
-				| None -> (*
-					we have no else, this means that we have to consider
-					two state sets, the one modified by if AND the condition and the one
-					only modified by condition
-				*)
-				List.flatten [cond_states;if_states]
-				| Some e -> (*
-					we have an else, this means that we have to consider
-					two state sets, the one modified by
-					if AND the condition and the one modified by
-					else AND the condition
-				*)
-				let else_states = eval_merge cond_states (f ctx) e in
-				List.flatten [if_states;else_states]
+		let rstates = List.rev_map ( fun st->
+			let cond_states = f ctx [st] e in
+			let if_states   = f ctx cond_states e1 in (match e2 with
+				| None ->
+					flatten [cond_states;if_states]
+				| Some e ->
+					let else_states = f ctx cond_states e in
+					flatten [if_states;else_states]
 			)
-		) states;
+		) states in
+		flatten rstates
 	| GSwitch (e,cases,def) ->
-		let cond_states = f ctx st e in
+		let cond_states = f ctx states e in
 		let case_cond_states,case_states = List.fold_left ( fun (states,rstates) (el,e2) ->
-			(* the condition evaluation modifies global state unconditionally *)
-			let case_cond_states = eval_merge_seq states (f ctx) el in
-			let case_states      = eval_merge case_cond_states (f ctx) e2 in
+			let case_cond_states = eval_seq states (f ctx) el in
+			let case_states      = f ctx case_cond_states e2 in
 			(case_cond_states, case_states :: rstates)
 		) (cond_states,[]) cases
 		in
 		let rstates = ( match def with
 			| None -> case_states
 			| Some e ->
-				let def_case_states = eval_merge case_cond_states (f ctx) e in
+				let def_case_states = f ctx case_cond_states e in
 				def_case_states :: case_states
 		)
-		in List.flatten rstates
+		in flatten rstates
 
+	| _ -> fold_gexpr (f ctx) states e
+	in f (1) states e
+
+
+(*
+   An algorithm to iterate over all possible execution paths (branches)
+   one at a time. this is required, because the vast number of possible
+   branches would make collecting the data we're interested in at once an extremely
+   memory-hungry task. It's quite easy to end up with millions of possible execution
+   paths per function, if we collect e.g. 1 KB of data per branch on average
+   we'd require gigabytes of memory in total.
+
+   there are additional considerations, that make iterating over the branches one at a time
+   very interesting from a performance point of view. Because we only switch one single branch
+   per step, most of the time we can reuse results for sequentially following branches.
+
+   key is to transform the collected data EARLY to a dense representation of what we're really interested in.
+
+    basic algorithm:
+
+	consider a block that has the following toplevel branching instructions
+	some of which have sub-branches, which combined are the number of 'deep' branches
+	idx          no. toplevel | no. 'deep'
+	0   if-else  2              2
+	1   if-else  2              4
+	2   switch   5              22
+	3   if-else  2              2
+	4   switch   6              6
+	5   if-else  2              4
+	------------------------------------------------------------
+	                            8448 possible execution paths
+
+	1. we start with the first branch of all branching instructions
+	   - we collect our data for the first execution path
+	2. we switch to the next branch in line, which means we set the
+		if-else at idx 5 to the next path of the possible 4
+	3. we repeat 2 until all 4 paths are exhausted
+	4. we switch to the next branch, which means
+	   current path+1
+	     for the switch  at idx 4 and
+	   0 for the if-else at idx 5
+	5. we repeat 2. 3 and 4. until all paths are exhausted for idx 4,
+	   and continue with idx 3,2,1 and 0 equivalently
+
+
+   representation of a sequence of branching instructions
+
+	branch_seq = {
+		cur_idx  : int
+		total    : int
+		children : branch_instruction array
+	}
+
+
+
+   representation of if-else branches,representation of switches
+   branch_instruction = {
+		cur_idx  : int
+		total    : int
+		children : branch_instruction array
+	}
+
+   representation of for/while/do-while loops with break and continue
+
+
+*)
+
+let arrays_of_lists ll =
+	Array.of_list (List.map ( fun l -> Array.of_list (List.rev l) ) ll)
+
+let execution_paths_total seqs : int =
+	let sum_seq seq = Array.fold_left (fun n bi -> (bi.gdb_total * n)) 1 seq in
+	Array.fold_left ( fun n seq -> (sum_seq seq) + n ) 0 seqs
+
+let iter_execution_paths_init e =
+	let rec f ctx bins e : gdbranch_instruction_t list = match e.gexpr with
+	| GIf (cond,e1,e2) ->
+		let arrs,exprs = (match e2 with
+		| Some e2 ->  [ (f ctx [] e1); (f ctx [] e2) ],[e1;e2]
+		| None    ->  [ (f ctx [] e1) ],[e1]
+	    ) in
+	    let arrs  = arrays_of_lists arrs in
+	    let total = (execution_paths_total arrs) in
+		let bin = {
+			gdb_idx   = 0;
+			gdb_max   = 2;
+			gdb_exprs = Array.of_list exprs;
+			gdb_seq   = arrs;
+			gdb_cur   = 0;
+			gdb_total = total
+		} in
+		let _ = e.gdata <- GDBranchState bin in
+		bin :: bins
+
+	| GSwitch (cond,cases,def) ->
+		let exprs = (match def with
+		| Some def -> List.rev (def :: (List.rev_map (fun (_,e) -> e) cases))
+		| None     -> List.map (fun (_,e) -> e) cases
+		) in
+		let arrs = arrays_of_lists (List.map (fun e -> (f ctx [] e)) exprs) in
+		let total = (execution_paths_total arrs) in
+		let bin = {
+			gdb_idx   = 0;
+			gdb_max   = Array.length arrs;
+			gdb_exprs = Array.of_list exprs;
+			gdb_seq   = arrs;
+			gdb_cur   = 0;
+			gdb_total = total
+		} in
+		let _ = e.gdata <- GDBranchState bin in
+		bin :: bins
+	| _ -> fold_gexpr (f ctx) bins e
+	in
+	let arrs    = arrays_of_lists [f (1) [] e] in
+	let total   = (execution_paths_total arrs) in
+	{
+		gdb_idx   = 0;
+		gdb_max   = 1;
+		gdb_exprs = [||];
+		gdb_seq   = arrs;
+		gdb_cur   = 0;
+		gdb_total = total
+	}
+
+
+type iter_res_t =
+	| IterDone
+	| IterCont
+
+
+
+let iter_execution_paths_next it =
+	let rec next it =
+		let rec walk_seq seq idx = match idx with (*we walk a sequence of bins backwards *)
+		| -1 -> IterDone  (*when we've finished the seq at index 0, we're done *)
+		| _ ->
+			let cur = seq.(idx) in
+			(match next cur with (**)
+				| IterCont -> IterCont (* branch instruction cur isn't exhausted yet *)
+				| IterDone -> walk_seq seq (idx-1) (* step back to bin at idx-1 *)
+			)
+		in
+		let cur_seq = it.gdb_seq.(it.gdb_idx ) in
+		match ( walk_seq cur_seq ((Array.length cur_seq) - 1)) with
+		| IterCont -> IterCont
+		| IterDone -> (* we've exhausted a sequence belonging to a branch *)
+			if (it.gdb_idx + 1 = it.gdb_max ) then (* we've also exhausted all branches*)
+				let _ = it.gdb_idx <- 0 in (* reset *)
+				IterDone
+			else (*we have branches to process left *)
+				let _ = it.gdb_idx <- it.gdb_idx + 1 in (* increase branch idx *)
+				IterCont
+	in next it
+
+
+
+let dry_execution_path e =
+	let rec f ctx acc e = match e.gdata,e.gexpr with
+	| GDBranchState(bin), GIf (e,e1,e2) ->
+		(match bin.gdb_idx with
+			| 0 ->
+				let acc = ( f ctx acc e1 ) in
+				acc
+			| 1 when (Array.length bin.gdb_exprs) > 1 ->
+				let acc = (f ctx acc (bin.gdb_exprs.(1))) in
+				acc
+			| _ -> acc
+		)
+	| GDBranchState(bin), GSwitch (e,cases,def) ->
+		let acc = (f ctx acc (bin.gdb_exprs.(bin.gdb_idx))) in
+		acc
+	| _, (GSwitch _ | GIf _) ->
+		let _ = print_endline (s_gdata e.gdata ) in
+		assert false
 	| _ ->
-		let f = ( fun acc e -> )
-		fold_gexpr
-	iter_gexpr (f ctx) e
-	in f (1) st e
+		let acc = fold_gexpr (f ctx) acc e in acc
+		(*((s_gexpr e)):: acc*)
+	in
+	let l = f (3,4) [] e in ()
 
+let p_execution_path e =
+	let rec f ctx acc e = match e.gdata,e.gexpr with
+	| GDBranchState(bin), GIf (e,e1,e2) ->
+		(match bin.gdb_idx with
+			| 0 ->
+				let acc = ( f ctx acc e1 ) in
+				("if " ^ (string_of_int bin.gdb_idx)) :: acc
+			| 1 when (Array.length bin.gdb_exprs) > 1 ->
+				let acc = (f ctx acc (bin.gdb_exprs.(1))) in
+				("else " ^ (string_of_int bin.gdb_idx)) :: acc
+			| _ -> ("(else) " ^ (string_of_int bin.gdb_idx)) :: acc
+		)
+	| GDBranchState(bin), GSwitch (e,cases,def) ->
+		let acc = (f ctx acc (bin.gdb_exprs.(bin.gdb_idx))) in
+		("sw " ^ (string_of_int bin.gdb_idx)) :: acc
+	| _, (GSwitch _ | GIf _) ->
+		let _ = print_endline (s_gdata e.gdata ) in
+		assert false
+	| _ ->
+		let acc = fold_gexpr (f ctx) acc e in acc
+		(*((s_gexpr e)):: acc*)
+	in
+	let l = f (3,4) [] e in ()
+	(*let s = String.concat ", " (List.rev l) in ()*)
+	(*print_endline s*)
+
+let exhaust it e =
+	let rec loop n =
+		(*let _ = p_execution_path e in*)
+		let _ = dry_execution_path e in
+		match iter_execution_paths_next it with
+		| IterCont -> loop (n+1)
+		| IterDone -> print_endline ("iter done, n: " ^ (string_of_int (n+1)))
+	in loop 0
+
+
+let eval_branches_2 states e =
+	let rec f ctx states e : gr_state list = match e.gexpr with
+	| GIf (e,e1,e2) ->
+		let rstates = List.rev_map ( fun st->
+			let cond_states = f ctx [st] e in
+			let if_states   = f ctx cond_states e1 in (match e2 with
+				| None ->
+					flatten [cond_states;if_states]
+				| Some e ->
+					let else_states = f ctx cond_states e in
+					flatten [if_states;else_states]
+			)
+		) states in
+		flatten rstates
+	| GSwitch (e,cases,def) ->
+		let cond_states = f ctx states e in
+		let case_cond_states,case_states = List.fold_left ( fun (states,rstates) (el,e2) ->
+			let case_cond_states = eval_seq states (f ctx) el in
+			let case_states      = f ctx case_cond_states e2 in
+			(case_cond_states, case_states :: rstates)
+		) (cond_states,[]) cases
+		in
+		let rstates = ( match def with
+			| None -> case_states
+			| Some e ->
+				let def_case_states = f ctx case_cond_states e in
+				def_case_states :: case_states
+		)
+		in flatten rstates
+
+	| _ -> fold_gexpr (f ctx) states e
+	in f (1) states e
 
 
 (*let eval_gexpr f ctx e : gr_value = match e.gexpr with
@@ -794,7 +1145,13 @@ let get_field_expressions xs = List.fold_left (fun acc cf ->
 		| Some e -> e :: acc
 
 	) [] xs
+let get_fields_with_expressions xs = List.fold_left (fun acc cf ->
+		match cf.cf_expr with
+		| None -> acc
+		| Some {eexpr = TFunction tf} -> (cf,gexpr_of_texpr tf.tf_expr) :: acc
+		| Some e -> (cf,gexpr_of_texpr e) :: acc
 
+	) [] xs
 
 let run_analyzer ( mt : Type.module_type list ) : unit =
 	print_endline "start";
@@ -802,7 +1159,31 @@ let run_analyzer ( mt : Type.module_type list ) : unit =
 	| TClassDecl v ->
 		let fields  = List.map  gexpr_of_texpr (get_field_expressions v.cl_ordered_statics) in
 		let statics = List.map  gexpr_of_texpr (get_field_expressions v.cl_ordered_fields) in
-		let _ = List.iter (fun e -> p_blockinfo (collect_block_info e)) fields in
+		(*let _ = List.iter (fun e -> p_blockinfo (collect_block_info e)) fields in*)
+		let _,states = List.fold_left
+			( fun (idx,acc) e -> (idx+1,eval_branches [{gst_id=idx}] e) ) (0,[]) fields in
+		let _ = List.fold_left
+			( fun idx (cf,e) ->
+				if (snd v.cl_path) = "Branches" then begin
+
+				let _ = print_endline ( ("================")) in
+				let it = iter_execution_paths_init e in
+				let _ = print_endline ( ("it: ") ^ (string_of_int (it.gdb_total))) in
+				let _ = exhaust it e in
+				(*
+				let states = eval_branches [{gst_id=idx}] e in
+				let _ = print_endline ( ("class: ") ^ s_path v.cl_path ) in
+				let _ = print_endline ( ("field: ") ^ cf.cf_name ) in
+				let _ = print_endline ("collected " ^ ( string_of_int (List.length states) ) ^ " states") in
+				*)
+				idx + 1
+				end else idx+1
+			)
+			0
+			(get_fields_with_expressions v.cl_ordered_fields) in
+		(*let _ = print_endline ( ("class: ") ^ s_path v.cl_path ) in
+		let _ = print_endline ("collected " ^ ( string_of_int (List.length states) ) ^ " states") in
+		*)
 		()
 	| TEnumDecl  v -> ()
 	| TTypeDecl  v -> ()

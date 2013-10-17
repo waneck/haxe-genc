@@ -1594,7 +1594,7 @@ module VTableHandler = struct
 						 vtables = PMap.empty;
 						 next    = 0} tps in
 
-		(* let _ = Analyzer.run_analyzer tps in *)
+		 let _ = Analyzer.run_analyzer tps in
 
 		let add_vtable con c vtable =
 			(* helpers *)
