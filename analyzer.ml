@@ -404,39 +404,6 @@ let s_gexpr e  = match e.gexpr with
 (* ---------------------------------------------------------------------- *)
 
 
-(*
-
-	how do values get into scope?
-
-	1. they are constructed in scope.
-	2. they are passed via function arguments
-	3. they are fields of the class instance
-	3. they are static fields
-
-
-
-	how are values accessed?
-(* 	when accessing a static fieldzdfzd *)
-
-	accessed value id via path from scope id
-
-
-	access this.field.field
-	access typeexpr.field.field.
-
-
-	3     0       0       1       1       2       2
-	2     0       1       0       1       0       1
-	4     0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
-
-
-*)
-
-
-
-
-
-
 (* ----------------------------  Interpreter  --------------------------- *)
 
 type gr_id  = int
@@ -781,20 +748,7 @@ let eval_branches states e =
 
    representation of a sequence of branching instructions
 
-	branch_seq = {
-		cur_idx  : int
-		total    : int
-		children : branch_instruction array
-	}
-
-
-
    representation of if-else branches,representation of switches
-   branch_instruction = {
-		cur_idx  : int
-		total    : int
-		children : branch_instruction array
-	}
 
    representation of for/while/do-while loops with break and continue
 
@@ -988,72 +942,8 @@ let eval_branches_2 states e =
 	in f (1) states e
 
 
-(*let eval_gexpr f ctx e : gr_value = match e.gexpr with
-	| GConst c -> (*(match c with
-		| TInt v   -> GRInt v
-		| TFloat v -> GRFloat v
-		| TBool v  -> GRBool v
-		| TNull    -> GRNull
-		| TThis    -> ctx.gr_this
-		| TSuper   -> ctx.gr_super
-	)*) gr_null_val
-	| GLocal v -> gr_null_val
-	| GBreak
-	| GContinue
-	| GTypeExpr _ ->
-		GRNull
-	| GArray (e1,e2)
-	| GBinop (_,e1,e2)
-	| GFor (_,e1,e2)
-	| GWhile (e1,e2,_) ->
-		f e1;
-		f e2;
-	| GThrow e
-	| GField (e,_)
-	| GEnumParameter (e,_,_)
-	| GParenthesis e
-	| GCast (e,_)
-	| GUnop (_,_,e)
-	| GMeta(_,e) ->
-		f e
-	| GArrayDecl el
-	| GNew (_,_,el)
-	| GBlock el ->
-		List.iter f el
-	| GObjectDecl fl ->
-		List.iter (fun (_,e) -> f e) fl
-	| GCall (e,el) ->
-		f e;
-		List.iter f el
-	| GVars vl ->
-		List.iter (fun (_,e) -> match e with None -> gr_null_val | Some e -> f e) vl
-	| GNVar v -> gr_null_val
-	| GSVar (v, e) -> f e
-	| GFunction (tf, e) ->
-		f e
-
-	| GIf (e,e1,e2) ->
-		f e;
-		f e1;
-		(match e2 with None -> gr_null_val | Some e -> f e)
-
-	| GSwitch (e,cases,def) ->
-		f e;
-		List.iter (fun (el,e2) -> List.iter f el; f e2) cases;
-		(match def with None -> gr_null_val | Some e -> f e)
-	| GPatMatch dt -> GRNull
-	| GTry (e,catches) ->
-		f e;
-		List.iter (fun (_,e) -> f e) catches
-	| GReturn eo ->
-		(match eo with None -> GRNull | Some e -> f e)*)
-
 
 (* ---------------------------------------------------------------------- *)
-
-
-
-
 
 
 type blockinfogctx = {
