@@ -813,7 +813,7 @@ let iter_execution_paths_init e =
 	| GIf (cond,e1,e2) ->
 		let arrs,exprs = (match e2 with
 		| Some e2 ->  [ (f ctx [] e1); (f ctx [] e2) ],[e1;e2]
-		| None    ->  [ (f ctx [] e1) ],[e1]
+		| None    ->  [ (f ctx [] e1) ; [] ],[e1]
 	    ) in
 	    let arrs  = arrays_of_lists arrs in
 	    let total = (execution_paths_total arrs) in
@@ -919,16 +919,20 @@ let p_execution_path e =
 	| GDBranchState(bin), GIf (e,e1,e2) ->
 		(match bin.gdb_idx with
 			| 0 ->
+				let acc = ("if " ^ (string_of_int bin.gdb_idx)) :: acc in
 				let acc = ( f ctx acc e1 ) in
-				("if " ^ (string_of_int bin.gdb_idx)) :: acc
+				acc
+				(*("if " ^ (string_of_int bin.gdb_idx)) :: acc*)
 			| 1 when (Array.length bin.gdb_exprs) > 1 ->
-				let acc = (f ctx acc (bin.gdb_exprs.(1))) in
-				("else " ^ (string_of_int bin.gdb_idx)) :: acc
+				let acc = ("else " ^ (string_of_int bin.gdb_idx)) :: acc in
+				let acc = (f ctx acc (bin.gdb_exprs.(1))) in acc
+
 			| _ -> ("(else) " ^ (string_of_int bin.gdb_idx)) :: acc
 		)
 	| GDBranchState(bin), GSwitch (e,cases,def) ->
-		let acc = (f ctx acc (bin.gdb_exprs.(bin.gdb_idx))) in
-		("sw " ^ (string_of_int bin.gdb_idx)) :: acc
+		let acc = ("sw " ^ (string_of_int bin.gdb_idx)) :: acc in
+		let acc = (f ctx acc (bin.gdb_exprs.(bin.gdb_idx))) in acc
+
 	| _, (GSwitch _ | GIf _) ->
 		let _ = print_endline (s_gdata e.gdata ) in
 		assert false
@@ -936,13 +940,13 @@ let p_execution_path e =
 		let acc = fold_gexpr (f ctx) acc e in acc
 		(*((s_gexpr e)):: acc*)
 	in
-	let l = f (3,4) [] e in ()
-	(*let s = String.concat ", " (List.rev l) in ()*)
-	(*print_endline s*)
+	let l = f (3,4) [] e in
+	let s = String.concat ", " (List.rev l) in
+	print_endline s
 
 let exhaust it e =
 	let rec loop n =
-		(*let _ = p_execution_path e in*)
+		let _ = p_execution_path e in
 		let _ = dry_execution_path e in
 		match iter_execution_paths_next it with
 		| IterCont -> loop (n+1)
@@ -1164,7 +1168,8 @@ let run_analyzer ( mt : Type.module_type list ) : unit =
 			( fun (idx,acc) e -> (idx+1,eval_branches [{gst_id=idx}] e) ) (0,[]) fields in
 		let _ = List.fold_left
 			( fun idx (cf,e) ->
-				if (snd v.cl_path) = "Branches" then begin
+				(*if (snd v.cl_path) = "Branches" then begin*)
+				if true then begin
 
 				let _ = print_endline ( ("================")) in
 				let it = iter_execution_paths_init e in
