@@ -36,6 +36,8 @@ and gdbranch_instruction_t = {
 
 	gdb_max   : int;         (* number of alternative branches *)
 
+	gdb_expr  : gexpr_t;     (* the expression belonging to this node *)
+
 	gdb_exprs : gexpr_t array; (* the child expressions of this branch in an array, for random access *)
 
 	gdb_seq   : gdbranch_instruction_t array array;
@@ -353,6 +355,9 @@ let s_gexpr e  = match e.gexpr with
 		| GBinop _ -> "GBinop"
 		| GUnop _ -> "GUnop"
 		| GNew (c,_,_) -> "GNew " ^ (snd c.cl_path)
+		| GIf  _ -> "GIf"
+		| GSwitch _ -> "GSwitch"
+		| GReturn _ -> "GReturn"
 		| _ -> ""
 (*		| GTypeExpr _ ->
 			()
@@ -774,6 +779,7 @@ let iter_execution_paths_init e =
 		let bin = {
 			gdb_idx   = 0;
 			gdb_max   = 2;
+			gdb_expr  = e;
 			gdb_exprs = Array.of_list exprs;
 			gdb_seq   = arrs;
 			gdb_cur   = 0;
@@ -792,6 +798,25 @@ let iter_execution_paths_init e =
 		let bin = {
 			gdb_idx   = 0;
 			gdb_max   = Array.length arrs;
+			gdb_expr  = e;
+			gdb_exprs = Array.of_list exprs;
+			gdb_seq   = arrs;
+			gdb_cur   = 0;
+			gdb_total = total
+		} in
+		let _ = e.gdata <- GDBranchState bin in
+		bin :: bins
+	| GReturn oe ->
+		let arrs,exprs = (match oe with
+		| Some e1 ->  [(f ctx [] e1)],[e1]
+		| None    ->  [[]],[]
+	    ) in
+	    let arrs  = arrays_of_lists arrs in
+	    let total = (execution_paths_total arrs) in
+		let bin = {
+			gdb_idx   = 0;
+			gdb_max   = Array.length arrs;
+			gdb_expr  = e;
 			gdb_exprs = Array.of_list exprs;
 			gdb_seq   = arrs;
 			gdb_cur   = 0;
@@ -800,12 +825,14 @@ let iter_execution_paths_init e =
 		let _ = e.gdata <- GDBranchState bin in
 		bin :: bins
 	| _ -> fold_gexpr (f ctx) bins e
+
 	in
 	let arrs    = arrays_of_lists [f (1) [] e] in
 	let total   = (execution_paths_total arrs) in
 	{
 		gdb_idx   = 0;
 		gdb_max   = 1;
+		gdb_expr  = e;
 		gdb_exprs = [||];
 		gdb_seq   = arrs;
 		gdb_cur   = 0;
@@ -816,33 +843,321 @@ let iter_execution_paths_init e =
 type iter_res_t =
 	| IterDone
 	| IterCont
+	| IterReturn of gdbranch_instruction_t list
+
+(* A return has to be handled by the parent gdbranch_instruction_t
+   the seq at whichs end the return is located, has to be exhausted
+   if during that traversal another return in a previous branch is encountered,
+   the current return is pushed to a list (stack) and popped after the nested
+   return is exhausted.
+
+   basic algorithm + example:
+
+   it's all about this datastructure.
+
+type gdbranch_instruction_t = {
+   ...
+   gdb_seq : gdbranch_instruction_t array array
+   ...
+}
+   it consists of an array per branch expression, e.g. e1  and e2 in:
+   if (cond) e1 else e2, or switch(v) { case 1: e1; case _:e2; },
+   which consists of a sequence of nested branch expressions ...
+
+   e.g.
+	function f () {
+		if (cond){ <-- child of 'function f'
+
+			switch(v){ <-- child of if(cond)
+				case 1:
+				case _:
+			}
+			if (cond2) { <-- child of if(cond)
+
+			} else {
+				return v; <-- child of if(cond2)
+			}
+
+		} else {
+
+		}
+
+		if (cond3) { <-- child of 'function f'
+
+		} else {
+
+		}
+	}
+	.. that holds the nested branches.
+
+	We iterate over the execution paths in the following way:
+	--
+	1. we initialize the iterator to select the first of all branches, which means
+	   each if- (as opposed to else) expression and the first case of each switch.
+
+	2. now we call the function that is to be called for each each execution path
+
+	3. we do the first step in the iteration now.
+
+	   what we have, is a gdbranch_instruction_t with a single item in gdb_seq,
+	   the array of sequences of branch expressions
+	   that represents the top-level scope of our current function, which contains
+	   that sequence of 0 or more branch expressions
+
+	   we start to iterate at the end of that sequence. in our above example that's if(cond3).
+
+	   one step in our iteration means changing the selection
+			- from an if-expression to an else-one,
+			- or selecting the next case in a switch
+
+		the representation of the state is the same for both:
+		gdb_idx is the index of the currently selected branch
+		gdb_max is the total number of branches, which is 2 for
+		if-else, and N for switch.
+
+		we select the next branch, by increasing gdb_idx as long as it doesn't
+		equal gdb_max, and return IterCont, to signal this branch expression isn't
+		exhausted yet:
+
+		if (gdb_idx + 1 == gdb_max){
+			return IterDone;
+		} else {
+			gdb_idx += 1;
+			return IterCont;
+		}
+
+		and in case we've already exhausted the current branch expression, we return IterDone,
+		to signal we couldn't move the iterator to its next state, our caller has to take care of that.
 
 
+		so again we start to iterate at the end of that sequence. in our above example that's if(cond3)
+		iteration 1:
+		flip the state of if (cond3), return IterCont
+		iteration 2:
+		check the state of if (cond3), return IterDone and reset if(cond3) to "if"
 
-let iter_execution_paths_next it =
-	let rec next it =
+		now that we receive IterDone from the last branch expression in the sequence, we
+		walk back in that sequence to find the next branch expression to make a step in the
+		iteration.
+
+		in our example that means we select if(cond).
+		if (cond) has nested branch expressions,
+			we mutate in a depth-first manner,
+			so we
+			> flip the state of if (cond2) (because it's the last branch in the sequence of if (cond))
+
+		iteration 3:
+		check the state of if(cond3) - it has been resetted, so we can
+		> flip if(cond3)
+
+		iteration 4:
+		1. check the state of if (cond3), return IterDone and reset if(cond3) to "if"
+		2. check the state of if (cond), which recursively checks the state
+		   of if (cond2), which is exhausted, returns IterDone,
+		   so we walk back in the sequence and
+
+		   > select the next case of switch(v), return IterCont
+
+		iteration 5:
+		check the state of if(cond3) - it has been resetted, so we can flip if(cond3)
+
+		iteration 6:
+		1. check the state of if (cond3), return IterDone and reset if(cond3) to "if"
+		2. check the state of if (cond), which recursively checks the state
+		   of if (cond2), which has been resetted,so we
+		   > flip if (cond2)
+
+	    iteration 7:
+	    check the state of if(cond3) - it has been resetted, so we can flip if(cond3)
+
+	    iteration 8:
+	    1. check the state of if (cond3), return IterDone and reset if(cond3) to "if"
+		2. check the state of if (cond),  recursively
+		3. check the state of if (cond2), which is exhausted, return IterDone, so we
+		4. check the state of switch(v) and
+
+		> select the next case of switch (v), case _:
+
+
+		iteration 9 - 12:
+			same as 4. - 7.
+
+		iteration 13:
+		1. check the state of if (cond3), return IterDone and reset if(cond3) to "if"
+		2. check the state of if (cond),  recursively
+		3. check the state of if (cond2), which is exhausted, return IterDone, so we
+		4. check the state of switch(v), which is also exhausted, so we can't make
+		   progress - we return IterDone
+
+		   - now we'd walk back in the sequence again, but we're at the first branch,
+		   so we can't, and return IterDone instead,
+
+		   we've exhausted the branches for this function.
+
+
+		--------------------------------------
+
+		The above is the basic algorithm, but when we look at the "return v", we see it's quite
+		inefficient - as we change states of branch expressions that don't exist in
+		this path, because we've returned already
+
+		we have to skip the iteration over those redundant paths
+
+		To that end we introduce IterReturn
+		when we hit a return at the end of a sequence, we return an
+		IterReturn, with the current "stack" of gdbranch_instruction_t's
+
+		on the next iteration we then resume iteration at the end of the
+		sequence that contains that return expression -
+		so in our example, we'd resume at the end of the sequence of
+		branch expressions in the else-branch of if (cond2), typically
+		the return expression itself.
+
+		if that sequence is exhausted, we return IterDone, and we step
+			back through the stack contained in IterReturn, to continue
+			iteration "normally", that is always from the last item of the topmost/root
+			sequence of branch instructions, if (cond3) in our example.
+
+		in case we hit another earlier return, we push our current (IterReturn stack) on
+		a stack of returns, and exhaust the inner IterReturn before we continue exhausting
+		the outer one.
+
+*)
+
+let iter_execution_paths_seq it idx rf =
+	let rec next it depth =
 		let rec walk_seq seq idx = match idx with (*we walk a sequence of bins backwards *)
-		| -1 -> IterDone  (*when we've finished the seq at index 0, we're done *)
+		| -1 ->
+			IterDone  (*when we've finished the seq at index 0, we're done *)
 		| _ ->
 			let cur = seq.(idx) in
-			(match next cur with (**)
+			(match next cur (depth+1) with (**)
 				| IterCont -> IterCont (* branch instruction cur isn't exhausted yet *)
 				| IterDone -> walk_seq seq (idx-1) (* step back to bin at idx-1 *)
+				| IterReturn itxs -> IterReturn itxs
 			)
 		in
 		let cur_seq = it.gdb_seq.(it.gdb_idx ) in
-		match ( walk_seq cur_seq ((Array.length cur_seq) - 1)) with
-		| IterCont -> IterCont
-		| IterDone -> (* we've exhausted a sequence belonging to a branch *)
-			if (it.gdb_idx + 1 = it.gdb_max ) then (* we've also exhausted all branches*)
-				let _ = it.gdb_idx <- 0 in (* reset *)
-				IterDone
-			else (*we have branches to process left *)
-				let _ = it.gdb_idx <- it.gdb_idx + 1 in (* increase branch idx *)
-				IterCont
-	in next it
+		let cur_idx = (Array.length cur_seq) - 1 in
+		let _ = Printf.printf "next idx: %d %d \n" cur_idx it.gdb_idx in
+		if cur_idx = -1 then
+			IterDone
+		else
+			let cur_it  = cur_seq.(cur_idx) in
+			(match cur_it.gdb_expr.gexpr with
+				| GReturn _ when depth > 0 ->
+					let _ = print_endline ">>> return cont 1 <<<" in
+					rf it
+				| _ ->
+				let res = (walk_seq cur_seq cur_idx) in
+				(match  res with
+					| IterCont -> res
+					| IterDone ->
+					if (it.gdb_idx + 1 = it.gdb_max ) then (* we've also exhausted all branches*)
+						let _ = it.gdb_idx <- 0 in (* reset *)
+						IterDone
+					else (*we have branches to process left *)
+						let _ = it.gdb_idx <- it.gdb_idx + 1 in (* increase branch idx *)
+						IterCont
+					| IterReturn itxs -> IterReturn (cur_it :: itxs)
+				)
+		)
+	in next it 0
 
+let iter_execution_paths_next it rf =
+	let rec next it depth =
+		let rec walk_seq seq idx = match idx with (*we walk a sequence of bins backwards *)
+		| -1 ->
+			IterDone  (*when we've finished the seq at index 0, we're done *)
+		| _ ->
+			let cur = seq.(idx) in
+			(match next cur (depth+1) with (**)
+				| IterCont -> IterCont (* branch instruction cur isn't exhausted yet *)
+				| IterDone -> walk_seq seq (idx-1) (* step back to bin at idx-1 *)
+				| IterReturn itxs -> IterReturn itxs
+			)
+		in
+		let cur_seq = it.gdb_seq.(it.gdb_idx ) in
+		let cur_idx = (Array.length cur_seq) - 1 in
+		let _ = Printf.printf "next idx: %d %d \n" cur_idx it.gdb_idx in
+		if cur_idx = -1 then
+			IterDone
+		else
+			let cur_it  = cur_seq.(cur_idx) in
+			(match cur_it.gdb_expr.gexpr with
+				| GReturn _ when depth > 0 ->
+					let _ = print_endline ">>> return cont 1 <<<" in
+					rf it
+				| _ ->
+				let res = (walk_seq cur_seq cur_idx) in
+				(match  res with
+					| IterCont -> res
+					| IterDone ->
+					if (it.gdb_idx + 1 = it.gdb_max ) then (* we've also exhausted all branches*)
+						let _ = it.gdb_idx <- 0 in (* reset *)
+						IterDone
+					else (*we have branches to process left *)
+						let _ = it.gdb_idx <- it.gdb_idx + 1 in (* increase branch idx *)
+						IterCont
+					| IterReturn itxs -> IterReturn (cur_it :: itxs)
+				)
+		)
+	in next it 0
 
+(*
+let iter_execution_paths_next_resume res =
+	let rec walk_parents xs = match xs with
+	| it :: xs ->
+		(*this is an implicit IterDone, so we _basically_ do the same as in the IterDone case of 'next' above,*)
+		let _ = (Printf.printf "walk parents %s xs.l: %d\n" (s_gexpr it.gdb_expr)  (List.length xs)) in
+		if (it.gdb_idx + 1 = it.gdb_max ) then
+			let _ = it.gdb_idx <- 0 in
+			(* our return was the last branch - we continue with the next parent *)
+			walk_parents xs
+		else (*we have branches to process left *)
+			let _ = it.gdb_idx <- it.gdb_idx + 1 in
+			let _ = print_endline ">>> index <<<" in
+			let e = it.gdb_exprs.(it.gdb_idx) in (*TODO might be out of bounds :( *)
+			IterCont
+	| [] ->
+
+		IterDone (*there's no parent! - we're done *)
+	in
+	match res with
+	| IterReturn (it :: xs) ->
+		(*check whether we have a return expression*)
+		if Array.length it.gdb_seq.(0) = 1 then
+			let cit = it.gdb_seq.(0).(0) in
+			(match iter_execution_paths_next cit with
+			| IterCont -> res
+			| IterDone   (*we've exhausted the return expression. x is the gdbranch_instruction_t that
+							contains the one associated with the return as one if its branches,
+							IOW "return" represents one index in the two dim array gdb_seq *)
+					-> walk_parents (it :: xs)
+			| IterReturn itxs -> IterReturn itxs
+			)
+		else walk_parents xs
+
+	| _ -> assert false
+*)
+let s_concat f xs = String.concat "," (List.map f xs)
+
+let iter_execution_paths f it =
+	let rec loop_return it =
+		let res = iter_execution_paths_next it loop_return in
+		(match res with
+			| IterCont -> (f(); loop_return it )
+			| IterDone -> res
+			| IterReturn _ -> assert false
+		)
+	and loop n =
+		let _ = f () in
+		let res = iter_execution_paths_next it loop_return in
+		match  res with
+		| IterCont -> loop (n+1)
+		| IterDone -> print_endline ("iter done, n: " ^ (string_of_int (n+1)))
+		| IterReturn _ -> assert false
+	in loop 0
 
 let dry_execution_path e =
 	let rec f ctx acc e = match e.gdata,e.gexpr with
@@ -897,49 +1212,6 @@ let p_execution_path e =
 	let l = f (3,4) [] e in
 	let s = String.concat ", " (List.rev l) in
 	print_endline s
-
-let exhaust it e =
-	let rec loop n =
-		let _ = p_execution_path e in
-		let _ = dry_execution_path e in
-		match iter_execution_paths_next it with
-		| IterCont -> loop (n+1)
-		| IterDone -> print_endline ("iter done, n: " ^ (string_of_int (n+1)))
-	in loop 0
-
-
-let eval_branches_2 states e =
-	let rec f ctx states e : gr_state list = match e.gexpr with
-	| GIf (e,e1,e2) ->
-		let rstates = List.rev_map ( fun st->
-			let cond_states = f ctx [st] e in
-			let if_states   = f ctx cond_states e1 in (match e2 with
-				| None ->
-					flatten [cond_states;if_states]
-				| Some e ->
-					let else_states = f ctx cond_states e in
-					flatten [if_states;else_states]
-			)
-		) states in
-		flatten rstates
-	| GSwitch (e,cases,def) ->
-		let cond_states = f ctx states e in
-		let case_cond_states,case_states = List.fold_left ( fun (states,rstates) (el,e2) ->
-			let case_cond_states = eval_seq states (f ctx) el in
-			let case_states      = f ctx case_cond_states e2 in
-			(case_cond_states, case_states :: rstates)
-		) (cond_states,[]) cases
-		in
-		let rstates = ( match def with
-			| None -> case_states
-			| Some e ->
-				let def_case_states = f ctx case_cond_states e in
-				def_case_states :: case_states
-		)
-		in flatten rstates
-
-	| _ -> fold_gexpr (f ctx) states e
-	in f (1) states e
 
 
 
@@ -1058,17 +1330,18 @@ let run_analyzer ( mt : Type.module_type list ) : unit =
 			( fun (idx,acc) e -> (idx+1,eval_branches [{gst_id=idx}] e) ) (0,[]) fields in
 		let _ = List.fold_left
 			( fun idx (cf,e) ->
-				(*if (snd v.cl_path) = "Branches" then begin*)
-				if true then begin
+				if (snd v.cl_path) = "Branches" then begin
+				(*if true then begin*)
 
 				let _ = print_endline ( ("================")) in
 				let it = iter_execution_paths_init e in
 				let _ = print_endline ( ("it: ") ^ (string_of_int (it.gdb_total))) in
-				let _ = exhaust it e in
-				(*
-				let states = eval_branches [{gst_id=idx}] e in
+				let _ = iter_execution_paths (fun () -> p_execution_path e) it in
 				let _ = print_endline ( ("class: ") ^ s_path v.cl_path ) in
 				let _ = print_endline ( ("field: ") ^ cf.cf_name ) in
+				(*
+				let states = eval_branches [{gst_id=idx}] e in
+
 				let _ = print_endline ("collected " ^ ( string_of_int (List.length states) ) ^ " states") in
 				*)
 				idx + 1
