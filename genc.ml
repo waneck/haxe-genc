@@ -1829,6 +1829,12 @@ let rec s_type ctx t =
 			"char*" (* we will manipulate an array of type parameters like an array of bytes *)
 		| _ -> s_type ctx t ^ "*")
 	| TAbstract({a_path = ["c"],"ConstPointer"},[t]) -> "const " ^ (s_type ctx t) ^ "*"
+	| TAbstract({a_path = ["c"],"Struct"},[t]) ->
+		(match t with
+		| TInst (c,_) ->
+			add_dependency ctx DFull c.cl_path;
+			path_to_name c.cl_path
+		| _ -> assert false )
 	| TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,ret) as t]) ->
 		add_type_dependency ctx (ctx.con.hxc.t_closure t);
 		Printf.sprintf "%s (*)(%s)" (s_type ctx ret) (String.concat "," (List.map (fun (_,_,t) -> s_type ctx t) args))

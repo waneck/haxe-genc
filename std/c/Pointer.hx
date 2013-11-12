@@ -23,6 +23,9 @@ package c;
 
 import c.Types;
 import c.NInt;
+import c.COps;
+import c.COps.*;
+
 @:runtimeValue
 @:coreType
 abstract Pointer<T>(Int) {
@@ -31,25 +34,25 @@ abstract Pointer<T>(Int) {
 	}
 
 	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
-		return new Pointer(lhs.value() + offset);
+		return hxc_add(lhs,offset);
 	}
 	@:extern @:op(A+B) public static inline function add64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T> {
-		return new Pointer(lhs.value() + offset.value());
+		return hxc_add(lhs,offset);
 	}
 	@:extern @:op(A+B) public static inline function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
-		return new Pointer(lhs.value() + rhs.value());
+		return hxc_add(lhs,rhs);
 	}
 
 	@:extern @:op(A-B) public static inline function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
-		return new Pointer(lhs.value() - offset);
+		return hxc_sub(lhs,offset);
 	}
 
 	@:extern @:op(A-B) public static inline function sub64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T> {
-		return new Pointer(lhs.value() - offset.value());
+		return hxc_sub(lhs,offset);
 	}
 
 	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
-		return new Pointer(lhs.value() - rhs.value());
+		return hxc_sub(lhs,rhs);
 	}
 
 	@:extern @:op(++A) public inline function increment<T>():Pointer<T> {

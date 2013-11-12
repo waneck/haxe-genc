@@ -1224,8 +1224,9 @@ try
 			Codegen.Abstract.handle_abstract_casts tctx;
 			Codegen.explode_expressions com (Typecore.gen_local tctx);
 			(match com.platform with Cpp | C -> Codegen.handle_side_effects com (Typecore.gen_local tctx) | _ -> fun e -> e);
-			Codegen.promote_complex_rhs com;
 			if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else Optimizer.sanitize tctx;
+
+			Codegen.promote_complex_rhs com;
 			Codegen.check_local_vars_init;
 			Codegen.captured_vars com;
 			Codegen.rename_local_vars com;

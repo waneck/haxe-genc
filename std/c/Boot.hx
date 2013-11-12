@@ -20,6 +20,22 @@ import c.VTable;
 	#define ALLOCA(n) _alloca(n)
 #endif
 
+#define hxc_add(a,b) (a+b)
+#define hxc_sub(a,b) (a-b)
+#define hxc_mul(a,b) (a*b)
+#define hxc_div(a,b) (a/b)
+#define hxc_shl(a,b) (a<<b)
+#define hxc_shr(a,b) (a>>b)
+#define hxc_and(a,b) (a&b)
+#define hxc_or(a,b) (a|b)
+#define hxc_xor(a,b) (a^b)
+#define hxc_land(a,b) (a && b)
+#define hxc_lor(a,b) (a || b)
+#define hxc_gt(a,b) (a>b)
+#define hxc_lt(a,b) (a<b)
+#define hxc_gte(a,b) (a>=b)
+#define hxc_lte(a,b) (a<=b)
+
 typedef unsigned char hx_uchar;
 typedef char hx_char;
 typedef unsigned int hx_uint;
@@ -37,11 +53,11 @@ class Boot {
 	static public var argc:Int;
 	static public var argv:Pointer<Pointer<Char>>;
 	static public var typeReferences:Array<c.TypeReference<Dynamic>>;
-		
+
 	static public function registerType(typeref:TypeReference<Dynamic>) {
 		typeReferences.push(typeref);
 	}
-	
+
 	@:plain static public function main(argc:Int, argv:Pointer<Pointer<Char>>):Int {
 		Boot.argc = argc;
 		Boot.argv = argv;
