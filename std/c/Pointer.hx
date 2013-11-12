@@ -22,7 +22,7 @@
 package c;
 
 import c.Types;
-
+import c.NInt;
 @:runtimeValue
 @:coreType
 abstract Pointer<T>(Int) {
@@ -33,13 +33,19 @@ abstract Pointer<T>(Int) {
 	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
 		return new Pointer(lhs.value() + offset);
 	}
-
+	@:extern @:op(A+B) public static inline function add64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T> {
+		return new Pointer(lhs.value() + offset.value());
+	}
 	@:extern @:op(A+B) public static inline function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
 		return new Pointer(lhs.value() + rhs.value());
 	}
 
 	@:extern @:op(A-B) public static inline function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T> {
 		return new Pointer(lhs.value() - offset);
+	}
+
+	@:extern @:op(A-B) public static inline function sub64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T> {
+		return new Pointer(lhs.value() - offset.value());
 	}
 
 	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T> {
@@ -66,6 +72,8 @@ abstract Pointer<T>(Int) {
 	@:extern public inline function value() {
 		return this;
 	}
+
+	@:extern public inline function pcast<T>(p:Pointer<T>):Pointer<T> return cast this;
 }
 
 @:coreType
