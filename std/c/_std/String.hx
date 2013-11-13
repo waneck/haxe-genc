@@ -201,7 +201,7 @@ import c.CString.memcmp;
 				var pchr:Pointer<Char> = c.CString.memchr(p0+pos,first,l0-pos);
 				//untyped __c('printf("mm %d \\n",pos)');
 				if (pchr != new Pointer(0)){
-					pos = (pchr - p0).value();
+					pos = cast (pchr - p0).value();
 					if (memcmp(pchr,p1,l1) == 0){
 						return pos;
 					} else {
