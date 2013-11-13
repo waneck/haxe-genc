@@ -17,15 +17,16 @@ EXTENSION=
 OCAMLOPT=ocamlopt
 OCAMLC=ocamlc
 
-CFLAGS= -g -I libs/extlib -I libs/extc -I libs/neko -I libs/javalib -I libs/ziplib -I libs/swflib -I libs/xml-light -I libs/ttflib
+CFLAGS= -g -I libs/extlib -I libs/extc -I libs/neko -I libs/javalib -I libs/ziplib -I libs/swflib -I libs/xml-light -I libs/ttflib -I libs/ilib -I libs/objsize
 
 CC_CMD = $(OCAMLOPT) $(CFLAGS) -c $<
 CC_PARSER_CMD = $(OCAMLOPT) -pp camlp4o $(CFLAGS) -c parser.ml
 
 LIBS=unix.cmxa str.cmxa libs/extlib/extLib.cmxa libs/xml-light/xml-light.cmxa libs/swflib/swflib.cmxa \
-	libs/extc/extc.cmxa libs/neko/neko.cmxa libs/javalib/java.cmxa libs/ziplib/zip.cmxa libs/ttflib/ttf.cmxa
+	libs/extc/extc.cmxa libs/neko/neko.cmxa libs/javalib/java.cmxa libs/ziplib/zip.cmxa \
+	libs/ttflib/ttf.cmxa libs/ilib/il.cmxa libs/objsize/objsize.cmxa
 
-NATIVE_LIBS=-cclib libs/extc/extc_stubs.o -cclib -lz
+NATIVE_LIBS=-cclib libs/extc/extc_stubs.o -cclib -lz -cclib libs/objsize/c_objsize.o
 
 RELDIR=../../..
 
@@ -33,7 +34,7 @@ EXPORT=../../../projects/motionTools/haxe
 
 MODULES=ast type lexer common genxml parser typecore optimizer typeload \
 codegen gencommon genas3 gencpp genjs genneko genphp genswf8 \
-	genswf9 genswf genjava gencs analyzer genc interp typer matcher dce version main
+genswf9 genswf genjava gencs analyzer genc interp dce filters typer matcher version main
 
 ADD_REVISION=0
 
@@ -56,10 +57,12 @@ libs:
 	make -C libs/extc native OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
 	make -C libs/neko OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
 	make -C libs/javalib OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
+	make -C libs/ilib OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
 	make -C libs/ziplib OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
 	make -C libs/swflib OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
 	make -C libs/xml-light xml-light.cmxa OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
 	make -C libs/ttflib OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
+	make -C libs/objsize OCAMLOPT=$(OCAMLOPT) OCAMLC=$(OCAMLC)
 
 haxe: $(MODULES:=.cmx)
 	$(OCAMLOPT) -o $(OUTPUT) $(NATIVE_LIBS) $(LIBS) $(MODULES:=.cmx)
@@ -105,6 +108,8 @@ common.cmx: type.cmx ast.cmx
 
 dce.cmx: ast.cmx common.cmx codegen.cmx type.cmx
 
+filters.cmx: ast.cmx common.cmx type.cmx dce.cmx codegen.cmx typecore.cmx
+
 genas3.cmx: type.cmx common.cmx codegen.cmx ast.cmx
 
 analyzer.cmx: type.cmx ast.cmx
@@ -137,7 +142,7 @@ interp.cmx: typecore.cmx type.cmx lexer.cmx genneko.cmx common.cmx codegen.cmx a
 
 matcher.cmx: optimizer.cmx codegen.cmx typecore.cmx type.cmx typer.cmx common.cmx ast.cmx
 
-main.cmx: dce.cmx matcher.cmx typer.cmx typeload.cmx typecore.cmx type.cmx parser.cmx optimizer.cmx lexer.cmx interp.cmx genxml.cmx genswf.cmx genphp.cmx genneko.cmx genjs.cmx gencpp.cmx genas3.cmx genc.cmx common.cmx codegen.cmx ast.cmx gencommon.cmx genjava.cmx gencs.cmx version.cmx
+main.cmx: dce.cmx filters.cmx matcher.cmx typer.cmx typeload.cmx typecore.cmx type.cmx parser.cmx optimizer.cmx lexer.cmx interp.cmx genxml.cmx genswf.cmx genphp.cmx genneko.cmx genjs.cmx gencpp.cmx genas3.cmx genc.cmx common.cmx codegen.cmx ast.cmx gencommon.cmx genjava.cmx gencs.cmx version.cmx
 
 optimizer.cmx: typecore.cmx type.cmx parser.cmx common.cmx ast.cmx
 
@@ -150,7 +155,7 @@ typecore.cmx: type.cmx common.cmx ast.cmx
 
 typeload.cmx: typecore.cmx type.cmx parser.cmx optimizer.cmx lexer.cmx common.cmx ast.cmx
 
-typer.cmx: typeload.cmx typecore.cmx type.cmx parser.cmx optimizer.cmx lexer.cmx interp.cmx genneko.cmx genjs.cmx common.cmx codegen.cmx ast.cmx
+typer.cmx: typeload.cmx typecore.cmx type.cmx parser.cmx optimizer.cmx lexer.cmx interp.cmx genneko.cmx genjs.cmx common.cmx codegen.cmx ast.cmx filters.cmx
 
 lexer.cmx: lexer.ml
 
@@ -165,6 +170,7 @@ clean_libs:
 	make -C libs/neko clean
 	make -C libs/ziplib clean
 	make -C libs/javalib clean
+	make -C libs/ilib clean
 	make -C libs/swflib clean
 	make -C libs/xml-light clean
 	make -C libs/ttflib clean

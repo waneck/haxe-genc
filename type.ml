@@ -77,8 +77,8 @@ and tvar = {
 	mutable v_name : string;
 	mutable v_type : t;
 	mutable v_capture : bool;
-	(* snd = true if abstract "this" argument *)
-	mutable v_extra : (type_params * texpr option) option * bool;
+	mutable v_extra : (type_params * texpr option) option;
+	mutable v_meta : metadata;
 }
 
 and tfunc = {
@@ -311,7 +311,7 @@ and decision_tree = {
 
 let alloc_var =
 	let uid = ref 0 in
-	(fun n t -> incr uid; { v_name = n; v_type = t; v_id = !uid; v_capture = false; v_extra = None,false })
+	(fun n t -> incr uid; { v_name = n; v_type = t; v_id = !uid; v_capture = false; v_extra = None; v_meta = [] })
 
 let alloc_mid =
 	let mid = ref 0 in
@@ -650,7 +650,7 @@ let rec is_null = function
 	| TMono r ->
 		(match !r with None -> false | Some t -> is_null t)
 	| TType ({ t_path = ([],"Null") },[t]) ->
-		not (is_nullable t)
+		not (is_nullable (follow t))
 	| TLazy f ->
 		is_null (!f())
 	| TType (t,tl) ->
@@ -1066,7 +1066,7 @@ let rec unify a b =
 		let i = ref 0 in
 		(try
 			(match r2 with
-			| TAbstract ({a_path=[],"Void"},_) -> ()
+			| TAbstract ({a_path=[],"Void"},_) -> incr i
 			| _ -> unify r1 r2; incr i);
 			List.iter2 (fun (_,o1,t1) (_,o2,t2) ->
 				if o1 && not o2 then error [Cant_force_optional];

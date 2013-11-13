@@ -59,6 +59,21 @@ type ctx = {
 	mutable found_expose : bool;
 }
 
+type object_store = {
+	os_name : string;
+	mutable os_fields : object_store list;
+}
+
+let get_exposed ctx path meta =
+	if not ctx.js_modern then []
+	else try
+		let (_, args, pos) = Meta.get Meta.Expose meta in
+		(match args with
+			| [ EConst (String s), _ ] -> [s]
+			| [] -> [path]
+			| _ -> error "Invalid @:expose parameters" pos)
+	with Not_found -> []
+
 let dot_path = Ast.s_type_path
 
 let flat_path (p,s) =
@@ -224,7 +239,7 @@ let write_mappings ctx =
 	in
 	output_string channel "{\n";
 	output_string channel "\"version\":3,\n";
-	output_string channel ("\"file\":\"" ^ basefile ^ "\",\n");
+	output_string channel ("\"file\":\"" ^ (String.concat "\\\\" (ExtString.String.nsplit basefile "\\")) ^ "\",\n");
 	output_string channel ("\"sourceRoot\":\"file://\",\n");
 	output_string channel ("\"sources\":[" ^
 		(String.concat "," (List.map (fun s -> "\"" ^ to_url s ^ "\"") sources)) ^
@@ -310,22 +325,6 @@ let handle_break ctx e =
 				spr ctx "} catch( e ) { if( e != \"__break__\" ) throw e; }";
 			)
 
-let handle_expose ctx path meta =
-	let rec loop = function
-		| (Meta.Expose, args, pos) :: l when ctx.js_modern ->
-			ctx.found_expose <- true;
-			let exposed_path = (match args with
-				| [EConst (String s), _] -> s
-				| [] -> path
-				| _ -> error "Invalid @:expose parameters" pos
-			) in
-			print ctx "$hxExpose(%s, \"%s\")" path exposed_path;
-			newline ctx
-		| _ :: l -> loop l
-		| [] -> ()
-	in
-	loop meta
-
 let this ctx = match ctx.in_value with None -> "this" | Some _ -> "$this"
 
 let is_dynamic_iterator ctx e =
@@ -340,9 +339,7 @@ let is_dynamic_iterator ctx e =
 let gen_constant ctx p = function
 	| TInt i -> print ctx "%ld" i
 	| TFloat s -> spr ctx s
-	| TString s ->
-		if String.contains s '\000' then error "A String cannot contain \\0 characters" p;
-		print ctx "\"%s\"" (Ast.s_escape s)
+	| TString s -> print ctx "\"%s\"" (Ast.s_escape s)
 	| TBool b -> spr ctx (if b then "true" else "false")
 	| TNull -> spr ctx "null"
 	| TThis -> spr ctx (this ctx)
@@ -862,6 +859,7 @@ let generate_package_create ctx (p,_) =
 				else
 					print ctx "if(!%s) %s = {}" p p
 			);
+			ctx.separator <- true;
 			newline ctx;
 			loop (p :: acc) l
 	in
@@ -890,10 +888,9 @@ let gen_class_static_field ctx c f =
 			let path = (s_path ctx c.cl_path) ^ (static_field f.cf_name) in
 			ctx.id_counter <- 0;
 			print ctx "%s = " path;
+			(match (get_exposed ctx path f.cf_meta) with [s] -> print ctx "$hx_exports.%s = " s | _ -> ());
 			gen_value ctx e;
-			ctx.separator <- false;
 			newline ctx;
-			handle_expose ctx path f.cf_meta
 		| _ ->
 			ctx.statics <- (c,f.cf_name,e) :: ctx.statics
 
@@ -917,6 +914,17 @@ let gen_class_field ctx c f =
 		gen_value ctx e;
 		ctx.separator <- false
 
+let generate_class___name__ ctx c =
+	if has_feature ctx "js.Boot.isClass" then begin
+		let p = s_path ctx c.cl_path in
+		print ctx "%s.__name__ = " p;
+		if has_feature ctx "Type.getClassName" then
+			print ctx "[%s]" (String.concat "," (List.map (fun s -> Printf.sprintf "\"%s\"" (Ast.s_escape s)) (fst c.cl_path @ [snd c.cl_path])))
+		else
+			print ctx "true";
+		newline ctx;
+	end
+
 let generate_class ctx c =
 	ctx.current <- c;
 	ctx.id_counter <- 0;
@@ -933,23 +941,16 @@ let generate_class ctx c =
 		print ctx "%s = " p
 	else
 		print ctx "%s = $hxClasses[\"%s\"] = " p (dot_path c.cl_path);
+	(match (get_exposed ctx p c.cl_meta) with [s] -> print ctx "$hx_exports.%s = " s | _ -> ());
 	(match c.cl_constructor with
 	| Some { cf_expr = Some e } -> gen_expr ctx e
-	| _ -> print ctx "function() { }");
+	| _ -> (print ctx "function() { }"); ctx.separator <- true);
 	newline ctx;
 	if ctx.js_modern && hxClasses then begin
 		print ctx "$hxClasses[\"%s\"] = %s" (dot_path c.cl_path) p;
 		newline ctx;
 	end;
-	handle_expose ctx p c.cl_meta;
-	if has_feature ctx "js.Boot.isClass" then begin
-		print ctx "%s.__name__ = " p;
-		if has_feature ctx "Type.getClassName" then
-			print ctx "[%s]" (String.concat "," (List.map (fun s -> Printf.sprintf "\"%s\"" (Ast.s_escape s)) (fst c.cl_path @ [snd c.cl_path])))
-		else
-			print ctx "true";
-		newline ctx;
-	end;
+	generate_class___name__ ctx c;
 	(match c.cl_implements with
 	| [] -> ()
 	| l ->
@@ -1006,7 +1007,7 @@ let generate_class ctx c =
 
 		bend();
 		print ctx "\n}";
-		(match c.cl_super with None -> () | _ -> print ctx ")");
+		(match c.cl_super with None -> ctx.separator <- true | _ -> print ctx ")");
 		newline ctx
 	end
 
@@ -1022,6 +1023,7 @@ let generate_enum ctx e =
 	print ctx "{";
 	if has_feature ctx "js.Boot.isEnum" then print ctx " __ename__ : %s," (if has_feature ctx "Type.getEnumName" then "[" ^ String.concat "," ename ^ "]" else "true");
 	print ctx " __constructs__ : [%s] }" (String.concat "," (List.map (fun s -> Printf.sprintf "\"%s\"" s) e.e_names));
+	ctx.separator <- true;
 	newline ctx;
 	List.iter (fun n ->
 		let f = PMap.find n e.e_constrs in
@@ -1030,6 +1032,7 @@ let generate_enum ctx e =
 		| TFun (args,_) ->
 			let sargs = String.concat "," (List.map (fun (n,_,_) -> ident n) args) in
 			print ctx "function(%s) { var $x = [\"%s\",%d,%s]; $x.__enum__ = %s; $x.toString = $estr; return $x; }" sargs f.ef_name f.ef_index sargs p;
+			ctx.separator <- true;
 		| _ ->
 			print ctx "[\"%s\",%d]" f.ef_name f.ef_index;
 			newline ctx;
@@ -1057,6 +1060,9 @@ let generate_type ctx = function
 		| None -> ()
 		| Some e ->
 			ctx.inits <- e :: ctx.inits);
+		(* Special case, want to add Math.__name__ only when required, handle here since Math is extern *)
+		let p = s_path ctx c.cl_path in
+		if p = "Math" then generate_class___name__ ctx c;
 		if not c.cl_extern then
 			generate_class ctx c
 		else if not ctx.js_flatten && Meta.has Meta.InitPackage c.cl_meta then
@@ -1119,13 +1125,65 @@ let generate com =
 	if has_feature ctx "Class" || has_feature ctx "Type.getClassName" then add_feature ctx "js.Boot.isClass";
 	if has_feature ctx "Enum" || has_feature ctx "Type.getEnumName" then add_feature ctx "js.Boot.isEnum";
 
+	let exposed = List.concat (List.map (fun t ->
+		match t with
+			| TClassDecl c ->
+				let path = s_path ctx c.cl_path in
+				let class_exposed = get_exposed ctx path c.cl_meta in
+				let static_exposed = List.map (fun f ->
+					get_exposed ctx (path ^ static_field f.cf_name) f.cf_meta
+				) c.cl_ordered_statics in
+				List.concat (class_exposed :: static_exposed)
+			| _ -> []
+		) com.types) in
+	let anyExposed = exposed <> [] in
+	let exportMap = ref (PMap.create String.compare) in
+	let exposedObject = { os_name = ""; os_fields = [] } in
+	let toplevelExposed = ref [] in
+	List.iter (fun path -> (
+		let parts = ExtString.String.nsplit path "." in
+		let rec loop p pre = match p with
+			| f :: g :: ls ->
+				let path = match pre with "" -> f | pre -> (pre ^ "." ^ f) in
+				if not (PMap.exists path !exportMap) then (
+					let elts = { os_name = f; os_fields = [] } in
+					exportMap := PMap.add path elts !exportMap;
+					let cobject = match pre with "" -> exposedObject | pre -> PMap.find pre !exportMap in
+					cobject.os_fields <- elts :: cobject.os_fields
+				);
+				loop (g :: ls) path;
+			| f :: [] when pre = "" ->
+				toplevelExposed := f :: !toplevelExposed;
+			| _ -> ()
+		in loop parts "";
+	)) exposed;
+
 	if ctx.js_modern then begin
 		(* Additional ES5 strict mode keywords. *)
 		List.iter (fun s -> Hashtbl.replace kwds s ()) [ "arguments"; "eval" ];
 
-		(* Wrap output in a closure. *)
-		print ctx "(function () { \"use strict\"";
+		(* Wrap output in a closure *)
+		if (anyExposed && (Common.defined com Define.ShallowExpose)) then (
+			print ctx "var $hx_exports = {}";
+			ctx.separator <- true;
+			newline ctx
+		);
+		print ctx "(function (";
+		if (anyExposed && not (Common.defined com Define.ShallowExpose)) then print ctx "$hx_exports";
+		print ctx ") { \"use strict\"";
 		newline ctx;
+		let rec print_obj { os_fields = fields } = (
+			print ctx "{";
+			concat ctx "," (fun ({ os_name = name } as f) -> print ctx "%s" (name ^ ":"); print_obj f) fields;
+			print ctx "}";
+		)
+		in
+		List.iter (fun f ->
+			print ctx "$hx_exports.%s = " f.os_name;
+			print_obj f;
+			ctx.separator <- true;
+			newline ctx
+		) exposedObject.os_fields;
 	end;
 
 	(* TODO: fix $estr *)
@@ -1143,7 +1201,7 @@ let generate com =
 	);
 	if List.exists (function TClassDecl { cl_extern = false; cl_super = Some _ } -> true | _ -> false) com.types then begin
 		print ctx "function $extend(from, fields) {
-	function inherit() {}; inherit.prototype = from; var proto = new inherit();
+	function Inherit() {} Inherit.prototype = from; var proto = new Inherit();
 	for (var name in fields) proto[name] = fields[name];
 	if( fields.toString !== Object.prototype.toString ) proto.toString = fields.toString;
 	return proto;
@@ -1164,14 +1222,12 @@ let generate com =
 	if has_feature ctx "use.$iterator" then begin
 		add_feature ctx "use.$bind";
 		print ctx "function $iterator(o) { if( o instanceof Array ) return function() { return HxOverrides.iter(o); }; return typeof(o.iterator) == 'function' ? $bind(o,o.iterator) : o.iterator; }";
-		ctx.separator <- true;
 		newline ctx;
 	end;
 	if has_feature ctx "use.$bind" then begin
 		print ctx "var $_, $fid = 0";
 		newline ctx;
 		print ctx "function $bind(o,m) { if( m == null ) return null; if( m.__id__ == null ) m.__id__ = $fid++; var f; if( o.hx__closures__ == null ) o.hx__closures__ = {}; else f = o.hx__closures__[m.__id__]; if( f == null ) { f = function(){ return f.method.apply(f.scope, arguments); }; f.scope = o; f.method = m; o.hx__closures__[m.__id__] = f; } return f; }";
-		ctx.separator <- true;
 		newline ctx;
 	end;
 	List.iter (gen_block ~after:true ctx) (List.rev ctx.inits);
@@ -1179,24 +1235,26 @@ let generate com =
 	(match com.main with
 	| None -> ()
 	| Some e -> gen_expr ctx e; newline ctx);
-	if ctx.found_expose then begin
-        (* TODO(bruno): Remove runtime branching when standard node haxelib is available *)
-		print ctx
-"function $hxExpose(src, path) {
-	var o = typeof window != \"undefined\" ? window : exports;
-	var parts = path.split(\".\");
-	for(var ii = 0; ii < parts.length-1; ++ii) {
-		var p = parts[ii];
-		if(typeof o[p] == \"undefined\") o[p] = {};
-		o = o[p];
-	}
-	o[parts[parts.length-1]] = src;
-}";
-		newline ctx;
-	end;
 	if ctx.js_modern then begin
-		print ctx "})()";
+		print ctx "})(";
+		if (anyExposed && not (Common.defined com Define.ShallowExpose)) then (
+			(* TODO(bruno): Remove runtime branching when standard node haxelib is available *)
+			print ctx "typeof window != \"undefined\" ? window : exports"
+		);
+		print ctx ")";
 		newline ctx;
+		if (anyExposed && (Common.defined com Define.ShallowExpose)) then (
+			List.iter (fun f ->
+				print ctx "var %s = $hx_exports.%s" f.os_name f.os_name;
+				ctx.separator <- true;
+				newline ctx
+			) exposedObject.os_fields;
+			List.iter (fun f ->
+				print ctx "var %s = $hx_exports.%s" f f;
+				ctx.separator <- true;
+				newline ctx
+			) !toplevelExposed
+		);
 	end;
 	if com.debug then write_mappings ctx else (try Sys.remove (com.file ^ ".map") with _ -> ());
 	let ch = open_out_bin com.file in

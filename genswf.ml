@@ -483,7 +483,7 @@ let parse_swf com file =
 	IO.close_in ch;
 	List.iter (fun t ->
 		match t.tdata with
-		| TActionScript3 (id,as3) when not com.debug && not com.display ->
+		| TActionScript3 (id,as3) when not com.debug && com.display = DMNone ->
 			t.tdata <- TActionScript3 (id,remove_debug_infos as3)
 		| _ -> ()
 	) tags;
@@ -702,7 +702,7 @@ let build_swc_catalog com types =
 	let x = node "swc" ["xmlns","http://www.adobe.com/flash/swccatalog/9"] [
 		node "versions" [] [
 			node "swc" ["version","1.2"] [];
-			node "haxe" ["version",Printf.sprintf "%d.%.2d" (com.version/100) (com.version mod 100)] [];
+			node "haxe" ["version",Printf.sprintf "%d.%.2d" (com.version/10000) (com.version mod 10000)] [];
 		];
 		node "features" [] [
 			node "feature-script-deps" [] [];

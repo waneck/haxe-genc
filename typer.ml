@@ -222,10 +222,13 @@ let class_field ctx c pl name p =
 	raw_class_field (fun f -> field_type ctx c pl f p) c name
 
 (* checks if we can access to a given class field using current context *)
-let rec can_access ctx c cf stat =
+let rec can_access ctx ?(in_overload=false) c cf stat =
 	if cf.cf_public then
 		true
+	else if not in_overload && ctx.com.config.pf_overload && Meta.has Meta.Overload cf.cf_meta then
+		true
 	else
+	(* TODO: should we add a c == ctx.curclass short check here? *)
 	(* has metadata path *)
 	let make_path c f = match c.cl_kind with
 		| KAbstractImpl a -> fst a.a_path @ [snd a.a_path; f.cf_name]
@@ -284,6 +287,7 @@ let rec can_access ctx c cf stat =
 			List.exists (fun t -> match follow t with TInst(c,_) -> loop c | _ -> false) tl
 		| _ -> false)
 	|| (Meta.has Meta.PrivateAccess ctx.meta) in
+	(* TODO: find out what this does and move it to genas3 *)
 	if b && Common.defined ctx.com Common.Define.As3 && not (Meta.has Meta.Public cf.cf_meta) then cf.cf_meta <- (Meta.Public,[],cf.cf_pos) :: cf.cf_meta;
 	b
 
@@ -500,9 +504,13 @@ let rec unify_call_params ctx ?(overloads=None) cf el args r p inline =
   (* it's used to correctly support an overload selection algorithm *)
 	let overloads, compatible, legacy = match cf, overloads with
 		| Some(TInst(c,pl),f), None when ctx.com.config.pf_overload && Meta.has Meta.Overload f.cf_meta ->
-				let overloads = List.filter (fun (_,f2) -> not (f == f2)) (Typeload.get_overloads c f.cf_name) in
+				let overloads = List.filter (fun (_,f2) ->
+					not (f == f2) && (f2.cf_public || can_access ctx ~in_overload:true c f2 false)
+				) (Typeload.get_overloads c f.cf_name) in
 				if overloads = [] then (* is static function *)
-					List.map (fun f -> f.cf_type, f) f.cf_overloads, [], false
+					let overloads = List.map (fun f -> f.cf_type, f) f.cf_overloads in
+					let is_static = f.cf_name <> "new" in
+					List.filter (fun (_,f) -> can_access ctx ~in_overload:true c f is_static) overloads, [], false
 				else
 					overloads, [], false
 		| Some(_,f), None ->
@@ -800,7 +808,7 @@ let rec acc_get ctx g p =
 		ignore(follow f.cf_type); (* force computing *)
 		(match f.cf_expr with
 		| None ->
-			if ctx.com.display then
+			if ctx.com.display <> DMNone then
 				mk (TField (e,cmode)) t p
 			else
 				error "Recursive inline is not supported" p
@@ -999,7 +1007,13 @@ let rec using_field ctx mode e i p =
 			loop l
 	in
 	try loop ctx.m.module_using with Not_found ->
-	try loop ctx.g.global_using with Not_found ->
+	try
+		let acc = loop ctx.g.global_using in
+		(match acc with
+		| AKUsing (_,c,_,_) -> add_dependency ctx.m.curmod c.cl_module
+		| _ -> assert false);
+		acc
+	with Not_found ->
 	if not !check_constant_struct then raise Not_found;
 	remove_constant_flag e.etype (fun ok -> if ok then using_field ctx mode e i p else raise Not_found)
 
@@ -1045,7 +1059,7 @@ let rec type_ident_raise ?(imported_enums=true) ctx i p mode =
 	| _ ->
 	try
 		let v = PMap.find i ctx.locals in
-		(match fst v.v_extra with
+		(match v.v_extra with
 		| Some (params,e) ->
 			let t = monomorphs params v.v_type in
 			(match e with
@@ -1176,7 +1190,7 @@ and type_field ctx e i p mode =
 				This is a fix to deal with optimize_completion which will call iterator()
 				on the expression for/in, which vectors do no have.
 			*)
-			if ctx.com.display && i = "iterator" && c.cl_path = (["flash"],"Vector") then begin
+			if ctx.com.display <> DMNone && i = "iterator" && c.cl_path = (["flash"],"Vector") then begin
 				let it = TAnon {
 					a_fields = PMap.add "next" (mk_field "next" (TFun([],List.hd params)) p) PMap.empty;
 					a_status = ref Closed;
@@ -1257,7 +1271,7 @@ and type_field ctx e i p mode =
 		(try
  			let c = (match a.a_impl with None -> raise Not_found | Some c -> c) in
 			let f = PMap.find i c.cl_statics in
-			if not (can_access ctx c f false) && not ctx.untyped then display_error ctx ("Cannot access private field " ^ i) p;
+			if not (can_access ctx c f true) && not ctx.untyped then display_error ctx ("Cannot access private field " ^ i) p;
 			let field_type f =
 				let t = field_type ctx c [] f p in
 				apply_params a.a_types pl t
@@ -1813,9 +1827,10 @@ let rec type_binop ctx op e1 e2 is_assign_op p =
 		(* obviously a hack to report back that we need an assignment *)
 		if is_assign_op && not assign then mk (TField(ec,FDynamic ":needsAssign")) t_dynamic p else ec
 	in
-	let cast_rec e1t e2t r =
+	let cast_rec e1t e2t r is_core_type =
 		let e = make e1t e2t in
-		begin try
+		(* we assume that someone declaring a @:coreType knows what he is doing with regards to operation return types (issue #2333) *)
+		if not is_core_type then begin try
 			unify_raise ctx e.etype r p
 		with Error (Unify _,_) ->
 			error ("The result of this operation (" ^ (s_type (print_context()) e.etype) ^ ") is not compatible with declared return type " ^ (s_type (print_context()) r)) p;
@@ -1828,7 +1843,7 @@ let rec type_binop ctx op e1 e2 is_assign_op p =
 			begin match f.cf_expr with
 				| None ->
 					let e2 = match follow e2.etype with TAbstract(a,pl) -> {e2 with etype = apply_params a.a_types pl a.a_this} | _ -> e2 in
-					cast_rec {e1 with etype = apply_params a.a_types pl a.a_this} e2 r
+					cast_rec {e1 with etype = apply_params a.a_types pl a.a_this} e2 r (Meta.has Meta.CoreType a.a_meta)
 				| Some _ ->
 					mk_cast_op c f a pl e1 e2 r assign
 			end
@@ -1841,7 +1856,7 @@ let rec type_binop ctx op e1 e2 is_assign_op p =
 				| None ->
 					let e1,e2 = if commutative then e2,e1 else e1,e2 in
 					let e1 = match follow e1.etype with TAbstract(a,pl) -> {e1 with etype = apply_params a.a_types pl a.a_this} | _ -> e1 in
-					cast_rec e1 {e2 with etype = apply_params a.a_types pl a.a_this} r
+					cast_rec e1 {e2 with etype = apply_params a.a_types pl a.a_this} r (Meta.has Meta.CoreType a.a_meta)
 				| Some _ ->
 					let e1,e2 = if commutative then e2,e1 else e1,e2 in
 					mk_cast_op c f a pl e1 e2 r assign
@@ -1894,7 +1909,7 @@ and type_unop ctx op flag e p =
 				(match cf.cf_expr with
 				| None ->
 					let e = make {e with etype = apply_params a.a_types pl a.a_this} in
-					unify ctx r e.etype p;
+					(* unify ctx r e.etype p; *) (* TODO: I'm not sure why this was here (related to #2295) *)
 					{e with etype = r}
 				| Some _ ->
 					let et = type_module_type ctx (TClassDecl c) None p in
@@ -1994,12 +2009,14 @@ and type_ident ctx i p mode =
 				AKExpr (mk (TConst TThis) ctx.tthis p)
 			else
 				let t = mk_mono() in
-				AKExpr (mk (TLocal (alloc_var i t)) t p)
+				let v = alloc_var i t in
+				v.v_meta <- [Meta.Unbound,[],p];
+				AKExpr (mk (TLocal v) t p)
 		end else begin
 			if ctx.curfun = FunStatic && PMap.mem i ctx.curclass.cl_fields then error ("Cannot access " ^ i ^ " in static function") p;
 			let err = Unknown_ident i in
 			if ctx.in_display then raise (Error (err,p));
-			if ctx.com.display then begin
+			if ctx.com.display <> DMNone then begin
 				display_error ctx (error_msg err) p;
 				let t = mk_mono() in
 				AKExpr (mk (TLocal (add_local ctx i t)) t p)
@@ -2198,7 +2215,7 @@ and type_vars ctx vl p in_block =
 					unify ctx e.etype t p;
 					Some (Codegen.Abstract.check_cast ctx t e p)
 			) in
-			if v.[0] = '$' && not ctx.com.display then error "Variables names starting with a dollar are not allowed" p;
+			if v.[0] = '$' && ctx.com.display = DMNone then error "Variables names starting with a dollar are not allowed" p;
 			add_local ctx v t, e
 		with
 			Error (e,p) ->
@@ -2876,13 +2893,13 @@ and type_expr ctx (e,p) (with_type:with_type) =
 		(match v with
 		| None -> e
 		| Some v ->
-			if params <> [] || inline then v.v_extra <- Some (params,if inline then Some e else None),snd v.v_extra;
+			if params <> [] || inline then v.v_extra <- Some (params,if inline then Some e else None);
 			let rec loop = function
-				| Codegen.Block f | Codegen.Loop f | Codegen.Function f -> f loop
-				| Codegen.Use v2 when v == v2 -> raise Exit
-				| Codegen.Use _ | Codegen.Declare _ -> ()
+				| Filters.Block f | Filters.Loop f | Filters.Function f -> f loop
+				| Filters.Use v2 when v == v2 -> raise Exit
+				| Filters.Use _ | Filters.Declare _ -> ()
 			in
-			let is_rec = (try Codegen.local_usage loop e; false with Exit -> true) in
+			let is_rec = (try Filters.local_usage loop e; false with Exit -> true) in
 			let decl = (if is_rec then begin
 				if inline then display_error ctx "Inline function cannot be recursive" e.epos;
 				let vnew = add_local ctx v.v_name ft in
@@ -2932,15 +2949,22 @@ and type_expr ctx (e,p) (with_type:with_type) =
 			error "Cast type must be a class or an enum" p
 		) in
 		mk (TCast (type_expr ctx e Value,Some texpr)) t p
-	| EDisplay (e,iscall) when Common.defined_value_safe ctx.com Define.DisplayMode = "usage" ->
+	| EDisplay (e,iscall) when ctx.com.display = DMUsage ->
 		let e = try type_expr ctx e Value with Error (Unknown_ident n,_) -> raise (Parser.TypePath ([n],None)) in
-		(match e.eexpr with
-		| TField(_,fa) -> (match extract_field fa with
-			| None -> e
-			| Some cf ->
-				cf.cf_meta <- (Meta.Usage,[],p) :: cf.cf_meta;
-				e)
-		| _ -> e)
+		begin match e.eexpr with
+		| TField(_,fa) ->
+			begin match extract_field fa with
+				| None ->
+					()
+				| Some cf ->
+					cf.cf_meta <- (Meta.Usage,[],p) :: cf.cf_meta;
+			end
+		| TLocal v ->
+			v.v_meta <- (Meta.Usage,[],p) :: v.v_meta;
+		| _ ->
+			()
+		end;
+		e
 	| EDisplay (e,iscall) ->
 		let old = ctx.in_display in
 		let opt_args args ret = TFun(List.map(fun (n,o,t) -> n,true,t) args,ret) in
@@ -2948,28 +2972,27 @@ and type_expr ctx (e,p) (with_type:with_type) =
 		let e = (try type_expr ctx e Value with Error (Unknown_ident n,_) -> raise (Parser.TypePath ([n],None))) in
 		let e = match e.eexpr with
 			| TField (e1,fa) ->
-				let mode = Common.defined_value_safe ctx.com Define.DisplayMode in
 				if field_name fa = "bind" then (match follow e1.etype with
 					| TFun(args,ret) -> {e1 with etype = opt_args args ret}
 					| _ -> e)
 				else if field_name fa = "match" then (match follow e1.etype with
 					| TEnum _ as t -> {e1 with etype = tfun [t] ctx.t.tbool }
 					| _ -> e)
-				else if mode = "position" then (match extract_field fa with
+				else if ctx.com.display = DMPosition then (match extract_field fa with
 					| None -> e
 					| Some cf -> raise (Typecore.DisplayPosition [cf.cf_pos]))
-				else if mode = "metadata" then (match fa with
+				else if ctx.com.display = DMMetadata then (match fa with
 					| FStatic (c,cf) | FInstance (c,cf) | FClosure(Some c,cf) -> raise (DisplayMetadata (c.cl_meta @ cf.cf_meta))
 					| _ -> e)
 				else
 					e
-			| TTypeExpr mt when Common.defined_value_safe ctx.com Define.DisplayMode = "position" ->
+			| TTypeExpr mt when ctx.com.display = DMPosition ->
 				raise (DisplayPosition [match mt with
 					| TClassDecl c -> c.cl_pos
 					| TEnumDecl en -> en.e_pos
 					| TTypeDecl t -> t.t_pos
 					| TAbstractDecl a -> a.a_pos])
-			| TTypeExpr mt when Common.defined_value_safe ctx.com Define.DisplayMode = "metadata" ->
+			| TTypeExpr mt when ctx.com.display = DMMetadata ->
 				raise (DisplayMetadata (match mt with
 					| TClassDecl c -> c.cl_meta
 					| TEnumDecl en -> en.e_meta
@@ -2989,9 +3012,22 @@ and type_expr ctx (e,p) (with_type:with_type) =
 			| _ ->
 				t
 		in
+		let merge_core_doc c =
+			let c_core = Typeload.load_core_class ctx c in
+			if c.cl_doc = None then c.cl_doc <- c_core.cl_doc;
+			let maybe_merge cf_map cf =
+				if cf.cf_doc = None then try cf.cf_doc <- (PMap.find cf.cf_name cf_map).cf_doc with Not_found -> ()
+			in
+			List.iter (maybe_merge c_core.cl_fields) c.cl_ordered_fields;
+			List.iter (maybe_merge c_core.cl_statics) c.cl_ordered_statics;
+			match c.cl_constructor,c_core.cl_constructor with
+				| Some ({cf_doc = None} as cf),Some cf2 -> cf.cf_doc <- cf2.cf_doc
+				| _ -> ()
+		in
 		let rec get_fields t =
 			match follow t with
 			| TInst (c,params) ->
+				if Meta.has Meta.CoreApi c.cl_meta then merge_core_doc c;
 				let priv = is_parent c ctx.curclass in
 				let merge ?(cond=(fun _ -> true)) a b =
 					PMap.foldi (fun k f m -> if cond f then PMap.add k f m else m) a b
@@ -3013,6 +3049,7 @@ and type_expr ctx (e,p) (with_type:with_type) =
 				in
 				loop c params
 			| TAbstract({a_impl = Some c} as a,pl) ->
+				if Meta.has Meta.CoreApi c.cl_meta then merge_core_doc c;
 				ctx.m.module_using <- c :: ctx.m.module_using;
 				PMap.fold (fun f acc ->
 					if f.cf_name <> "_new" && can_access ctx c f true && Meta.has Meta.Impl f.cf_meta then begin
@@ -3025,6 +3062,7 @@ and type_expr ctx (e,p) (with_type:with_type) =
 			| TAnon a ->
 				(match !(a.a_status) with
 				| Statics c ->
+					if Meta.has Meta.CoreApi c.cl_meta then merge_core_doc c;
 					let pm = match c.cl_constructor with None -> PMap.empty | Some cf -> PMap.add "new" cf PMap.empty in
 					PMap.fold (fun f acc -> if can_access ctx c f true then PMap.add f.cf_name { f with cf_public = true; cf_type = opt_type f.cf_type } acc else acc) a.a_fields pm
 				| _ ->
@@ -3495,7 +3533,7 @@ let typing_timer ctx f =
 	(*
 		disable resumable errors... unless we are in display mode (we want to reach point of completion)
 	*)
-	if not ctx.com.display then ctx.com.error <- (fun e p -> raise (Error(Custom e,p)));
+	if ctx.com.display = DMNone then ctx.com.error <- (fun e p -> raise (Error(Custom e,p)));
 	if ctx.pass < PTypeField then ctx.pass <- PTypeField;
 	let exit() =
 		t();
@@ -3569,13 +3607,13 @@ let make_macro_api ctx p =
 			typing_timer ctx (fun() -> (type_expr ctx e Value).etype)
 		);
 		Interp.get_display = (fun s ->
-			let is_displaying = ctx.com.display in
+			let is_displaying = ctx.com.display <> DMNone in
 			let old_resume = !Parser.resume_display in
 			let old_error = ctx.on_error in
 			let restore () =
 				if not is_displaying then begin
 					ctx.com.defines <- PMap.remove (fst (Define.infos Define.Display)) ctx.com.defines;
-					ctx.com.display <- false
+					ctx.com.display <- DMNone
 				end;
 				Parser.resume_display := old_resume;
 				ctx.on_error <- old_error;
@@ -3583,7 +3621,7 @@ let make_macro_api ctx p =
 			(* temporarily enter display mode with a fake position *)
 			if not is_displaying then begin
 				Common.define ctx.com Define.Display;
-				ctx.com.display <- true;
+				ctx.com.display <- DMDefault;
 			end;
 			Parser.resume_display := {
 				Ast.pfile = "macro";
@@ -3805,9 +3843,9 @@ and flush_macro_context mint ctx =
 		mint
 	end else mint in
 	(* we should maybe ensure that all filters in Main are applied. Not urgent atm *)
-	(try Interp.add_types mint types (Codegen.post_process mctx [Codegen.Abstract.handle_abstract_casts mctx; Codegen.captured_vars mctx.com; Codegen.rename_local_vars mctx.com])
+	(try Interp.add_types mint types (Filters.post_process mctx [Codegen.Abstract.handle_abstract_casts mctx; Filters.captured_vars mctx.com; Filters.rename_local_vars mctx.com])
 	with Error (e,p) -> raise (Fatal_error(error_msg e,p)));
-	Codegen.post_process_end()
+	Filters.post_process_end()
 
 let create_macro_interp ctx mctx =
 	let com2 = mctx.com in
@@ -3842,7 +3880,7 @@ let get_macro_context ctx p =
 		ctx.com.get_macros <- (fun() -> Some com2);
 		com2.package_rules <- PMap.empty;
 		com2.main_class <- None;
-		com2.display <- false;
+		com2.display <- DMNone;
 		List.iter (fun p -> com2.defines <- PMap.remove (platform_name p) com2.defines) platforms;
 		com2.defines_signature <- None;
 		com2.class_path <- List.filter (fun s -> not (ExtString.String.exists s "/_std/")) com2.class_path;
@@ -4084,7 +4122,7 @@ let rec create com =
 			delayed = [];
 			debug_delayed = [];
 			delayed_macros = DynArray.create();
-			doinline = not (Common.defined com Define.NoInline || com.display);
+			doinline = not (Common.defined com Define.NoInline || com.display <> DMNone);
 			hook_generate = [];
 			get_build_infos = (fun() -> None);
 			std = null_module;
