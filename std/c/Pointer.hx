@@ -25,31 +25,21 @@ import c.Types;
 
 @:runtimeValue
 @:coreType
-abstract Pointer<T> {
+abstract Pointer<T> to ConstPointer<T> {
 	public inline function new(i:Int) {
 		this = untyped i;
 	}
 
-	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
-	@:extern @:op(A+B) public static inline function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
-	@:extern @:op(A-B) public static inline function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
-	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
-	@:extern @:op(++A) public inline function increment():Pointer<T>;
+	@:op(A+B) public static function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
+	@:op(A+B) public static function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
+	@:op(A-B) public static function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
+	@:op(A-B) public static function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
+	@:op(++A) public function increment():Pointer<T>;
 	
-	@:extern @:arrayAccess public inline function __get(index:Int):T {
-		return untyped this[index];
-	}
+	@:arrayAccess public function __get(index:Int):T;
+	@:arrayAccess public function __set(index:Int, value:T):T;
 
-	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
-		return untyped this[index] = value;
-	}
-
-	@:extern @:to inline public function const():ConstPointer<T>
-	{
-		return untyped this;
-	}
-
-	@:extern public inline function value() {
+	public inline function value() {
 		return this;
 	}
 }
@@ -58,13 +48,13 @@ abstract Pointer<T> {
 abstract ConstPointer<T> {
 	public inline function new(ptr) this = ptr;
 
-	@:extern @:op(A+B) public static inline function add<T>(lhs:ConstPointer<T>, offset:Int):ConstPointer<T>;
-	@:extern @:op(A+B) public static inline function addP<T>(lhs:ConstPointer<T>, rhs:ConstPointer<T>):ConstPointer<T>;
-	@:extern @:op(A-B) public static inline function sub<T>(lhs:ConstPointer<T>, offset:Int):ConstPointer<T>;
-	@:extern @:op(A-B) public static inline function subP<T>(lhs:ConstPointer<T>, rhs:ConstPointer<T>):ConstPointer<T>;
+	@:op(A+B) public static function add<T>(lhs:ConstPointer<T>, offset:Int):ConstPointer<T>;
+	@:op(A+B) public static function addP<T>(lhs:ConstPointer<T>, rhs:ConstPointer<T>):ConstPointer<T>;
+	@:op(A-B) public static function sub<T>(lhs:ConstPointer<T>, offset:Int):ConstPointer<T>;
+	@:op(A-B) public static function subP<T>(lhs:ConstPointer<T>, rhs:ConstPointer<T>):ConstPointer<T>;
 
-	@:extern @:op(++A) public inline function increment<T>():ConstPointer<T>;
-	@:extern @:arrayAccess public inline function __get(index:Int):T {
+	@:op(++A) public function increment<T>():ConstPointer<T>;
+	@:arrayAccess public inline function __get(index:Int):T {
 		return untyped this[index];
 	}
 
@@ -72,7 +62,7 @@ abstract ConstPointer<T> {
 		return @:privateAccess String.raw(s);
 	}
 
-	@:extern public inline function value() {
+	public inline function value() {
 		return this;
 	}
 }

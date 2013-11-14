@@ -97,7 +97,7 @@ import c.CString.memcmp;
 			return -1;
 		var first = str.__a[0];
 		startIndex = startIndex > 0 ? startIndex : length-1; // NULL == 0 issue, TODO
-		var pos = (length - str.length) < startIndex ? (length - str.length) : startIndex;
+		var pos:Int = (length - str.length) < startIndex ? (length - str.length) : startIndex; // TODO: the type hint should not be required
 		do {
 			var p_tmp = __a + pos;      // TODO inlining produces garbage
 			var char_at_pos = __a[pos]; // TODO inlining produces garbage
