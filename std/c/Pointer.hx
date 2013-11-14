@@ -31,13 +31,13 @@ abstract Pointer<T> to ConstPointer<T> {
 		this = untyped i;
 	}
 
-	@:extern @:op(A+B) public static inline function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
-	@:extern @:op(A+B) public static inline function add64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T>;
-	@:extern @:op(A+B) public static inline function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
-	@:extern @:op(A-B) public static inline function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
-	@:extern @:op(A-B) public static inline function sub64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T>;
-	@:extern @:op(A-B) public static inline function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
-	@:extern @:op(++A) public inline function increment():Pointer<T>;
+	@:extern @:op(A+B) public static function add<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
+	@:extern @:op(A+B) public static function add64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T>;
+	@:extern @:op(A+B) public static function addP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
+	@:extern @:op(A-B) public static function sub<T>(lhs:Pointer<T>, offset:Int):Pointer<T>;
+	@:extern @:op(A-B) public static function sub64<T>(lhs:Pointer<T>, offset:Int64):Pointer<T>;
+	@:extern @:op(A-B) public static function subP<T>(lhs:Pointer<T>, rhs:Pointer<T>):Pointer<T>;
+	@:extern @:op(++A) public function increment():Pointer<T>;
 
 	@:arrayAccess public function __get(index:Int):T;
 	@:arrayAccess public function __set(index:Int, value:T):T;

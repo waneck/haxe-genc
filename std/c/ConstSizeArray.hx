@@ -22,18 +22,15 @@
 package c;
 
 @:runtimeValue
-abstract ConstSizeArray<T, Const>(Pointer<T>)
+@:coreType
+abstract ConstSizeArray<T, Const>
 {
-	@:extern @:arrayAccess public inline function __get(index:Int):T {
-		return untyped this[index];
-	}
 
-	@:extern @:arrayAccess public inline function __set(index:Int, value:T):T {
-		return untyped this[index] = value;
-	}
+	@:arrayAccess public function __get(index:Int):T;
+	@:arrayAccess public function __set(index:Int,value:T):T;
 
 	@:to public inline function toPointer():Pointer<T>
 	{
-		return untyped c.Lib.getAddress(this[0]);
+		return untyped c.Lib.getAddress(this);
 	}
 }

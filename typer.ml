@@ -2219,7 +2219,7 @@ and type_access ctx e p mode =
 				(try unify_raise ctx et t p
 				with Error(Unify _,_) -> if not ctx.untyped then begin
 					if !has_abstract_array_access then error ("No @:arrayAccess function accepts an argument of " ^ (s_type (print_context()) e2.etype)) e1.epos
-					else error ("Array access is not allowed on " ^ (s_type (print_context()) e1.etype)) e1.epos
+					else error ("Array access is not allowed on " ^ (s_type (print_context()) e1.etype) ^" "^ (s_type (print_context()) t)) e1.epos
 				end);
 				pt
 		in

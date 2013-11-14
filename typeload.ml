@@ -384,8 +384,10 @@ let rec load_instance ctx t p allow_no_params =
 				| TPType t -> load_complex_type ctx p t
 			) t.tparams in
 			let params = List.map2 (fun t (name,t2) ->
+				let isconst_param = match t with TInst({ cl_kind = KTypeParameter _; cl_path = _,"Const" },_) -> true | _ -> false in
 				let isconst = (match t with TInst ({ cl_kind = KExpr _ },_) -> true | _ -> false) in
-				if isconst <> (name = "Const") && t != t_dynamic then error (if isconst then "Constant value unexpected here" else "Constant value excepted as type parameter") p;
+				if (isconst || isconst_param) <> (name = "Const") && t != t_dynamic then error (if isconst then "Constant value unexpected here" else "Constant value excepted as type parameter") p;
+				(*if isconst <> (name = "Const") then error (if isconst then "Constant value unexpected here" else "Constant value excepted as type parameter " ^ name ^ " type:" ^ (s_type (print_context()) t)) p;*)
 				match follow t2 with
 				| TInst ({ cl_kind = KTypeParameter [] }, []) when not is_generic ->
 					t

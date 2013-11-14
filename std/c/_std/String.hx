@@ -37,7 +37,7 @@ import c.CString.memcmp;
 	public function new(string:String) {
 		if ( string != null ){
 			length = string.length;
-			__a = cast c.CStdlib.calloc(string.length, 8 /*TODO*/);
+			__a = cast c.CStdlib.calloc(string.length, 1); /*TODO*/
 			FixedArray.copy(string.__a,0,__a,0,string.length); // 0x00
 		} else {
 			__a = null;
@@ -89,6 +89,7 @@ import c.CString.memcmp;
 	}
 
 	public function lastIndexOf( str : String, ?startIndex : Int = 0 ):Int {
+		var startIndex:Int = startIndex;
 		if (str.length == 0)
 			return length-1;
 		else if (str.length < 0 || str.length > length)
@@ -97,7 +98,8 @@ import c.CString.memcmp;
 			return -1;
 		var first = str.__a[0];
 		startIndex = startIndex > 0 ? startIndex : length-1; // NULL == 0 issue, TODO
-		var pos:Int = (length - str.length) < startIndex ? (length - str.length) : startIndex; // TODO: the type hint should not be required
+		var pos = (length - str.length) < startIndex ? (length - str.length) : startIndex; // TODO: the type hint should not be required
+		$type(pos);
 		do {
 			var p_tmp = __a + pos;      // TODO inlining produces garbage
 			var char_at_pos = __a[pos]; // TODO inlining produces garbage
