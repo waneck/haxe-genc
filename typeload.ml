@@ -76,6 +76,16 @@ let make_module ctx mpath file tdecls loadp =
 				e_extern = List.mem EExtern d.d_flags;
 				e_constrs = PMap.empty;
 				e_names = [];
+				e_type = {
+					t_path = fst path, "#" ^ snd path;
+					t_module = m;
+					t_doc = None;
+					t_pos = p;
+					t_type = mk_mono();
+					t_private = true;
+					t_types = [];
+					t_meta = [];
+				};
 			} in
 			decls := (TEnumDecl e, decl) :: !decls;
 			acc
@@ -184,8 +194,8 @@ let make_module ctx mpath file tdecls loadp =
 					List.iter (fun m -> match m with
 						| ((Meta.Build | Meta.CoreApi | Meta.Allow | Meta.Access),_,_) ->
 							c.cl_meta <- m :: c.cl_meta;
-						| (Meta.FakeEnum,_,_) ->
-							c.cl_meta <- (Meta.Build,[ECall((EField((EField((EField((EConst(Ident "haxe"),p),"macro"),p),"Build"),p),"buildFakeEnum"),p),[]),p],p) :: c.cl_meta;
+						| (Meta.Enum,_,_) ->
+							c.cl_meta <- (Meta.Build,[ECall((EField((EField((EField((EConst(Ident "haxe"),p),"macro"),p),"Build"),p),"buildEnumAbstract"),p),[]),p],p) :: c.cl_meta;
 						| (Meta.Expose,el,_) ->
 							c.cl_meta <- (Meta.Build,[ECall((EField((EField((EField((EConst(Ident "haxe"),p),"macro"),p),"Build"),p),"exposeUnderlyingFields"),p),el),p],p) :: c.cl_meta;
 						| _ ->
@@ -1641,7 +1651,7 @@ let init_class ctx c p context_init herits fields =
 			} in
 			ctx.curfield <- cf;
 			bind_var ctx cf e stat inline;
-			f, false, cf
+			f, false, cf, true
 		| FFun fd ->
 			let params = type_function_params ctx fd f.cff_name p in
 			if inline && c.cl_interface then error "You can't declare inline methods in interfaces" p;
@@ -1673,7 +1683,7 @@ let init_class ctx c p context_init herits fields =
 					in
 					{
 						f_params = fd.f_params;
-						f_type = (match fd.f_type with None -> Some texpr | t -> t);
+						f_type = (match fd.f_type with None -> Some texpr | Some t -> no_expr_of t);
 						f_args = List.map (fun (a,o,t,e) -> a,o,(match t with None -> Some texpr | Some t -> no_expr_of t),e) fd.f_args;
 						f_expr = fd.f_expr;
 					}
@@ -1728,6 +1738,7 @@ let init_class ctx c p context_init herits fields =
 				cf_overloads = [];
 			} in
 			let do_bind = ref (((not c.cl_extern || inline) && not c.cl_interface) || cf.cf_name = "__init__") in
+			let do_add = ref true in
 			(match c.cl_kind with
 				| KAbstractImpl a ->
 					let m = mk_mono() in
@@ -1740,7 +1751,8 @@ let init_class ctx c p context_init herits fields =
 								| None -> error ("Functions without expressions must have an explicit return type") f.cff_pos
 								| Some _ -> ()
 							end;
-							do_bind := false
+							do_add := false;
+							do_bind := false;
 						end
 					in
 					let rec loop ml = match ml with
@@ -1831,7 +1843,7 @@ let init_class ctx c p context_init herits fields =
 				t
 			) "type_fun" in
 			if !do_bind then bind_type ctx cf r (match fd.f_expr with Some e -> snd e | None -> f.cff_pos) is_macro;
-			f, constr, cf
+			f, constr, cf, !do_add
 		| FProp (get,set,t,eo) ->
 			(match c.cl_kind with
 			| KAbstractImpl a when Meta.has Meta.Impl f.cff_meta ->
@@ -1908,7 +1920,7 @@ let init_class ctx c p context_init herits fields =
 			} in
 			ctx.curfield <- cf;
 			bind_var ctx cf eo stat inline;
-			f, false, cf
+			f, false, cf, true
 	in
 	let rec check_require = function
 		| [] -> None
@@ -1933,7 +1945,7 @@ let init_class ctx c p context_init herits fields =
 	List.iter (fun f ->
 		let p = f.cff_pos in
 		try
-			let fd , constr, f = loop_cf f in
+			let fd , constr, f, do_add = loop_cf f in
 			let is_static = List.mem AStatic fd.cff_access in
 			if (is_static || constr) && c.cl_interface && f.cf_name <> "__init__" then error "You can't declare static fields in interfaces" p;
 			begin try
@@ -1975,7 +1987,9 @@ let init_class ctx c p context_init herits fields =
 					else
 						display_error ctx ("Duplicate class field declaration : " ^ f.cf_name) p
 				else
-				if is_static then begin
+				if not do_add then
+					()
+				else if is_static then begin
 					c.cl_statics <- PMap.add f.cf_name f c.cl_statics;
 					c.cl_ordered_statics <- f :: c.cl_ordered_statics;
 				end else begin
@@ -2262,6 +2276,7 @@ let rec init_module_type ctx context_init do_init (decl,p) =
 		let names = ref [] in
 		let index = ref 0 in
 		let is_flat = ref true in
+		let fields = ref PMap.empty in
 		List.iter (fun c ->
 			let p = c.ec_pos in
 			let params = ref [] in
@@ -2292,7 +2307,7 @@ let rec init_module_type ctx context_init do_init (decl,p) =
 					) l, rt)
 			) in
 			if PMap.mem c.ec_name e.e_constrs then error ("Duplicate constructor " ^ c.ec_name) p;
-			e.e_constrs <- PMap.add c.ec_name {
+			let f = {
 				ef_name = c.ec_name;
 				ef_type = t;
 				ef_pos = p;
@@ -2300,12 +2315,34 @@ let rec init_module_type ctx context_init do_init (decl,p) =
 				ef_index = !index;
 				ef_params = params;
 				ef_meta = c.ec_meta;
-			} e.e_constrs;
+			} in
+			let cf = {
+				cf_name = f.ef_name;
+				cf_public = true;
+				cf_type = f.ef_type;
+				cf_kind = (match follow f.ef_type with
+					| TFun _ -> Method MethNormal
+					| _ -> Var { v_read = AccNormal; v_write = AccNo }
+				);
+				cf_pos = e.e_pos;
+				cf_doc = None;
+				cf_meta = no_meta;
+				cf_expr = None;
+				cf_params = f.ef_params;
+				cf_overloads = [];
+			} in
+			e.e_constrs <- PMap.add f.ef_name f e.e_constrs;
+			fields := PMap.add cf.cf_name cf !fields;
 			incr index;
 			names := c.ec_name :: !names;
 		) (!constructs);
 		e.e_names <- List.rev !names;
 		e.e_extern <- e.e_extern;
+		e.e_type.t_types <- e.e_types;
+		e.e_type.t_type <- TAnon {
+			a_fields = !fields;
+			a_status = ref (EnumStatics e);
+		};
 		if !is_flat then e.e_meta <- (Meta.FlatEnum,[],e.e_pos) :: e.e_meta;
 	| ETypedef d ->
 		let t = (match get_type d.d_name with TTypeDecl t -> t | _ -> assert false) in

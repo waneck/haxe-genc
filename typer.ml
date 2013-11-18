@@ -653,37 +653,7 @@ let rec type_module_type ctx t tparams p =
 		mk (TTypeExpr (TClassDecl c)) (TType (t_tmp,[])) p
 	| TEnumDecl e ->
 		let types = (match tparams with None -> List.map (fun _ -> mk_mono()) e.e_types | Some l -> l) in
-		let fl = PMap.fold (fun f acc ->
-			PMap.add f.ef_name {
-				cf_name = f.ef_name;
-				cf_public = true;
-				cf_type = f.ef_type;
-				cf_kind = (match follow f.ef_type with
-					| TFun _ -> Method MethNormal
-					| _ -> Var { v_read = AccNormal; v_write = AccNo }
-				);
-				cf_pos = e.e_pos;
-				cf_doc = None;
-				cf_meta = no_meta;
-				cf_expr = None;
-				cf_params = f.ef_params;
-				cf_overloads = [];
-			} acc
-		) e.e_constrs PMap.empty in
-		let t_tmp = {
-			t_path = fst e.e_path, "#" ^ snd e.e_path;
-			t_module = e.e_module;
-			t_doc = None;
-			t_pos = e.e_pos;
-			t_type = TAnon {
-				a_fields = fl;
-				a_status = ref (EnumStatics e);
-			};
-			t_private = true;
-			t_types = e.e_types;
-			t_meta = no_meta;
-		} in
-		mk (TTypeExpr (TEnumDecl e)) (TType (t_tmp,types)) p
+		mk (TTypeExpr (TEnumDecl e)) (TType (e.e_type,types)) p
 	| TTypeDecl s ->
 		let t = apply_params s.t_types (List.map (fun _ -> mk_mono()) s.t_types) s.t_type in
 		(match follow t with
@@ -743,17 +713,22 @@ let make_call ctx e params t p =
 			| _ -> false
 		) in
 		let config = match cl with
-			| Some ({cl_kind = KAbstractImpl _ }) when Meta.has Meta.Impl f.cf_meta ->
-				(match if fname = "_new" then
+			| Some ({cl_kind = KAbstractImpl _}) when Meta.has Meta.Impl f.cf_meta ->
+				let t = if fname = "_new" then
 					t
 				else if params = [] then
 					error "Invalid abstract implementation function" f.cf_pos
 				else
-					follow (List.hd params).etype with
+					follow (List.hd params).etype
+				in
+				begin match t with
 					| TAbstract(a,pl) ->
-						Some (a.a_types <> [] || f.cf_params <> [], fun t -> apply_params a.a_types pl (monomorphs f.cf_params t))
+						let has_params = a.a_types <> [] || f.cf_params <> [] in
+						let map_type = fun t -> apply_params a.a_types pl (monomorphs f.cf_params t) in
+						Some (has_params,map_type)
 					| _ ->
-						None);
+						None
+				end
 			| _ ->
 				None
 		in
@@ -1135,7 +1110,19 @@ and type_field ctx e i p mode =
 			| TInst({cl_kind = KAbstractImpl a},_) -> TAbstract(a,[])
 			| _ -> e.etype
 		in
-		if not ctx.untyped then display_error ctx (string_error i (string_source t) (s_type (print_context()) t ^ " has no field " ^ i)) p;
+		let has_special_field a =
+			List.exists (fun (_,cf) -> cf.cf_name = i) a.a_ops
+			|| List.exists (fun (_,_,cf) -> cf.cf_name = i) a.a_unops
+			|| List.exists (fun cf -> cf.cf_name = i) a.a_array
+		in
+		if not ctx.untyped then begin
+			match t with
+			| TAbstract(a,_) when has_special_field a ->
+				(* the abstract field is not part of the field list, which is only true when it has no expression (issue #2344) *)
+				display_error ctx ("Field " ^ i ^ " cannot be called directly because it has no expression") p;
+			| _ ->
+				display_error ctx (string_error i (string_source t) (s_type (print_context()) t ^ " has no field " ^ i)) p;
+		end;
 		AKExpr (mk (TField (e,FDynamic i)) (mk_mono()) p)
 	in
 	match follow e.etype with
@@ -2365,7 +2352,7 @@ and type_expr ctx (e,p) (with_type:with_type) =
 						if ctx.untyped then raise Not_found;
 						with_type_error ctx with_type (string_error s e.e_names ("Identifier '" ^ s ^ "' is not part of enum " ^ s_type_path e.e_path)) p;
 						mk (TConst TNull) t p)
-				| TAbstract (a,pl) when has_meta Meta.FakeEnum a.a_meta ->
+				| TAbstract (a,pl) when has_meta Meta.Enum a.a_meta ->
 					let cimpl = (match a.a_impl with None -> assert false | Some c -> c) in
 					(try
 						let cf = PMap.find s cimpl.cl_statics in
@@ -2625,7 +2612,7 @@ and type_expr ctx (e,p) (with_type:with_type) =
 				| _ ->
 					(try
 						unify_raise ctx e1.etype t e1.epos;
-						e1
+						Codegen.Abstract.check_cast ctx t e1 p
 					with Error (Unify _,_) ->
 						let acc = build_call ctx (type_field ctx e1 "iterator" e1.epos MCall) [] Value e1.epos in
 						try
@@ -3088,8 +3075,12 @@ and type_expr ctx (e,p) (with_type:with_type) =
 				(match !(a.a_status) with
 				| Statics c ->
 					if Meta.has Meta.CoreApi c.cl_meta then merge_core_doc c;
+					let is_abstract_impl = match c.cl_kind with KAbstractImpl _ -> true | _ -> false in
 					let pm = match c.cl_constructor with None -> PMap.empty | Some cf -> PMap.add "new" cf PMap.empty in
-					PMap.fold (fun f acc -> if can_access ctx c f true then PMap.add f.cf_name { f with cf_public = true; cf_type = opt_type f.cf_type } acc else acc) a.a_fields pm
+					PMap.fold (fun f acc ->
+						if can_access ctx c f true && (not is_abstract_impl || not (Meta.has Meta.Impl f.cf_meta)) then
+							PMap.add f.cf_name { f with cf_public = true; cf_type = opt_type f.cf_type } acc else acc
+					) a.a_fields pm
 				| _ ->
 					a.a_fields)
 			| TFun (args,ret) ->
