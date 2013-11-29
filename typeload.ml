@@ -426,6 +426,8 @@ and load_complex_type ctx p t =
 		| TAnon a ->
 			let rec loop t =
 				match follow t with
+				| TInst ({cl_kind = KTypeParameter _},_) ->
+					error "Cannot structurally extend type parameters" p
 				| TInst (c,tl) ->
 					let c2 = mk_class null_module (fst c.cl_path,"+" ^ snd c.cl_path) p in
 					c2.cl_private <- true;
@@ -1545,6 +1547,10 @@ let init_class ctx c p context_init herits fields =
 					context_init();
 					if ctx.com.verbose then Common.log ctx.com ("Typing " ^ (if ctx.in_macro then "macro " else "") ^ s_type_path c.cl_path ^ "." ^ cf.cf_name);
 					let e = type_var_field ctx t e stat p in
+					let require_constant_expression e msg = match Optimizer.make_constant_expression ctx e with
+						| Some e -> e
+						| None -> display_error ctx msg p; e
+					in
 					let e = (match cf.cf_kind with
 					| Var v when c.cl_extern || Meta.has Meta.Extern cf.cf_meta ->
 						if not stat then begin
@@ -1553,15 +1559,11 @@ let init_class ctx c p context_init herits fields =
 						end else if v.v_read <> AccInline then begin
 							display_error ctx "Extern non-inline variables may not be initialized" p;
 							e
-						end else begin
-							match Optimizer.make_constant_expression ctx e with
-							| Some e -> e
-							| None -> display_error ctx "Extern variable initialization must be a constant value" p; e
-						end
+						end else require_constant_expression e "Extern variable initialization must be a constant value"
 					| Var v when is_extern_field cf ->
 						(* disallow initialization of non-physical fields (issue #1958) *)
 						display_error ctx "This field cannot be initialized because it is not a real variable" p; e
-					| Var v when not stat || (v.v_read = AccInline) ->
+					| Var v when not stat ->
 						let e = match Optimizer.make_constant_expression ctx e with
 							| Some e -> e
 							| None ->
@@ -1574,6 +1576,9 @@ let init_class ctx c p context_init herits fields =
 								has_this e;
 								e
 						in
+						check_cast e
+					| Var v when v.v_read = AccInline ->
+						let e = require_constant_expression e "Inline variable initialization must be a constant value" in
 						check_cast e
 					| _ ->
 						e

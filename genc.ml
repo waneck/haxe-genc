@@ -312,11 +312,11 @@ module Wrap = struct
 		| _ -> false
 
 	let wrap_dynamic con e =
-		con.com.warning (Printf.sprintf "Wrapping dynamic %s" (st e.etype)) e.epos;
+		(* con.com.warning (Printf.sprintf "Wrapping dynamic %s" (st e.etype)) e.epos; *)
 		e
 
 	let unwrap_dynamic con e t =
-		con.com.warning (Printf.sprintf "Unwrapping dynamic %s" (s_expr_pretty "" st e)) e.epos;
+		(* con.com.warning (Printf.sprintf "Unwrapping dynamic %s" (s_expr_pretty "" st e)) e.epos; *)
 		e
 end
 
