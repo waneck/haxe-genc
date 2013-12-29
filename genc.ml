@@ -615,7 +615,11 @@ module DefaultValues = struct
 			e
 		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
 			let s = match follow e1.etype with
-				| TAbstract({a_path=[],"Int"},_) -> "i"
+				| TAbstract({a_path=[],("Int"|"hx_int8"|"hx_int16"|"hx_int32"|"hx_short")},_) -> "d"
+				| TAbstract({a_path=[],("hx_uint8"|"hx_uint16"|"hx_uint32"|"hx_ushort")},_) -> "u"
+				| TAbstract({a_path=[],"hx_int64"},_) -> "lld"
+				| TAbstract({a_path=[],"hx_uint64"},_) -> "llu"
+				| TAbstract({a_path=[],("hx_char"|"hx_uchar")},_) -> "c"
 				| TInst({cl_path=[],"String"},_) -> "s"
 				| _ ->
 					gen.gcom.warning "This will probably not work as expected" e.epos;
@@ -1171,7 +1175,7 @@ module ArrayHandler = struct
 	let get_type_size hxc tp = match tp with
 	| TAbstract ( { a_path =[], "Int" } ,_ )
 	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32",(fun e -> e)
-	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16") } ,_ ) -> "16",(fun e -> e)
+	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16" | "hx_short" | "hx_ushort") } ,_ ) -> "16",(fun e -> e)
 	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hx_char" | "hx_uchar") } ,_ ) -> "8",(fun e -> e)
 	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
 	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))

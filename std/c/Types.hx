@@ -10,6 +10,16 @@ abstract Char from Int to Int { }
 @:coreType
 abstract UChar from Int to Int { }
 
+@:native("hx_short")
+@:struct
+@:coreType
+abstract Short from Int to Int { }
+
+@:native("hx_ushort")
+@:struct
+@:coreType
+abstract UShort from Int to Int { }
+
 @:native("hx_uint8")
 @:struct
 @:coreType
@@ -19,6 +29,16 @@ abstract UInt8 from Int to Int { }
 @:struct
 @:coreType
 abstract Int8 from Int to Int { }
+
+@:native("hx_uint16")
+@:struct
+@:coreType
+abstract UInt16 from Int to Int { }
+
+@:native("hx_int16")
+@:struct
+@:coreType
+abstract Int16 from Int to Int { }
 
 @:native("hx_uint32")
 @:struct

@@ -21,14 +21,18 @@ import c.VTable;
 #endif
 
 typedef unsigned char hx_uchar;
-typedef char hx_char;
+typedef signed char hx_char;
+typedef unsigned short hx_ushort;
+typedef signed short hx_short;
 typedef unsigned int hx_uint;
 typedef unsigned char hx_uint8;
-typedef char hx_int8;
+typedef signed char hx_int8;
+typedef unsigned short int hx_uint16;
+typedef signed short int hx_int16;
 typedef unsigned long hx_uint32;
-typedef long hx_int32;
+typedef signed long hx_int32;
 typedef unsigned long long hx_uint64;
-typedef long long hx_int64;
+typedef signed long long hx_int64;
 typedef int Date;
 ')
 @:keep
@@ -37,11 +41,11 @@ class Boot {
 	static public var argc:Int;
 	static public var argv:Pointer<Pointer<Char>>;
 	static public var typeReferences:Array<c.TypeReference<Dynamic>>;
-		
+
 	static public function registerType(typeref:TypeReference<Dynamic>) {
 		typeReferences.push(typeref);
 	}
-	
+
 	@:plain static public function main(argc:Int, argv:Pointer<Pointer<Char>>):Int {
 		Boot.argc = argc;
 		Boot.argv = argv;
