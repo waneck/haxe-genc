@@ -101,6 +101,9 @@ and gen_context = {
 
 and filter = gen_context->(texpr->texpr)
 
+let add_c_lib com file =
+	com.c_libs <- file :: com.c_libs
+
 type answer =
 	| Yes
 	| No
@@ -2701,6 +2704,9 @@ let generate_make_file con =
 	output_string ch ("\tOUTFLAG := -o \n");
 	output_string ch ("\tOBJEXT := o \n");
 	output_string ch ("\tLDFLAGS += -lm \n");
+	List.iter (fun lib ->
+		output_string ch ("\tLDFLAGS += -l" ^ lib ^ " \n")
+	) con.com.c_libs;
 	output_string ch ("else\n");
 	output_string ch ("\tOUTFLAG := /Fo\n");
 	output_string ch ("\tOBJEXT := obj\n");

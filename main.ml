@@ -1055,6 +1055,9 @@ try
 		("-swf-lib-extern",Arg.String (fun file ->
 			Genswf.add_swf_lib com file true
 		),"<file> : use the SWF library for type checking");
+		("-c-lib",Arg.String (fun lib ->
+			Genc.add_c_lib com lib
+		),"<lib> : link C library (-l<lib>) eg, -c-lib GL");
 		("-java-lib",Arg.String (fun file ->
 			Genjava.add_java_lib com file false
 		),"<file> : add an external JAR or class directory library");

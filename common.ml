@@ -144,6 +144,7 @@ type context = {
 	mutable php_lib : string option;
 	mutable php_prefix : string option;
 	mutable swf_libs : (string * (unit -> Swf.swf) * (unit -> ((string list * string),As3hl.hl_class) Hashtbl.t)) list;
+	mutable c_libs : string list;
 	mutable java_libs : (string * bool * (unit -> unit) * (unit -> (path list)) * (path -> ((JData.jclass * string * string) option))) list; (* (path,std,close,all_files,lookup) *)
 	mutable net_libs : (string * bool * (unit -> path list) * (path -> IlData.ilclass option)) list; (* (path,std,all_files,lookup) *)
 	mutable net_std : string list;
@@ -664,6 +665,7 @@ let create v args =
 		php_front = None;
 		php_lib = None;
 		swf_libs = [];
+		c_libs = [];
 		java_libs = [];
 		net_libs = [];
 		net_std = [];
