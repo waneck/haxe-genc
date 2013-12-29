@@ -621,7 +621,7 @@ module DefaultValues = struct
 					gen.gcom.warning "This will probably not work as expected" e.epos;
 					"s"
 			in
-			let eformat = mk (TConst (TString ("%s:%ld: %" ^ s ^ "\\n"))) gen.gcom.basic.tstring e.epos in
+			let eformat = mk (TConst (TString ("%s:%d: %" ^ s ^ "\\n"))) gen.gcom.basic.tstring e.epos in
 			let eargs = mk (TArrayDecl [List.assoc "fileName" fl;List.assoc "lineNumber" fl;gen.map e1]) (gen.gcom.basic.tarray gen.gcon.hxc.t_vararg) e.epos in
 			Expr.mk_static_call_2 gen.gcon.hxc.c_cstdio "printf" [eformat;eargs] e.epos
 		| _ ->
@@ -1172,7 +1172,7 @@ module ArrayHandler = struct
 	| TAbstract ( { a_path =[], "Int" } ,_ )
 	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32",(fun e -> e)
 	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16") } ,_ ) -> "16",(fun e -> e)
-	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hc_char" | "hx_uchar") } ,_ ) -> "8",(fun e -> e)
+	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hx_char" | "hx_uchar") } ,_ ) -> "8",(fun e -> e)
 	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
 	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))
 	(* FIXME: should we include ConstSizeArray here? *)
