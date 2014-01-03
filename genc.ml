@@ -615,8 +615,9 @@ module DefaultValues = struct
 			e
 		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
 			let s = match follow e1.etype with
-				| TAbstract({a_path=[],("Int"|"hx_int8"|"hx_int16"|"hx_int32"|"hx_short")},_) -> "d"
-				| TAbstract({a_path=[],("hx_uint8"|"hx_uint16"|"hx_uint32"|"hx_ushort")},_) -> "u"
+				| TAbstract({a_path=[],("Int"|"hx_int8"|"hx_int16"|"hx_int32"|"hx_short"|"hx_long")},_) -> "d"
+				| TAbstract({a_path=[],("hx_uint8"|"hx_uint16"|"hx_uint32"|"hx_ushort"|"hx_ulong")},_) -> "u"
+				| TAbstract({a_path=[],("Float"|"hx_float32")},_) -> "g"
 				| TAbstract({a_path=[],"hx_int64"},_) -> "lld"
 				| TAbstract({a_path=[],"hx_uint64"},_) -> "llu"
 				| TAbstract({a_path=[],("hx_char"|"hx_uchar")},_) -> "c"
@@ -1174,7 +1175,7 @@ module ArrayHandler = struct
 
 	let get_type_size hxc tp = match tp with
 	| TAbstract ( { a_path =[], "Int" } ,_ )
-	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32") } ,_ ) -> "32",(fun e -> e)
+	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32" | "hx_float32") } ,_ ) -> "32",(fun e -> e)
 	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16" | "hx_short" | "hx_ushort") } ,_ ) -> "16",(fun e -> e)
 	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hx_char" | "hx_uchar") } ,_ ) -> "8",(fun e -> e)
 	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
