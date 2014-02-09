@@ -748,7 +748,7 @@ module TypeChecker = struct
 		| TObjectDecl fl,(TAnon an as ta) ->
 			let fields = sort_anon_fields (pmap_to_list an.a_fields) in
 			let fl = List.map (fun cf ->
-				try cf.cf_name,List.assoc cf.cf_name fl
+				try cf.cf_name,check gen (List.assoc cf.cf_name fl) cf.cf_type
 				with Not_found -> cf.cf_name,mk (TConst TNull) (mk_mono()) e.epos
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
