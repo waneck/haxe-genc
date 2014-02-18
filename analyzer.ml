@@ -122,8 +122,8 @@ let map_expr f  ( e : Type.texpr ) =
 		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GObjectDecl (List.map (fun (v,e) -> v, f e) el) }
 	| TCall (e1,el) ->
 		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GCall (f e1, List.map f el) }
-	| TVars vl ->
-		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GVars (List.map (fun (v,e) -> fvar v , match e with None -> None | Some e -> Some (f e)) vl) }
+	| TVar(v,eo) ->
+		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GVars ([fvar v , match eo with None -> None | Some e -> Some (f e)]) }
 	| TFunction tf ->
 		{ g_te = te; gtype = te.etype; gdata = gdata_default(); gexpr =   GFunction (tf, f tf.tf_expr) }
 	| TIf (ec,e1,e2) ->

@@ -351,6 +351,7 @@ module Filters = struct
 		let ret = List.fold_left (fun e f ->
 			let found_block = ref false in
 			let run = f gen in
+			let mk_var_expr v eo p = {eexpr = TVar(v,eo); etype = gen.gcom.basic.tvoid; epos = p} in
 			let rec map e = match e.eexpr with
 				| TFunction tf when not !found_block ->
 					(* if there were no blocks yet, declare inside the top-level TFunction *)
@@ -358,14 +359,16 @@ module Filters = struct
 					(match !declared_vars with
 					| [] -> ret
 					| vars ->
-						let expr = { eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = ret.epos } in
+						(* let expr = { eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = ret.epos } in *)
+						let new_vars = List.rev vars in
+						let prepend_vars e =  List.fold_left (fun expr (v,eo) -> Codegen.concat (mk_var_expr v eo ret.epos) expr) e new_vars in
 						declared_vars := [];
 						match ret.eexpr with
 						| TFunction tf ->
-							let tf_expr = Codegen.concat expr tf.tf_expr in
+							let tf_expr = prepend_vars tf.tf_expr in
 							{ ret with eexpr = TFunction { tf with tf_expr = tf_expr } }
 						| _ ->
-							let expr = Codegen.concat expr ret in
+							let expr = prepend_vars ret in
 							expr)
 				| TBlock(el) ->
 					let old_declared = !declared_vars in
@@ -380,7 +383,7 @@ module Filters = struct
 					let el = match !declared_vars with
 						| [] -> el
 						| vars ->
-							{ eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = e.epos } :: el
+							(List.rev_map (fun (v,eo) -> mk_var_expr v eo e.epos) vars) @ el
 					in
 					let ret = { e with eexpr = TBlock(el) } in
 					declared_vars := old_declared;
@@ -470,18 +473,13 @@ module VarDeclarations = struct
 
 	let filter gen = function e ->
 		match e.eexpr with
-		| TVars [{v_name = "this"},_] ->
+		| TVar ({v_name = "this"},_) ->
 			e
-		| TVars tvars ->
-			let el = ExtList.List.filter_map (fun (v,eo) ->
-				gen.declare_var (v,None);
-				match eo with
-				| None -> None
-				| Some e -> Some { eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, gen.map e); etype = e.etype; epos = e.epos }
-			) tvars in
-			(match el with
-			| [e] -> e
-			| _ -> Expr.mk_block gen.gcom e.epos el)
+		| TVar (v,eo) ->
+			gen.declare_var (v,None);
+			(match eo with
+				| None -> mk (TConst TNull) (mk_mono()) e.epos
+				| Some e -> { eexpr = TBinop(Ast.OpAssign, Expr.mk_local v e.epos, gen.map e); etype = e.etype; epos = e.epos })
 		| _ ->
 			Type.map_expr gen.map e
 
@@ -801,14 +799,12 @@ module TypeChecker = struct
 			{e with eexpr = TBinop(op,gen.map e1,gen.map e2)}
 		| TBinop(op,e1,e2) ->
 			{e with eexpr = TBinop(op,gen.map (Wrap.unbox_basic_value e1),gen.map (Wrap.unbox_basic_value e2))}
-		| TVars vl ->
-			let vl = ExtList.List.filter_map (fun (v,eo) ->
-				match eo with
-				| None -> Some(v,None)
-				| Some e ->
-					Some (v,Some (check gen (gen.map e) v.v_type))
-			) vl in
-			{ e with eexpr = TVars(vl)}
+		| TVar(v,eo) ->
+			let eo = match eo with
+				| None -> None
+				| Some e -> Some (check gen (gen.map e) v.v_type)
+			in
+			{ e with eexpr = TVar(v,eo) }
 		| TLocal v ->
 			{ e with etype = v.v_type }
 		| TCall(e1,el) ->
@@ -923,7 +919,8 @@ module SwitchHandler = struct
 	let filter gen e =
 		match e.eexpr with
 		| TPatMatch dt ->
-			let fl = gen.gcon.num_labels in
+			assert false
+(* 			let fl = gen.gcon.num_labels in
 			gen.gcon.num_labels <- gen.gcon.num_labels + (Array.length dt.dt_dt_lookup) + 1;
 			let i_last = Array.length dt.dt_dt_lookup in
 			let mk_label_expr i = mk (TConst (TInt (Int32.of_int (i + fl)))) gen.gcom.basic.tint e.epos in
@@ -975,7 +972,7 @@ module SwitchHandler = struct
 			if dt.dt_first = i - 1 then
 				e1
 			else
-				Codegen.concat (mk_goto_meta dt.dt_first) e1
+				Codegen.concat (mk_goto_meta dt.dt_first) e1 *)
 		| TSwitch(e1,cases,def) when StringHandler.is_string e1.etype ->
 			let length_map = Hashtbl.create 0 in
 			List.iter (fun (el,e) ->
@@ -1046,12 +1043,10 @@ module ClosureHandler = struct
 			Expr.mk_cast ef v.v_type
 		in
 		let rec loop e = match e.eexpr with
-			| TVars vl ->
-				let vl = List.map (fun (v,eo) ->
-					add_local v;
-					v,match eo with None -> None | Some e -> Some (loop e)
-				) vl in
-				{ e with eexpr = TVars vl }
+			| TVar(v,eo) ->
+				add_local v;
+				let eo = match eo with None -> None | Some e -> Some (loop e) in
+				{ e with eexpr = TVar(v,eo) }
 			| TLocal v ->
 				if not (PMap.mem v.v_name !locals) then begin
 					add_unknown v;
@@ -1264,7 +1259,7 @@ module ExprTransformation = struct
 		let vars = List.rev vars in
 		let suffix,_ = ArrayHandler.get_type_size gen.gcon.hxc tparam in
 		let enew = ArrayHandler.mk_specialization_call c_array "__new" suffix  None [Expr.mk_int gen.gcon.com arity p] p in
-		let evar = mk (TVars [v,Some enew]) gen.gcom.basic.tvoid p in
+		let evar = mk (TVar (v,Some enew)) gen.gcom.basic.tvoid p in
 		let e = mk (TBlock (evar :: einit)) t p in
 		let tf = {
 			tf_args = List.map (fun v -> v,None) vars;
@@ -1289,7 +1284,7 @@ module ExprTransformation = struct
 			let esubj = Codegen.mk_parent (Expr.mk_static_call_2 hxc.c_csetjmp "setjmp" [Expr.mk_deref gen.gcon.hxc p epush] p) in
 			let epop = Expr.mk_static_call_2 hxc.c_exception "pop" [] p in
 			let loc = gen.declare_temp (hxc.t_pointer hxc.t_jmp_buf) None in
-			let epopassign = mk (TVars [loc,Some epop]) gen.gcon.com.basic.tvoid p in
+			let epopassign = mk (TVar (loc,Some epop)) gen.gcon.com.basic.tvoid p in
 			let ec1,found = Expr.insert_expr (gen.map e1) true (fun e ->
 				match e.eexpr with
 				| TReturn _ | TBreak _ | TContinue -> Some epop
@@ -1299,7 +1294,7 @@ module ExprTransformation = struct
 			let c1 = [Expr.mk_int gen.gcom 0 e.epos],ec1 in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
-				let evar = mk (TVars [v,Some (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p)]) gen.gcon.com.basic.tvoid p in
+				let evar = mk (TVar (v,Some (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p))) gen.gcon.com.basic.tvoid p in
 				let e = Codegen.concat evar (Codegen.concat epopassign (gen.map e)) in
 				if v.v_type == t_dynamic then begin
 					def := Some e;
@@ -1347,7 +1342,7 @@ module ExprTransformation2 = struct
 			let eassign = Expr.mk_binop OpAssign (Expr.mk_local v e.epos) enext v.v_type e.epos in
 			let ebody = Codegen.concat eassign (gen.map e2) in
 			mk (TBlock [
-				mk (TVars [vtemp,Some e1]) gen.gcom.basic.tvoid e1.epos;
+				mk (TVar (vtemp,Some e1)) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
 			]) gen.gcom.basic.tvoid e.epos
 		| _ ->
@@ -2135,17 +2130,14 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TReturn (Some e1) ->
 		spr ctx "return ";
 		generate_expr ctx true e1;
-	| TVars(vl) ->
-		let f (v,eo) =
-			spr ctx (s_type_with_name ctx v.v_type v.v_name);
-			begin match eo with
-				| None -> ()
-				| Some e ->
-					spr ctx " = ";
-					generate_expr ctx true e;
-			end
-		in
-		concat ctx ";" f vl
+	| TVar(v,eo) ->
+		spr ctx (s_type_with_name ctx v.v_type v.v_name);
+		begin match eo with
+			| None -> ()
+			| Some e ->
+				spr ctx " = ";
+				generate_expr ctx true e;
+		end
 	| TWhile(e1,e2,NormalWhile) ->
 		spr ctx "while";
 		generate_expr ctx true e1;
@@ -2891,7 +2883,7 @@ let initialize_constructor con c cf =
 			let ctor_args = List.map (fun (v,_) -> Expr.mk_local v p) tf.tf_args in
 			Expr.mk_static_call c cf_init (e_this :: ctor_args) p
 		in
-		let e_vars = mk (TVars [v_this,Some e_alloc]) con.com.basic.tvoid p in
+		let e_vars = mk (TVar (v_this,Some e_alloc)) con.com.basic.tvoid p in
 		let e_return = mk (TReturn (Some e_this)) t_dynamic p in
 		let e_init = if is_value_type t_class then
 			tf.tf_expr
@@ -2911,7 +2903,7 @@ let initialize_constructor con c cf =
 			tf_args = tf.tf_args;
 			tf_type = t_class;
 			tf_expr = mk (TBlock [
-				mk (TVars [v_this,Some (Expr.mk_static_call c cf_alloc [] p)]) con.com.basic.tvoid p;
+				mk (TVar (v_this,Some (Expr.mk_static_call c cf_alloc [] p))) con.com.basic.tvoid p;
 				e_init;
 				e_return
 			]) t_class p;
