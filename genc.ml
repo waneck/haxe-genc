@@ -1763,6 +1763,8 @@ let rec is_value_type t =
 	| TAbstract(a,tl) ->
 		if has_meta Meta.NotNull a.a_meta then
 			true
+		else if Meta.has Meta.CoreType a.a_meta then
+			false
 		else
 			is_value_type (Codegen.Abstract.get_underlying_type a tl)
 	| _ ->
