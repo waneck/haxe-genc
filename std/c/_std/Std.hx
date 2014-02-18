@@ -46,7 +46,7 @@ import c.Boot;
 		return c.CStdlib.rand() % x;
 	}
 
-	public static function instance<T>(v:{}, c:Class<T>):T {
-		return cast v;
+	public static function instance<T:{},S:T>( value : T, c : Class<S> ) : S {
+		return cast value;
 	}
 }
