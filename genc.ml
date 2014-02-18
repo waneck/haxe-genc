@@ -2375,14 +2375,15 @@ let generate_class ctx c =
 	) c.cl_ordered_statics;
 
 	let rec loop c =
+		begin match c.cl_super with
+		| None -> ()
+		| Some (csup,_) -> loop csup
+		end;
 		List.iter (fun cf -> match cf.cf_kind with
 			| Var _ ->
 				if cf.cf_name <> (mk_runtime_prefix "header") && cf.cf_name <> (mk_runtime_prefix "vtable") then DynArray.add vars cf
 			| Method m ->  ()
 		) c.cl_ordered_fields;
-		match c.cl_super with
-		| None -> ()
-		| Some (csup,_) -> loop csup
 	in
 	loop c;
 
