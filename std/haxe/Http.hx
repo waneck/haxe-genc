@@ -62,7 +62,7 @@ class Http {
 	public var responseHeaders : haxe.ds.StringMap<String>;
 	var chunk_size : Null<Int>;
 	var chunk_buf : haxe.io.Bytes;
-	var file : { param : String, filename : String, io : haxe.io.Input, size : Int };
+	var file : { param : String, filename : String, io : haxe.io.Input, size : Int, mimeType : String };
 #elseif js
 	public var async : Bool;
 #end
@@ -349,8 +349,16 @@ class Http {
 
 #if sys
 
-	public function fileTransfert( argname : String, filename : String, file : haxe.io.Input, size : Int ) {
-		this.file = { param : argname, filename : filename, io : file, size : size };
+	/**
+      Note: Deprecated in 4.0
+	 **/
+	@:noCompletion
+	inline public function fileTransfert( argname : String, filename : String, file : haxe.io.Input, size : Int, mimeType = "application/octet-stream" ) {
+	    fileTransfer(argname, filename, file, size, mimeType);
+    }
+
+	public function fileTransfer( argname : String, filename : String, file : haxe.io.Input, size : Int, mimeType = "application/octet-stream" ) {
+		this.file = { param : argname, filename : filename, io : file, size : size, mimeType : mimeType };
 	}
 
 	public function customRequest( post : Bool, api : haxe.io.Output, ?sock : AbstractSocket, ?method : String  ) {
@@ -411,7 +419,7 @@ class Http {
 			b.add(file.filename);
 			b.add('"');
 			b.add("\r\n");
-			b.add("Content-Type: "+"application/octet-stream"+"\r\n"+"\r\n");
+			b.add("Content-Type: "+file.mimeType+"\r\n"+"\r\n");
 			uri = b.toString();
 		} else {
 			for( p in params ) {
@@ -594,6 +602,7 @@ class Http {
 			var a = hline.split(": ");
 			var hname = a.shift();
 			var hval = if( a.length == 1 ) a[0] else a.join(": ");
+			hval = StringTools.ltrim( StringTools.rtrim( hval ) );
 			responseHeaders.set(hname, hval);
 			switch(hname.toLowerCase())
 			{
@@ -639,7 +648,7 @@ class Http {
 					size -= len;
 				}
 			} catch( e : haxe.io.Eof ) {
-				throw "Transfert aborted";
+				throw "Transfer aborted";
 			}
 		}
 		if( chunked && (chunk_size != null || chunk_buf != null) )

@@ -215,12 +215,17 @@ let reify in_macro =
 		) in
 		mk_enum "TypeParam" n [v] p
 	and to_tpath t p =
-		let fields = [
-			("pack", to_array to_string t.tpackage p);
-			("name", to_string t.tname p);
-			("params", to_array to_tparam t.tparams p);
-		] in
-		to_obj (match t.tsub with None -> fields | Some s -> fields @ ["sub",to_string s p]) p
+		let len = String.length t.tname in
+		if t.tpackage = [] && len > 1 && t.tname.[0] = '$' then
+			(EConst (Ident (String.sub t.tname 1 (len - 1))),p)
+		else begin
+			let fields = [
+				("pack", to_array to_string t.tpackage p);
+				("name", to_string t.tname p);
+				("params", to_array to_tparam t.tparams p);
+			] in
+			to_obj (match t.tsub with None -> fields | Some s -> fields @ ["sub",to_string s p]) p
+		end
 	and to_ctype t p =
 		let ct n vl = mk_enum "ComplexType" n vl p in
 		match t with
@@ -230,7 +235,7 @@ let reify in_macro =
 		| CTFunction (args,ret) -> ct "TFunction" [to_array to_ctype args p; to_ctype ret p]
 		| CTAnonymous fields -> ct "TAnonymous" [to_array to_cfield fields p]
 		| CTParent t -> ct "TParent" [to_ctype t p]
-		| CTExtend (t,fields) -> ct "TExtend" [to_tpath t p; to_array to_cfield fields p]
+		| CTExtend (tl,fields) -> ct "TExtend" [to_array to_tpath tl p; to_array to_cfield fields p]
 		| CTOptional t -> ct "TOptional" [to_ctype t p]
 	and to_fun f p =
 		let farg (n,o,t,e) p =
@@ -765,16 +770,20 @@ and parse_complex_type s =
 	let t = parse_complex_type_inner s in
 	parse_complex_type_next t s
 
+and parse_structural_extension = parser
+	| [< '(Binop OpGt,_); t = parse_type_path; '(Comma,_); s >] ->
+		t
+
 and parse_complex_type_inner = parser
 	| [< '(POpen,_); t = parse_complex_type; '(PClose,_) >] -> CTParent t
 	| [< '(BrOpen,p1); s >] ->
 		(match s with parser
 		| [< l = parse_type_anonymous false >] -> CTAnonymous l
-		| [< '(Binop OpGt,_); t = parse_type_path; '(Comma,_); s >] ->
+		| [< t = parse_structural_extension; s>] ->
+			let tl = t :: plist parse_structural_extension s in
 			(match s with parser
-			| [< l = parse_type_anonymous false >] -> CTExtend (t,l)
-			| [< l, _ = parse_class_fields true p1 >] -> CTExtend (t,l)
-			| [< >] -> serror())
+			| [< l = parse_type_anonymous false >] -> CTExtend (tl,l)
+			| [< l, _ = parse_class_fields true p1 >] -> CTExtend (tl,l))
 		| [< l, _ = parse_class_fields true p1 >] -> CTAnonymous l
 		| [< >] -> serror())
 	| [< '(Question,_); t = parse_complex_type_inner >] ->
@@ -850,10 +859,6 @@ and parse_type_anonymous opt = parser
 	| [< '(Question,_) when not opt; s >] -> parse_type_anonymous true s
 	| [< name, p1 = ident; '(DblDot,_); t = parse_complex_type; s >] ->
 		let next p2 acc =
-			let t = if not opt then t else (match t with
-				| CTPath { tpackage = []; tname = "Null" } -> t
-				| _ -> CTPath { tpackage = []; tname = "Null"; tsub = None; tparams = [TPType t] }
-			) in
 			{
 				cff_name = name;
 				cff_meta = if opt then [Meta.Optional,[],p1] else [];
@@ -970,8 +975,8 @@ and parse_fun_name = parser
 	| [< '(Kwd New,_) >] -> "new"
 
 and parse_fun_param = parser
-	| [< '(Question,_); name, _ = ident; t = parse_type_opt; c = parse_fun_param_value >] -> (name,true,t,c)
-	| [< name, _ = ident; t = parse_type_opt; c = parse_fun_param_value >] -> (name,false,t,c)
+	| [< '(Question,_); name, _ = dollar_ident; t = parse_type_opt; c = parse_fun_param_value >] -> (name,true,t,c)
+	| [< name, _ = dollar_ident; t = parse_type_opt; c = parse_fun_param_value >] -> (name,false,t,c)
 
 and parse_fun_param_value = parser
 	| [< '(Binop OpAssign,_); e = toplevel_expr >] -> Some e
@@ -1262,12 +1267,16 @@ and parse_switch_cases eswitch cases = parser
 		(match def with None -> () | Some _ -> error Duplicate_default p1);
 		l , Some b
 	| [< '(Kwd Case,p1); el = psep Comma expr; eg = popt parse_guard; '(DblDot,_); s >] ->
-		let b = (try block [] s with Display e -> display (ESwitch (eswitch,List.rev ((el,eg,Some e) :: cases),None),punion (pos eswitch) (pos e))) in
-		let b = match b with
-			| [] -> None
-			| _ -> Some ((EBlock b,p1))
-		in
-		parse_switch_cases eswitch ((el,eg,b) :: cases) s
+		(match el with
+		| [] -> error (Custom "case without a pattern is not allowed") p1
+		| _ ->
+			let b = (try block [] s with Display e -> display (ESwitch (eswitch,List.rev ((el,eg,Some e) :: cases),None),punion (pos eswitch) (pos e))) in
+			let b = match b with
+				| [] -> None
+				| _ -> Some ((EBlock b,p1))
+			in
+			parse_switch_cases eswitch ((el,eg,b) :: cases) s
+		)
 	| [< >] ->
 		List.rev cases , None
 

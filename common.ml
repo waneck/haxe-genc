@@ -127,6 +127,7 @@ type context = {
 	mutable warning : string -> pos -> unit;
 	mutable load_extern_type : (path -> pos -> (string * Ast.package) option) list; (* allow finding types which are not in sources *)
 	mutable filters : (unit -> unit) list;
+	mutable final_filters : (unit -> unit) list;
 	mutable defines_signature : string option;
 	mutable print : string -> unit;
 	mutable get_macros : unit -> context option;
@@ -210,6 +211,7 @@ module Define = struct
 		| ReplaceFiles
 		| Scriptable
 		| ShallowExpose
+		| SourceMapContent
 		| Swc
 		| SwfCompressLevel
 		| SwfDebugPassword
@@ -220,6 +222,7 @@ module Define = struct
 		| SwfPreloaderFrame
 		| SwfProtected
 		| SwfScriptTimeout
+		| SwfUseDoAbc
 		| Sys
 		| Unsafe
 		| UseNekoc
@@ -278,6 +281,7 @@ module Define = struct
 		| ReplaceFiles -> ("replace_files","GenCommon internal")
 		| Scriptable -> ("scriptable","GenCPP internal")
 		| ShallowExpose -> ("shallow-expose","Expose types to surrounding scope of Haxe generated closure without writing to window object")
+		| SourceMapContent -> ("source-map-content","Include the hx sources as part of the JS source map")
 		| Swc -> ("swc","Output a SWC instead of a SWF")
 		| SwfCompressLevel -> ("swf_compress_level","<level:1-9> Set the amount of compression for the SWF output")
 		| SwfDebugPassword -> ("swf_debug_password", "Set a password for debugging.")
@@ -288,6 +292,7 @@ module Define = struct
 		| SwfPreloaderFrame -> ("swf_preloader_frame", "Insert empty first frame in swf")
 		| SwfProtected -> ("swf_protected","Compile Haxe private as protected in the SWF instead of public")
 		| SwfScriptTimeout -> ("swf_script_timeout", "Maximum ActionScript processing time before script stuck dialog box displays (in seconds)")
+		| SwfUseDoAbc -> ("swf_use_doabc", "Use DoAbc swf-tag instead of DoAbcDefine")
 		| Sys -> ("sys","Defined for all system platforms")
 		| Unsafe -> ("unsafe","Allow unsafe code when targeting C#")
 		| UseNekoc -> ("use_nekoc","Use nekoc compiler instead of internal one")
@@ -319,6 +324,7 @@ module MetaInfo = struct
 	let to_string = function
 		| Abstract -> ":abstract",("Sets the underlying class implementation as 'abstract'",[Platforms [Java;Cs]])
 		| Access -> ":access",("Forces private access to package, type or field",[HasParam "Target path";UsedOnEither [TClass;TClassField]])
+		| Accessor -> ":accessor",("Used internally by DCE to mark property accessors",[UsedOn TClassField;Internal])
 		| Allow -> ":allow",("Allows private access from package, type or field",[HasParam "Target path";UsedOnEither [TClass;TClassField]])
 		| Annotation -> ":annotation",("Annotation (@interface) definitions on -java-lib imports will be annotated with this metadata. Has no effect on types compiled by Haxe",[Platform Java; UsedOn TClass])
 		| ArrayAccess -> ":arrayAccess",("Allows [] access on an abstract",[UsedOnEither [TAbstract;TAbstractField]])
@@ -355,6 +361,7 @@ module MetaInfo = struct
 		| Final -> ":final",("Prevents a class from being extended",[UsedOn TClass])
 		| FlatEnum -> ":flatEnum",("Internally used to mark an enum as being flat, i.e. having no function constructors",[UsedOn TEnum; Internal])
 		| Font -> ":font",("Embeds the given TrueType font into the class (must extend flash.text.Font)",[HasParam "TTF path";HasParam "Range String";UsedOn TClass])
+		| Forward -> ":forward",("Forwards field access to underlying type",[HasParam "List of field names";UsedOn TAbstract])
 		| From -> ":from",("Specifies that the field of the abstract is a cast operation from the type identified in the function",[UsedOn TAbstractField])
 		| FunctionCode -> ":functionCode",("",[Platform Cpp])
 		| FunctionTailCode -> ":functionTailCode",("",[Platform Cpp])
@@ -379,7 +386,8 @@ module MetaInfo = struct
 		| Meta -> ":meta",("Internally used to mark a class field as being the metadata field",[])
 		| Macro -> ":macro",("(deprecated)",[])
 		| MaybeUsed -> ":maybeUsed",("Internally used by DCE to mark fields that might be kept",[Internal])
-		| MultiType -> ":multiType",("Specifies that an abstract chooses its this-type from its @:to functions",[UsedOn TAbstract])
+		| MergeBlock -> ":mergeBlock",("Internally used by typer to mark block that should be merged into the outer scope",[Internal])
+		| MultiType -> ":multiType",("Specifies that an abstract chooses its this-type from its @:to functions",[UsedOn TAbstract; HasParam "Relevant type parameters"])
 		| Native -> ":native",("Rewrites the path of a class or enum during generation",[HasParam "Output type path";UsedOnEither [TClass;TEnum]])
 		| NativeGen -> ":nativeGen",("Annotates that a type should be treated as if it were an extern definition - platform native",[Platforms [Java;Cs]; UsedOnEither[TClass;TEnum]])
 		| NativeGeneric -> ":nativeGeneric",("Used internally to annotate native generic classes",[Platform Cs; UsedOnEither[TClass;TEnum]; Internal])
@@ -404,6 +412,7 @@ module MetaInfo = struct
 		| RealPath -> ":realPath",("Internally used on @:native types to retain original path information",[Internal])
 		| Remove -> ":remove",("Causes an interface to be removed from all implementing classes before generation",[UsedOn TClass])
 		| Require -> ":require",("Allows access to a field only if the specified compiler flag is set",[HasParam "Compiler flag to check";UsedOn TClassField])
+		| RequiresAssign -> ":requiresAssign",("Used internally to mark certain abstract operator overloads",[Internal])
 		| ReplaceReflection -> ":replaceReflection",("Used internally to specify a function that should replace its internal __hx_functionName counterpart",[Platforms [Java;Cs]; UsedOnEither[TClass;TEnum]; Internal])
 		| Rtti -> ":rtti",("Adds runtime type informations",[UsedOn TClass])
 		| Runtime -> ":runtime",("?",[])
@@ -658,6 +667,7 @@ let create v args =
 		file = "";
 		types = [];
 		filters = [];
+		final_filters = [];
 		modules = [];
 		main = None;
 		flash_version = 10.;
@@ -747,7 +757,33 @@ let flash_versions = List.map (fun v ->
 	let maj = int_of_float v in
 	let min = int_of_float (mod_float (v *. 10.) 10.) in
 	v, string_of_int maj ^ (if min = 0 then "" else "_" ^ string_of_int min)
-) [9.;10.;10.1;10.2;10.3;11.;11.1;11.2;11.3;11.4;11.5;11.6;11.7;11.8]
+) [9.;10.;10.1;10.2;10.3;11.;11.1;11.2;11.3;11.4;11.5;11.6;11.7;11.8;11.9;12.0;12.1;12.2;12.3;12.4;12.5]
+
+let flash_version_tag = function
+	| 6. -> 6
+	| 7. -> 7
+	| 8. -> 8
+	| 9. -> 9
+	| 10. | 10.1 -> 10
+	| 10.2 -> 11
+	| 10.3 -> 12
+	| 11. -> 13
+	| 11.1 -> 14
+	| 11.2 -> 15
+	| 11.3 -> 16
+	| 11.4 -> 17
+	| 11.5 -> 18
+	| 11.6 -> 19
+	| 11.7 -> 20
+	| 11.8 -> 21
+	| 11.9 -> 22
+	| 12.0 -> 23
+	| 12.1 -> 24
+	| 12.2 -> 25
+	| 12.3 -> 26
+	| 12.4 -> 27
+	| 12.5 -> 28
+	| v -> failwith ("Invalid SWF version " ^ string_of_float v)
 
 let raw_defined ctx v =
 	PMap.mem v ctx.defines
@@ -834,6 +870,9 @@ let platform ctx p = ctx.platform = p
 let add_filter ctx f =
 	ctx.filters <- f :: ctx.filters
 
+let add_final_filter ctx f =
+	ctx.final_filters <- f :: ctx.final_filters
+
 let find_file ctx f =
 	let rec loop = function
 		| [] -> raise Not_found
@@ -857,6 +896,20 @@ let normalize_path p =
 	else match p.[l-1] with
 		| '\\' | '/' -> p
 		| _ -> p ^ "/"
+
+let rec mkdir_recursive base dir_list =
+	match dir_list with
+	| [] -> ()
+	| dir :: remaining ->
+		let path = match base with
+		           | "" ->  dir
+		           | "/" -> "/" ^ dir
+		           | _ -> base ^ "/" ^ dir
+		in
+		if not ( (path = "") || ( ((String.length path) = 2) && ((String.sub path 1 1) = ":") ) ) then
+			if not (Sys.file_exists path) then
+				Unix.mkdir path 0o755;
+		mkdir_recursive (if (path = "") then "/" else path) remaining
 
 let mem_size v =
 	Objsize.size_with_headers (Objsize.objsize v [] [])

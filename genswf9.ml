@@ -1004,7 +1004,7 @@ let rec gen_expr_content ctx retval e =
 		gen_expr ctx retval e
 	| TObjectDecl fl ->
 		List.iter (fun (name,e) ->
-			write ctx (HString name);
+			write ctx (HString (reserved name));
 			gen_expr ctx true e
 		) fl;
 		write ctx (HObject (List.length fl))
@@ -1024,16 +1024,14 @@ let rec gen_expr_content ctx retval e =
 		let b = open_block ctx retval in
 		loop el;
 		b();
-	| TVars vl ->
-		List.iter (fun (v,ei) ->
-			define_local ctx v e.epos;
-			(match ei with
-			| None -> ()
-			| Some e ->
-				let acc = gen_local_access ctx v e.epos Write in
-				gen_expr ctx true e;
-				setvar ctx acc None)
-		) vl
+	| TVar (v,ei) ->
+		define_local ctx v e.epos;
+		(match ei with
+		| None -> ()
+		| Some e ->
+			let acc = gen_local_access ctx v e.epos Write in
+			gen_expr ctx true e;
+			setvar ctx acc None)
 	| TReturn None ->
 		write ctx HRetVoid;
 		ctx.infos.icond <- true;
@@ -1628,7 +1626,10 @@ and gen_binop ctx retval op e1 e2 t p =
 			let k1 = classify ctx e1.etype in
 			let k2 = classify ctx e2.etype in
 			(match k1, k2 with
-			| KInt, KInt | KUInt, KUInt | KInt, KUInt | KUInt, KInt -> write ctx (HOp iop)
+			| KInt, KInt | KUInt, KUInt | KInt, KUInt | KUInt, KInt ->
+				write ctx (HOp iop);
+				let ret = classify ctx t in
+				if ret <> KInt then coerce ctx ret
 			| _ ->
 				write ctx (HOp op);
 				(* add is a generic operation, so let's make sure we don't loose our type in the process *)

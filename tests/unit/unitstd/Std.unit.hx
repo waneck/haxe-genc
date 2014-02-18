@@ -7,16 +7,24 @@ Std.is(unknown, String) == false;
 Std.is(null, String) == false;
 Std.is("foo", null) == false;
 
+Std.is("", String) == true;
+Std.is(false, Bool) == true;
+Std.is(1, Int) == true;
+Std.is(1.5, Int) == false;
+Std.is(1.5, Float) == true;
+Std.is([], Array) == true;
+Std.is(unit.MyEnum.A, Array) == false;
+
 // instance
 #if !js
 Std.instance("", String) == "";
 #end
 var a = [];
 Std.instance(a, Array) == a;
-Std.instance("", Array) == null;
-Std.instance([], String) == null;
-Std.instance(new MyClass.MyChild1(), MyClass.MyParent) != null;
-Std.instance(new MyClass.MyChild1(), MyClass) == null;
+var parent:unit.MyClass.MyParent = new MyClass.MyChild1();
+Std.instance(parent, unit.MyClass.MyChild1) != null;
+Std.instance(null, Array) == null;
+Std.instance(null, String) == null;
 
 // string
 var cwts = new ClassWithToString();

@@ -30,6 +30,7 @@ module Meta = struct
 	type strict_meta =
 		| Abstract
 		| Access
+		| Accessor
 		| Allow
 		| Annotation
 		| ArrayAccess
@@ -66,6 +67,7 @@ module Meta = struct
 		| Final
 		| FlatEnum
 		| Font
+		| Forward
 		| From
 		| FunctionCode
 		| FunctionTailCode
@@ -90,6 +92,7 @@ module Meta = struct
 		| Meta
 		| Macro
 		| MaybeUsed
+		| MergeBlock
 		| MultiType
 		| Native
 		| NativeGen
@@ -115,6 +118,7 @@ module Meta = struct
 		| RealPath
 		| Remove
 		| Require
+		| RequiresAssign
 		| ReplaceReflection
 		| Rtti
 		| Runtime
@@ -282,7 +286,7 @@ and complex_type =
 	| CTFunction of complex_type list * complex_type
 	| CTAnonymous of class_field list
 	| CTParent of complex_type
-	| CTExtend of type_path * class_field list
+	| CTExtend of type_path list * class_field list
 	| CTOptional of complex_type
 
 and func = {
@@ -643,7 +647,7 @@ let map_expr loop (e,p) =
 		| CTFunction (cl,c) -> CTFunction (List.map ctype cl, ctype c)
 		| CTAnonymous fl -> CTAnonymous (List.map cfield fl)
 		| CTParent t -> CTParent (ctype t)
-		| CTExtend (t,fl) -> CTExtend (tpath t, List.map cfield fl)
+		| CTExtend (tl,fl) -> CTExtend (List.map tpath tl, List.map cfield fl)
 		| CTOptional t -> CTOptional (ctype t)
 	and tparamdecl t =
 		{ tp_name = t.tp_name; tp_constraints = List.map ctype t.tp_constraints; tp_params = List.map tparamdecl t.tp_params }

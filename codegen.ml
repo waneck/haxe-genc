@@ -97,17 +97,21 @@ let rec has_properties c =
 		match f.cf_kind with
 		| Var { v_read = AccCall } -> true
 		| Var { v_write = AccCall } -> true
+		| _ when Meta.has Meta.Accessor f.cf_meta -> true
 		| _ -> false
 	) c.cl_ordered_fields || (match c.cl_super with Some (c,_) -> has_properties c | _ -> false)
 
 let get_properties fields =
 	List.fold_left (fun acc f ->
-		let acc = (match f.cf_kind with
-		| Var { v_read = AccCall } -> ("get_" ^ f.cf_name , "get_" ^ f.cf_name) :: acc
-		| _ -> acc) in
-		match f.cf_kind with
-		| Var { v_write = AccCall } -> ("set_" ^ f.cf_name , "set_" ^ f.cf_name) :: acc
-		| _ -> acc
+		if Meta.has Meta.Accessor f.cf_meta then
+			(f.cf_name, f.cf_name) :: acc
+		else
+			let acc = (match f.cf_kind with
+			| Var { v_read = AccCall } -> ("get_" ^ f.cf_name , "get_" ^ f.cf_name) :: acc
+			| _ -> acc) in
+			match f.cf_kind with
+			| Var { v_write = AccCall } -> ("set_" ^ f.cf_name , "set_" ^ f.cf_name) :: acc
+			| _ -> acc
 	) [] fields
 
 let add_property_field com c =
@@ -230,16 +234,19 @@ let make_generic ctx ps pt p =
 	in
 	let name =
 		String.concat "_" (List.map2 (fun (s,_) t ->
-			let path = (match follow t with
-				| TInst (ct,_) -> ct.cl_path
-				| TEnum (e,_) -> e.e_path
-				| TAbstract (a,_) when Meta.has Meta.RuntimeValue a.a_meta -> a.a_path
+			let s_type_path_underscore (p,s) = match p with [] -> s | _ -> String.concat "_" p ^ "_" ^ s in
+			let rec loop top t = match follow t with
+				| TInst(c,tl) -> (s_type_path_underscore c.cl_path) ^ (loop_tl tl)
+				| TEnum(en,tl) -> (s_type_path_underscore en.e_path) ^ (loop_tl tl)
+				| TAbstract(a,tl) -> (s_type_path_underscore a.a_path) ^ (loop_tl tl)
+				| _ when not top -> "_" (* allow unknown/incompatible types as type parameters to retain old behavior *)
 				| TMono _ -> raise (Generic_Exception (("Could not determine type for parameter " ^ s), p))
 				| t -> raise (Generic_Exception (("Type parameter must be a class or enum instance (found " ^ (s_type (print_context()) t) ^ ")"), p))
-			) in
-			match path with
-			| [] , name -> name
-			| l , name -> String.concat "_" l ^ "_" ^ name
+			and loop_tl tl = match tl with
+				| [] -> ""
+				| tl -> "_" ^ String.concat "_" (List.map (loop false) tl)
+			in
+			loop true t
 		) ps pt)
 	in
 	{
@@ -692,10 +699,21 @@ module Abstract = struct
 
 	let find_multitype_specialization a pl p =
 		let m = mk_mono() in
-		let at = apply_params a.a_types pl a.a_this in
+		let tl = match Meta.get Meta.MultiType a.a_meta with
+			| _,[],_ -> pl
+			| _,el,_ ->
+				let relevant = Hashtbl.create 0 in
+				List.iter (fun e -> match fst e with
+					| EConst(Ident s) -> Hashtbl.replace relevant s true
+					| _ -> error "Type parameter expected" (pos e)
+				) el;
+				let tl = List.map2 (fun (n,_) t -> if Hashtbl.mem relevant n || not (has_mono t) then t else t_dynamic) a.a_types pl in
+				tl
+		in
 		let _,cfo =
-			try find_to a pl m
+			try find_to a tl m
 			with Not_found ->
+				let at = apply_params a.a_types pl a.a_this in
 				let st = s_type (print_context()) at in
 				if has_mono at then
 					error ("Type parameters of multi type abstracts must be known (for " ^ st ^ ")") p
@@ -796,10 +814,8 @@ module PatternMatchConversion = struct
 				else
 					((v,Some e) :: vl), el
 			) ([],[e]) bl in
-			mk (TBlock
-				((mk (TVars (vl)) cctx.ctx.t.tvoid e.epos)
-				:: el)
-			) e.etype e.epos
+			let el_v = List.map (fun (v,eo) -> mk (TVar (v,eo)) cctx.ctx.t.tvoid e.epos) vl in
+			mk (TBlock (el_v @ el)) e.etype e.epos
 		| DTGoto i ->
 			convert_dt cctx (cctx.dt_lookup.(i))
 		| DTExpr e ->
@@ -827,10 +843,8 @@ module PatternMatchConversion = struct
 		if dt.dt_var_init = [] then
 			e
 		else begin
-			mk (TBlock [
-				mk (TVars dt.dt_var_init) t_dynamic e.epos;
-				e;
-			]) dt.dt_type e.epos
+			let el_v = List.map (fun (v,eo) -> mk (TVar (v,eo)) cctx.ctx.t.tvoid p) dt.dt_var_init in
+			mk (TBlock (el_v @ [e])) dt.dt_type e.epos
 		end
 end
 
@@ -946,7 +960,7 @@ let stack_context_init com stack_var exc_var pos_var tmp_var use_add p =
 	let stack_return e =
 		let tmp = alloc_var tmp_var e.etype in
 		mk (TBlock [
-			mk (TVars [tmp, Some e]) t.tvoid e.epos;
+			mk (TVar (tmp, Some e)) t.tvoid e.epos;
 			stack_pop;
 			mk (TReturn (Some (mk (TLocal tmp) e.etype e.epos))) e.etype e.epos
 		]) e.etype e.epos
@@ -958,7 +972,7 @@ let stack_context_init com stack_var exc_var pos_var tmp_var use_add p =
 		stack_pos = p;
 		stack_expr = stack_e;
 		stack_pop = stack_pop;
-		stack_save_pos = mk (TVars [pos_var, Some (field stack_e "length" t.tint p)]) t.tvoid p;
+		stack_save_pos = mk (TVar (pos_var, Some (field stack_e "length" t.tint p))) t.tvoid p;
 		stack_push = stack_push;
 		stack_return = stack_return;
 		stack_restore = [
@@ -1070,10 +1084,10 @@ let fix_override com c f fd =
 						let e = fd.tf_expr in
 						let el = (match e.eexpr with TBlock el -> el | _ -> [e]) in
 						let p = (match el with [] -> e.epos | e :: _ -> e.epos) in
-						let v = mk (TVars (List.map (fun (v,v2) ->
-							(v,Some (mk (TCast (mk (TLocal v2) v2.v_type p,None)) v.v_type p))
-						) args)) com.basic.tvoid p in
-						{ e with eexpr = TBlock (v :: el) }
+						let el_v = List.map (fun (v,v2) ->
+							mk (TVar (v,Some (mk (TCast (mk (TLocal v2) v2.v_type p,None)) v.v_type p))) com.basic.tvoid p
+						) args in
+						{ e with eexpr = TBlock (el_v @ el) }
 				);
 			} in
 			(* as3 does not allow wider visibility, so the base method has to be made public *)
@@ -1153,10 +1167,9 @@ let set_default ctx a c p =
 	mk (TIf (mk_parent (mk cond ctx.basic.tbool p), mk (TBinop (OpAssign,ve,mk (TConst c) t p)) t p,None)) ctx.basic.tvoid p
 
 let bytes_serialize data =
-	let b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789%:" in
+	let b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" in
 	let tbl = Array.init (String.length b64) (fun i -> String.get b64 i) in
-	let str = Base64.str_encode ~tbl data in
-	"s" ^ string_of_int (String.length str) ^ ":" ^ str
+	Base64.str_encode ~tbl data
 
 (*
 	Tells if the constructor might be called without any issue whatever its parameters
@@ -1169,7 +1182,7 @@ let rec constructor_side_effects e =
 		false
 	| TUnop _ | TArray _ | TField _ | TEnumParameter _ | TCall _ | TNew _ | TFor _ | TWhile _ | TSwitch _ | TPatMatch _ | TReturn _ | TThrow _ ->
 		true
-	| TBinop _ | TTry _ | TIf _ | TBlock _ | TVars _
+	| TBinop _ | TTry _ | TIf _ | TBlock _ | TVar _
 	| TFunction _ | TArrayDecl _ | TObjectDecl _
 	| TParenthesis _ | TTypeExpr _ | TLocal _ | TMeta _
 	| TConst _ | TContinue | TBreak | TCast _ ->
@@ -1283,7 +1296,7 @@ let default_cast ?(vtmp="$t") com e texpr t p =
 		| TTypeDecl _ -> assert false
 	in
 	let vtmp = alloc_var vtmp e.etype in
-	let var = mk (TVars [vtmp,Some e]) api.tvoid p in
+	let var = mk (TVar (vtmp,Some e)) api.tvoid p in
 	let vexpr = mk (TLocal vtmp) e.etype p in
 	let texpr = mk (TTypeExpr texpr) (mk_texpr texpr) p in
 	let std = (try List.find (fun t -> t_path t = ([],"Std")) com.types with Not_found -> assert false) in

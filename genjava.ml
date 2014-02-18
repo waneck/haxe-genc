@@ -367,7 +367,7 @@ struct
       | TLocal _ -> e1
       | _ ->
         let var = mk_temp gen "svar" e1.etype in
-        let added = { e1 with eexpr = TVars([var, Some(e1)]); etype = basic.tvoid } in
+        let added = { e1 with eexpr = TVar(var, Some(e1)); etype = basic.tvoid } in
         let local = mk_local var e1.epos in
         block := added :: !block;
         local
@@ -392,7 +392,7 @@ struct
         | None ->
           let var = mk_temp gen "hash" basic.tint in
           let cond = !local_hashcode in
-          block := { eexpr = TVars([var, Some cond]); etype = basic.tvoid; epos = local.epos } :: !block;
+          block := { eexpr = TVar(var, Some cond); etype = basic.tvoid; epos = local.epos } :: !block;
           let local = mk_local var local.epos in
           local_hashcode := local;
           hash_cache := Some local;
@@ -503,7 +503,7 @@ struct
       eexpr = TSwitch(!local_hashcode, List.map change_case (reorder_cases ecases []), None);
     } in
     (if !has_case then begin
-      (if has_default then block := { e1 with eexpr = TVars([execute_def_var, Some({ e1 with eexpr = TConst(TBool true); etype = basic.tbool })]); etype = basic.tvoid } :: !block);
+      (if has_default then block := { e1 with eexpr = TVar(execute_def_var, Some({ e1 with eexpr = TConst(TBool true); etype = basic.tbool })); etype = basic.tvoid } :: !block);
       block := switch :: !block
     end);
     (match edefault with
@@ -1272,21 +1272,17 @@ let configure gen =
           (match flag with
             | Ast.Prefix -> write w ( " " ^ (Ast.s_unop op) ^ " (" ); expr_s w e; write w ") "
             | Ast.Postfix -> write w "("; expr_s w e; write w (") " ^ Ast.s_unop op))
-        | TVars (v_eop_l) ->
-          ignore (List.fold_left (fun acc (var, eopt) ->
-            (if acc <> 0 then write w "; ");
-            print w "%s " (t_s e.epos var.v_type);
-            write_id w var.v_name;
-            (match eopt with
-              | None ->
-                write w " = ";
-                expr_s w (null var.v_type e.epos)
-              | Some e ->
-                write w " = ";
-                expr_s w e
-            );
-            acc + 1
-          ) 0 v_eop_l);
+        | TVar (var, eopt) ->
+          print w "%s " (t_s e.epos var.v_type);
+          write_id w var.v_name;
+          (match eopt with
+            | None ->
+              write w " = ";
+              expr_s w (null var.v_type e.epos)
+            | Some e ->
+              write w " = ";
+              expr_s w e
+          )
         | TBlock [e] when was_in_value ->
           expr_s w e
         | TBlock el ->
@@ -2091,7 +2087,7 @@ let configure gen =
 
   let native_arr_cl = get_cl ( get_type gen (["java"], "NativeArray") ) in
 
-  ExpressionUnwrap.configure gen (ExpressionUnwrap.traverse gen (fun e -> Some { eexpr = TVars([mk_temp gen "expr" e.etype, Some e]); etype = gen.gcon.basic.tvoid; epos = e.epos }));
+  ExpressionUnwrap.configure gen (ExpressionUnwrap.traverse gen (fun e -> Some { eexpr = TVar(mk_temp gen "expr" e.etype, Some e); etype = gen.gcon.basic.tvoid; epos = e.epos }));
 
   UnnecessaryCastsRemoval.configure gen;
 
@@ -2132,7 +2128,14 @@ let configure gen =
     let res = ref [] in
     Hashtbl.iter (fun name v ->
       res := { eexpr = TConst(TString name); etype = gen.gcon.basic.tstring; epos = Ast.null_pos } :: !res;
-      let f = open_out (gen.gcon.file ^ "/src/" ^ name) in
+
+      let full_path = gen.gcon.file ^ "/src/" ^ name in
+      let parts = Str.split_delim (Str.regexp "[\\/]+") full_path in
+      let dir_list = List.rev (List.tl (List.rev parts)) in
+
+      Common.mkdir_recursive "" dir_list;
+
+      let f = open_out full_path in
       output_string f v;
       close_out f
     ) gen.gcon.resources;

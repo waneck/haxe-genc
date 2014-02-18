@@ -40,7 +40,7 @@ import haxe.ds.EnumValueMap;
 	
 	Map is an abstract type, it is not available at runtime.
 **/
-@:multiType
+@:multiType(K)
 abstract Map<K,V>(IMap<K,V> ) {
 	
 	/**

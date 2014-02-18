@@ -20,7 +20,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#if (flash9 || flash9doc || cs)
+#if ((flash9 || flash9doc || cs) && !doc_gen)
 /**
 	The unsigned Int type is only defined for Flash9 and C#. It's currently
 	handled the same as a normal Int.
@@ -209,12 +209,13 @@ abstract UInt(Int) from Int {
 		return this--;
 	}
 
-	private inline function toString():String {
+	// TODO: radix is just defined to deal with doc_gen issues
+	private inline function toString(?radix:Int):String {
 		return Std.string(toFloat());
 	}
 
-	@:to private inline function toDynamic():Dynamic {
-		return toFloat();
+	@:to private inline function toInt():Int {
+		return this;
 	}
 
 	@:to private inline function toFloat():Float {
@@ -226,9 +227,9 @@ abstract UInt(Int) from Int {
 			return int;
 		}
 	}
-
-	@:to private inline function toInt():Int {
-		return this;
+	
+	@:to private inline function toDynamic():Dynamic {
+		return toFloat();
 	}
 
 }

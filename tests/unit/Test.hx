@@ -270,7 +270,7 @@ class Test #if swf_mark implements mt.Protect #end {
 			new TestMatch(),
 			#end
 			new TestSpecification(),
-			#if (cs && false)
+			#if cs
 			new TestCSharp(),
 			#end
 			#if java
@@ -291,6 +291,7 @@ class Test #if swf_mark implements mt.Protect #end {
 			//new TestUnspecified(),
 			//new TestRemoting(),
 		];
+		TestIssues.addIssueClasses();
 		var current = null;
 		#if (!fail_eager)
 		try
@@ -325,6 +326,8 @@ class Test #if swf_mark implements mt.Protect #end {
 			onError(e,"ABORTED",Type.getClassName(current));
 		}
 		#end
+
+		trace("SUCCESS: " + success);
 
 		#if sys
 		Sys.exit(success ? 0 : 1);

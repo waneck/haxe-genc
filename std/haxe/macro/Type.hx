@@ -251,7 +251,7 @@ enum TypedExprDef {
 	TNew(c:Ref<ClassType>, params: Array<Type>, el:Array<TypedExpr>);
 	TUnop(op:Expr.Unop, postFix:Bool, e:TypedExpr);
 	TFunction(tfunc:TFunc);
-	TVars(vl:Array<{v:TVar, expr:Null<TypedExpr>}>);
+	TVar(v:TVar, expr:Null<TypedExpr>);
 	TBlock(el:Array<TypedExpr>);
 	TFor(v:TVar, e1:TypedExpr, e2:TypedExpr);
 	TIf(econd:TypedExpr, eif:TypedExpr, eelse:Null<TypedExpr>);
@@ -264,7 +264,7 @@ enum TypedExprDef {
 	TContinue;
 	TThrow(e:TypedExpr);
 	TCast(e:TypedExpr, m:Null<ModuleType>);
-	TMeta(m:Expr.Metadata, e1:TypedExpr);
+	TMeta(m:Expr.MetadataEntry, e1:TypedExpr);
 	TEnumParameter(e1:TypedExpr, ef:EnumField, index:Int);
 }
 

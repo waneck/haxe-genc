@@ -100,15 +100,17 @@ type extern_api = {
 	get_type : string -> Type.t option;
 	get_module : string -> Type.t list;
 	on_generate : (Type.t list -> unit) -> unit;
+	after_generate : (unit -> unit) -> unit;
 	on_type_not_found : (string -> value) -> unit;
 	parse_string : string -> Ast.pos -> bool -> Ast.expr;
-	typeof : Ast.expr -> Type.t;
+	type_expr : Ast.expr -> Type.texpr;
 	get_display : string -> string;
 	allow_package : string -> unit;
 	type_patch : string -> string -> bool -> string option -> unit;
 	meta_patch : string -> string -> string option -> bool -> unit;
 	set_js_generator : (value -> unit) -> unit;
 	get_local_type : unit -> t option;
+	get_expected_type : unit -> t option;
 	get_local_method : unit -> string;
 	get_local_using : unit -> tclass list;
 	get_local_vars : unit -> (string, Type.tvar) PMap.t;
@@ -181,6 +183,7 @@ exception Continue
 exception Break of value
 exception Return of value
 exception Invalid_expr
+exception Sys_exit of int
 
 (* ---------------------------------------------------------------------- *)
 (* UTILS *)
@@ -1647,7 +1650,7 @@ let std_lib =
 		);
 		"sys_exit", Fun1 (fun code ->
 			if (get_ctx()).curapi.use_cache() then raise (Typecore.Fatal_error ("",Ast.null_pos));
-			exit (vint code);
+			raise (Sys_exit(vint code));
 		);
 		"sys_exists", Fun1 (fun file ->
 			VBool (Sys.file_exists (vstring file))
@@ -2139,6 +2142,16 @@ let macro_lib =
 				VNull
 			| _ -> error()
 		);
+		"after_generate", Fun1 (fun f ->
+			match f with
+			| VFunction (Fun0 _) ->
+				let ctx = get_ctx() in
+				ctx.curapi.after_generate (fun () ->
+					ignore(catch_errors ctx (fun() -> ctx.do_call VNull f [] null_pos));
+				);
+				VNull
+			| _ -> error()
+		);
 		"on_type_not_found", Fun1 (fun f ->
 			match f with
 			| VFunction (Fun1 _) ->
@@ -2309,7 +2322,10 @@ let macro_lib =
 			with Unify_error _ -> VBool false
 		);
 		"typeof", Fun1 (fun v ->
-			encode_type ((get_ctx()).curapi.typeof (decode_expr v))
+			encode_type ((get_ctx()).curapi.type_expr (decode_expr v)).etype
+		);
+		"type_expr", Fun1 (fun v ->
+			encode_texpr ((get_ctx()).curapi.type_expr (decode_expr v))
 		);
 		"s_type", Fun1 (fun v ->
 			VString (Type.s_type (print_context()) (decode_type v))
@@ -2386,12 +2402,23 @@ let macro_lib =
 				VNull
 			| _ -> error()
 		);
+        "get_resources", Fun0 (fun() ->
+			let res = (ccom()).resources in
+			let h = Hashtbl.create 0 in
+			Hashtbl.iter (fun n v -> Hashtbl.replace h (VString n) (VString v)) res;
+			enc_hash h
+		);
 		"local_module", Fun0 (fun() ->
 			let m = (get_ctx()).curapi.current_module() in
 			VString (Ast.s_type_path m.m_path);
 		);
 		"local_type", Fun0 (fun() ->
 			match (get_ctx()).curapi.get_local_type() with
+			| None -> VNull
+			| Some t -> encode_type t
+		);
+		"expected_type", Fun0 (fun() ->
+			match (get_ctx()).curapi.get_expected_type() with
 			| None -> VNull
 			| Some t -> encode_type t
 		);
@@ -3234,7 +3261,7 @@ and call ctx vthis vfun pl p =
 	ctx.vthis <- vthis;
 	ctx.callstack <- { cpos = p; cthis = oldthis; cstack = stackpos; cenv = oldenv } :: ctx.callstack;
 	ctx.callsize <- oldsize + 1;
-	if oldsize > 400 then exc (VString "Stack overflow");
+	if oldsize > 600 then exc (VString "Stack overflow");
 	let ret = (try
 		(match vfun with
 		| VClosure (vl,f) ->
@@ -3714,8 +3741,8 @@ and encode_ctype t =
 		2, [enc_array (List.map encode_field fl)]
 	| CTParent t ->
 		3, [encode_ctype t]
-	| CTExtend (t,fields) ->
-		4, [encode_path t; enc_array (List.map encode_field fields)]
+	| CTExtend (tl,fields) ->
+		4, [enc_array (List.map encode_path tl); enc_array (List.map encode_field fields)]
 	| CTOptional t ->
 		5, [encode_ctype t]
 	in
@@ -4013,8 +4040,8 @@ and decode_ctype t =
 		CTAnonymous (List.map decode_field (dec_array fl))
 	| 3, [t] ->
 		CTParent (decode_ctype t)
-	| 4, [t;fl] ->
-		CTExtend (decode_path t, List.map decode_field (dec_array fl))
+	| 4, [tl;fl] ->
+		CTExtend (List.map decode_path (dec_array tl), List.map decode_field (dec_array fl))
 	| 5, [t] ->
 		CTOptional (decode_ctype t)
 	| _ ->
@@ -4469,11 +4496,7 @@ and encode_texpr e =
 			| TNew(c,pl,el) -> 10,[encode_clref c;encode_tparams pl;encode_texpr_list el]
 			| TUnop(op,flag,e1) -> 11,[encode_unop op;VBool (flag = Postfix);loop e1]
 			| TFunction func -> 12,[encode_tfunc func]
-			| TVars vl -> 13,[enc_array (List.map (fun (v,e) ->
-				enc_obj [
-					"v",encode_tvar v;
-					"expr",vopt encode_texpr e
-				]) vl)]
+			| TVar (v,eo) -> 13,[encode_tvar v;vopt encode_texpr eo]
 			| TBlock el -> 14,[encode_texpr_list el]
 			| TFor(v,e1,e2) -> 15,[encode_tvar v;loop e1;loop e2]
 			| TIf(eif,ethen,eelse) -> 16,[loop eif;loop ethen;vopt encode_texpr eelse]
@@ -4635,7 +4658,7 @@ let rec decode_texpr v =
 		| 10, [c;tl;vl] -> TNew(decode_ref c,List.map decode_type (dec_array tl),List.map loop (dec_array vl))
 		| 11, [op;pf;v1] -> TUnop(decode_unop op,(if dec_bool pf then Postfix else Prefix),loop v1)
 		| 12, [f] -> TFunction(decode_tfunc f)
-		| 13, [vl] -> TVars(List.map (fun v -> decode_tvar (field v "v"),opt loop (field v "expr")) (dec_array vl))
+		| 13, [v;eo] -> TVar(decode_tvar v,opt loop eo)
 		| 14, [vl] -> TBlock(List.map loop (dec_array vl))
 		| 15, [v;v1;v2] -> TFor(decode_tvar v,loop v1,loop v2)
 		| 16, [vif;vthen;velse] -> TIf(loop vif,loop vthen,opt loop velse)
@@ -4864,8 +4887,8 @@ let rec make_ast e =
 	| TFunction f ->
 		let arg (v,c) = v.v_name, false, mk_ot v.v_type, (match c with None -> None | Some c -> Some (EConst (mk_const c),e.epos)) in
 		EFunction (None,{ f_params = []; f_args = List.map arg f.tf_args; f_type = mk_ot f.tf_type; f_expr = Some (make_ast f.tf_expr) })
-	| TVars vl ->
-		EVars (List.map (fun (v,e) -> v.v_name, mk_ot v.v_type, eopt e) vl)
+	| TVar (v,eo) ->
+		EVars ([v.v_name, mk_ot v.v_type, eopt eo])
 	| TBlock el -> EBlock (List.map make_ast el)
 	| TFor (v,it,e) ->
 		let ein = (EIn ((EConst (Ident v.v_name),it.epos),make_ast it),it.epos) in

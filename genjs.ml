@@ -244,6 +244,11 @@ let write_mappings ctx =
 	output_string channel ("\"sources\":[" ^
 		(String.concat "," (List.map (fun s -> "\"" ^ to_url s ^ "\"") sources)) ^
 		"],\n");
+	if Common.defined ctx.com Define.SourceMapContent then begin
+		output_string channel ("\"sourcesContent\":[" ^
+			(String.concat "," (List.map (fun s -> try "\"" ^ Ast.s_escape (Std.input_file ~bin:true s) ^ "\"" with _ -> "null") sources)) ^
+			"],\n");
+	end;
 	output_string channel "\"names\":[],\n";
 	output_string channel "\"mappings\":\"";
 	Buffer.output_buffer channel ctx.smap.mappings;
@@ -329,7 +334,15 @@ let this ctx = match ctx.in_value with None -> "this" | Some _ -> "$this"
 
 let is_dynamic_iterator ctx e =
 	let check x =
-		has_feature ctx "HxOverrides.iter" && (match follow x.etype with TInst ({ cl_path = [],"Array" },_) | TAnon _ | TDynamic _ | TMono _ -> true | _ -> false)
+		has_feature ctx "HxOverrides.iter" && (match follow x.etype with
+			| TInst ({ cl_path = [],"Array" },_)
+			| TInst ({ cl_kind = KTypeParameter _}, _)
+			| TAnon _
+			| TDynamic _
+			| TMono _ ->
+				true
+			| _ -> false
+		)
 	in
 	match e.eexpr with
 	| TField (x,f) when field_name f = "iterator" -> check x
@@ -381,6 +394,8 @@ let rec gen_call ctx e el in_value =
 		spr ctx "(";
 		concat ctx "," (gen_value ctx) params;
 		spr ctx ")";
+	| TLocal { v_name = "__js__" }, [{ eexpr = TConst (TString "this") }] ->
+		spr ctx (this ctx)
 	| TLocal { v_name = "__js__" }, [{ eexpr = TConst (TString code) }] ->
 		spr ctx (String.concat "\n" (ExtString.String.nsplit code "\r\n"))
 	| TLocal { v_name = "__instanceof__" },  [o;t] ->
@@ -388,6 +403,24 @@ let rec gen_call ctx e el in_value =
 		gen_value ctx o;
 		print ctx " instanceof ";
 		gen_value ctx t;
+		spr ctx ")";
+	| TLocal { v_name = "__typeof__" },  [o] ->
+		spr ctx "typeof(";
+		gen_value ctx o;
+		spr ctx ")";
+	| TLocal { v_name = "__strict_eq__" } , [x;y] ->
+		(* add extra parenthesis here because of operator precedence *)
+		spr ctx "((";
+		gen_value ctx x;
+		spr ctx ") === ";
+		gen_value ctx y;
+		spr ctx ")";
+	| TLocal { v_name = "__strict_neq__" } , [x;y] ->
+		(* add extra parenthesis here because of operator precedence *)
+		spr ctx "((";
+		gen_value ctx x;
+		spr ctx ") !== ";
+		gen_value ctx y;
 		spr ctx ")";
 	| TLocal ({v_name = "__define_feature__"}), [_;e] ->
 		gen_expr ctx e
@@ -476,7 +509,7 @@ and gen_expr ctx e =
 	| TField (x,f) ->
 		gen_value ctx x;
 		let name = field_name f in
-		spr ctx (match f with FStatic _ | FEnum _ -> static_field name | FInstance _ | FAnon _ | FDynamic _ | FClosure _ -> field name)
+		spr ctx (match f with FStatic _ -> static_field name | FEnum _ | FInstance _ | FAnon _ | FDynamic _ | FClosure _ -> field name)
 	| TTypeExpr t ->
 		spr ctx (ctx.type_accessor t)
 	| TParenthesis e ->
@@ -502,7 +535,7 @@ and gen_expr ctx e =
 	| TBlock el ->
 		print ctx "{";
 		let bend = open_block ctx in
-		List.iter (gen_block ctx) el;
+		List.iter (gen_block_element ctx) el;
 		bend();
 		newline ctx;
 		print ctx "}";
@@ -524,19 +557,16 @@ and gen_expr ctx e =
 	| TThrow e ->
 		spr ctx "throw ";
 		gen_value ctx e;
-	| TVars [] ->
-		()
-	| TVars vl ->
+	| TVar (v,eo) ->
 		spr ctx "var ";
-		concat ctx ", " (fun (v,e) ->
-			check_var_declaration v;
-			spr ctx (ident v.v_name);
-			match e with
+		check_var_declaration v;
+		spr ctx (ident v.v_name);
+		begin match eo with
 			| None -> ()
 			| Some e ->
 				spr ctx " = ";
 				gen_value ctx e
-		) vl;
+		end
 	| TNew (c,_,el) ->
 		print ctx "new %s(" (ctx.type_accessor (TClassDecl c));
 		concat ctx "," (gen_value ctx) el;
@@ -599,7 +629,7 @@ and gen_expr ctx e =
 		let bend = open_block ctx in
 		newline ctx;
 		print ctx "var %s = %s.next()" (ident v.v_name) it;
-		gen_block ctx e;
+		gen_block_element ctx e;
 		bend();
 		newline ctx;
 		spr ctx "}";
@@ -639,7 +669,7 @@ and gen_expr ctx e =
 					newline ctx;
 					print ctx "var %s = %s" v.v_name vname;
 				end;
-				gen_block ctx e;
+				gen_block_element ctx e;
 				if !else_block then begin
 					newline ctx;
 					print ctx "}";
@@ -654,7 +684,7 @@ and gen_expr ctx e =
 					newline ctx;
 					print ctx "var %s = %s" v.v_name vname;
 				end;
-				gen_block ctx e;
+				gen_block_element ctx e;
 				bend();
 				newline ctx;
 				spr ctx "} else ";
@@ -681,7 +711,7 @@ and gen_expr ctx e =
 					spr ctx ":"
 			) el;
 			let bend = open_block ctx in
-			gen_block ctx e2;
+			gen_block_element ctx e2;
 			if not (has_return e2) then begin
 				newline ctx;
 				print ctx "break";
@@ -694,7 +724,7 @@ and gen_expr ctx e =
 		| Some e ->
 			spr ctx "default:";
 			let bend = open_block ctx in
-			gen_block ctx e;
+			gen_block_element ctx e;
 			bend();
 			newline ctx;
 		);
@@ -709,17 +739,19 @@ and gen_expr ctx e =
 		spr ctx ")"
 
 
-and gen_block ?(after=false) ctx e =
+and gen_block_element ?(after=false) ctx e =
 	match e.eexpr with
 	| TBlock el ->
-		List.iter (gen_block ~after ctx) el
+		List.iter (gen_block_element ~after ctx) el
 	| TCall ({ eexpr = TLocal { v_name = "__feature__" } }, { eexpr = TConst (TString f) } :: eif :: eelse) ->
 		if has_feature ctx f then
-			gen_block ~after ctx eif
+			gen_block_element ~after ctx eif
 		else (match eelse with
 			| [] -> ()
-			| [e] -> gen_block ~after ctx e
+			| [e] -> gen_block_element ~after ctx e
 			| _ -> assert false)
+	| TFunction _ ->
+		gen_block_element ~after ctx (mk (TParenthesis e) e.etype e.epos)
 	| _ ->
 		if not after then newline ctx;
 		gen_expr ctx e;
@@ -786,7 +818,7 @@ and gen_value ctx e =
 		spr ctx " , ";
 		spr ctx (ctx.type_accessor t);
 		spr ctx ")"
-	| TVars _
+	| TVar _
 	| TFor _
 	| TWhile _
 	| TThrow _ ->
@@ -1066,7 +1098,9 @@ let generate_type ctx = function
 		if not c.cl_extern then
 			generate_class ctx c
 		else if not ctx.js_flatten && Meta.has Meta.InitPackage c.cl_meta then
-			generate_package_create ctx c.cl_path
+			(match c.cl_path with
+			| ([],_) -> ()
+			| _ -> generate_package_create ctx c.cl_path)
 	| TEnumDecl e when e.e_extern ->
 		()
 	| TEnumDecl e -> generate_enum ctx e
@@ -1105,7 +1139,13 @@ let alloc_ctx com =
 		separator = false;
 		found_expose = false;
 	} in
-	ctx.type_accessor <- (fun t -> s_path ctx (t_path t));
+	ctx.type_accessor <- (fun t ->
+		let p = t_path t in
+		match t with
+		| TClassDecl { cl_extern = true }
+		| TEnumDecl { e_extern = true }
+			-> dot_path p
+		| _ -> s_path ctx p);
 	ctx
 
 let gen_single_expr ctx e expr =
@@ -1230,7 +1270,7 @@ let generate com =
 		print ctx "function $bind(o,m) { if( m == null ) return null; if( m.__id__ == null ) m.__id__ = $fid++; var f; if( o.hx__closures__ == null ) o.hx__closures__ = {}; else f = o.hx__closures__[m.__id__]; if( f == null ) { f = function(){ return f.method.apply(f.scope, arguments); }; f.scope = o; f.method = m; o.hx__closures__[m.__id__] = f; } return f; }";
 		newline ctx;
 	end;
-	List.iter (gen_block ~after:true ctx) (List.rev ctx.inits);
+	List.iter (gen_block_element ~after:true ctx) (List.rev ctx.inits);
 	List.iter (generate_static ctx) (List.rev ctx.statics);
 	(match com.main with
 	| None -> ()

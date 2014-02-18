@@ -62,6 +62,10 @@ let keep_whole_class dce c =
 		| { cl_path = [],"Array" } -> not (dce.com.platform = Js)
 		| _ -> false)
 
+let keep_whole_enum dce en =
+	Meta.has Meta.Keep en.e_meta
+	|| not (dce.full || is_std_file dce en.e_module.m_extra.m_file || has_meta Meta.Dce en.e_meta)
+
 (* check if a field is kept *)
 let keep_field dce cf =
 	Meta.has Meta.Keep cf.cf_meta
@@ -157,7 +161,11 @@ and mark_t dce p t =
 			mark_enum dce e;
 			List.iter (mark_t dce p) pl
 		| TAbstract(a,pl) when Meta.has Meta.MultiType a.a_meta ->
-			mark_t dce p (snd (Codegen.Abstract.find_multitype_specialization a pl p))
+			begin try
+				mark_t dce p (snd (Codegen.Abstract.find_multitype_specialization a pl p))
+			with Typecore.Error _ ->
+				()
+			end
 		| TAbstract(a,pl) ->
 			mark_abstract dce a;
 			List.iter (mark_t dce p) pl
@@ -205,33 +213,30 @@ let rec mark_dependent_fields dce csup n stat =
 
 let opt f e = match e with None -> () | Some e -> f e
 
-let rec to_string dce t =
-	let push t =
-		dce.ts_stack <- t :: dce.ts_stack;
-		fun () -> dce.ts_stack <- List.tl dce.ts_stack
-	in
-	let t = follow t in
-	if not (List.exists (fun t2 -> Type.fast_eq t t2) dce.ts_stack) then match follow t with
-	| TInst(c,pl) as t ->
-		let pop = push t in
+let rec to_string dce t = match t with
+	| TInst(c,tl) ->
 		field dce c "toString" false;
-		List.iter (to_string dce) pl;
-		pop();
-	| TEnum(en,pl) as t ->
-		let pop = push t in
-		PMap.iter (fun _ ef -> to_string dce ef.ef_type) en.e_constrs;
-		List.iter (to_string dce) pl;
-		pop();
-	| TAnon a as t ->
-		let pop = push t in
-		PMap.iter (fun _ cf -> to_string dce cf.cf_type) a.a_fields;
-		pop();
-	| TFun(args,r) as t ->
-		let pop = push t in
-		List.iter (fun (_,_,t) -> to_string dce t) args;
-		to_string dce r;
-		pop();
-	| _ -> ()
+	| TType(tt,tl) ->
+		if not (List.exists (fun t2 -> Type.fast_eq t t2) dce.ts_stack) then begin
+			dce.ts_stack <- t :: dce.ts_stack;
+			to_string dce (apply_params tt.t_types tl tt.t_type)
+		end
+	| TAbstract(a,tl) ->
+		to_string dce (Codegen.Abstract.get_underlying_type a tl)
+	| TMono r ->
+		(match !r with
+		| Some t -> to_string dce t
+		| _ -> ())
+	| TLazy f ->
+		to_string dce (!f())
+	| TDynamic t ->
+		if t == t_dynamic then
+			()
+		else
+			to_string dce t
+	| TEnum _ | TFun _ | TAnon _ ->
+		(* if we to_string these it does not imply that we need all its sub-types *)
+		()
 
 and field dce c n stat =
 	let find_field n =
@@ -292,11 +297,9 @@ and expr dce e =
 		field dce c "new" false;
 		List.iter (expr dce) el;
 		List.iter (mark_t dce e.epos) pl;
-	| TVars vl ->
-		List.iter (fun (v,e1) ->
-			opt (expr dce) e1;
-			mark_t dce e.epos v.v_type;
-		) vl;
+	| TVar (v,e1) ->
+		opt (expr dce) e1;
+		mark_t dce e.epos v.v_type;
 	| TCast(e, Some mt) ->
 		check_feature dce "typed_cast";
 		mark_mt dce mt;
@@ -315,10 +318,25 @@ and expr dce e =
 		check_feature dce ft;
 		expr dce e
 	(* keep toString method when the class is argument to Std.string or haxe.Log.trace *)
-	| TCall ({eexpr = TField({eexpr = TTypeExpr (TClassDecl ({cl_path = (["haxe"],"Log")} as c))},FStatic (_,{cf_name="trace"}))} as ef, ([e2;_] as args))
-	| TCall ({eexpr = TField({eexpr = TTypeExpr (TClassDecl ({cl_path = ([],"Std")} as c))},FStatic (_,{cf_name="string"}))} as ef, ([e2] as args)) ->
+	| TCall ({eexpr = TField({eexpr = TTypeExpr (TClassDecl ({cl_path = (["haxe"],"Log")} as c))},FStatic (_,{cf_name="trace"}))} as ef, ((e2 :: el) as args))
+	| TCall ({eexpr = TField({eexpr = TTypeExpr (TClassDecl ({cl_path = ([],"Std")} as c))},FStatic (_,{cf_name="string"}))} as ef, ((e2 :: el) as args)) ->
 		mark_class dce c;
 		to_string dce e2.etype;
+		begin match el with
+			| [{eexpr = TObjectDecl fl}] ->
+				begin try
+					begin match List.assoc "customParams" fl with
+						| {eexpr = TArrayDecl el} ->
+							List.iter (fun e -> to_string dce e.etype) el
+						| _ ->
+							()
+					end
+				with Not_found ->
+					()
+				end
+			| _ ->
+				()
+		end;
 		expr dce ef;
 		List.iter (expr dce) args;
 	| TCall ({eexpr = TConst TSuper} as e,el) ->
@@ -393,6 +411,8 @@ let run com main full =
 				| Some cf -> loop false cf
 				| None -> ()
 			end
+		| TEnumDecl en when keep_whole_enum dce en ->
+			mark_enum dce en
 		| _ ->
 			()
 	) com.types;
@@ -430,12 +450,38 @@ let run com main full =
 		| (TClassDecl c) as mt :: l when keep_whole_class dce c ->
 			loop (mt :: acc) l
 		| (TClassDecl c) as mt :: l ->
+			let check_property cf stat =
+				let add_accessor_metadata cf =
+					if not (Meta.has Meta.Accessor cf.cf_meta) then cf.cf_meta <- (Meta.Accessor,[],c.cl_pos) :: cf.cf_meta
+				in
+				begin match cf.cf_kind with
+				| Var {v_read = AccCall} ->
+					begin try
+						add_accessor_metadata (PMap.find ("get_" ^ cf.cf_name) (if stat then c.cl_statics else c.cl_fields))
+					with Not_found ->
+						()
+					end
+				| _ ->
+					()
+				end;
+				begin match cf.cf_kind with
+				| Var {v_write = AccCall} ->
+					begin try
+						add_accessor_metadata (PMap.find ("set_" ^ cf.cf_name) (if stat then c.cl_statics else c.cl_fields))
+					with Not_found ->
+						()
+					end
+				| _ ->
+					()
+				end;
+			in
 			(* add :keep so subsequent filter calls do not process class fields again *)
 			c.cl_meta <- (Meta.Keep,[],c.cl_pos) :: c.cl_meta;
  			c.cl_ordered_statics <- List.filter (fun cf ->
 				let b = keep_field dce cf in
 				if not b then begin
 					if dce.debug then print_endline ("[DCE] Removed field " ^ (s_type_path c.cl_path) ^ "." ^ (cf.cf_name));
+					check_property cf true;
 					c.cl_statics <- PMap.remove cf.cf_name c.cl_statics;
 				end;
 				b
@@ -444,6 +490,7 @@ let run com main full =
 				let b = keep_field dce cf in
 				if not b then begin
 					if dce.debug then print_endline ("[DCE] Removed field " ^ (s_type_path c.cl_path) ^ "." ^ (cf.cf_name));
+					check_property cf false;
 					c.cl_fields <- PMap.remove cf.cf_name c.cl_fields;
 				end;
 				b
@@ -460,7 +507,7 @@ let run com main full =
 					if dce.debug then print_endline ("[DCE] Removed class " ^ (s_type_path c.cl_path));
 					loop acc l)
 			end
- 		| (TEnumDecl e) as mt :: l when Meta.has Meta.Used e.e_meta || Meta.has Meta.Keep e.e_meta || e.e_extern || not (dce.full || is_std_file dce e.e_module.m_extra.m_file || has_meta Meta.Dce e.e_meta) ->
+ 		| (TEnumDecl en) as mt :: l when Meta.has Meta.Used en.e_meta || en.e_extern || keep_whole_enum dce en ->
 			loop (mt :: acc) l
 		| TEnumDecl e :: l ->
 			if dce.debug then print_endline ("[DCE] Removed enum " ^ (s_type_path e.e_path));

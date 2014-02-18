@@ -362,6 +362,37 @@ import java.NativeArray;
 		return false;
 	}
 
+	public function indexOf(x : T, ?fromIndex:Int) : Int {
+		var len = length, a = __a, i:Int = (fromIndex == null) ? 0 : fromIndex;
+		if (i < 0)
+		{
+			i += len;
+			if (i < 0) i = 0;
+		}
+		while (i < len)
+		{
+			if (a[i] == x)
+				return i;
+			i++;
+		}
+		return -1;
+	}
+
+	public function lastIndexOf(x : T, ?fromIndex:Int) : Int {
+		var len = length, a = __a, i:Int = (fromIndex == null) ? len - 1 : fromIndex;
+		if (i >= len)
+			i = len - 1;
+		else if (i < 0)
+			i += len;
+		while (i >= 0)
+		{
+			if (a[i] == x)
+				return i;
+			i--;
+		}
+		return -1;
+	}
+
 	public function copy() : Array<T>
 	{
 		var len = length;
@@ -371,15 +402,9 @@ import java.NativeArray;
 		return ofNative(newarr);
 	}
 
-	public function iterator() : Iterator<T>
+	public inline function iterator() : Iterator<T>
 	{
-		var i = 0;
-		var len = length;
-		return
-		{
-			hasNext:function() return i < len,
-			next:function() return __a[i++]
-		};
+		return new ArrayIterator<T>(this);
 	}
 
 	public function map<S>( f : T -> S ) : Array<S> {
@@ -435,4 +460,22 @@ import java.NativeArray;
 	{
 		return __a[idx] = val;
 	}
+}
+
+@:final
+private class ArrayIterator<T>
+{
+	var arr:Array<T>;
+	var len:Int;
+	var i:Int;
+
+	public inline function new(a:Array<T>)
+	{
+		arr = a;
+		len = a.length;
+		i = 0;
+	}
+
+	public inline function hasNext():Bool return i < len;
+	public inline function next():T return arr[i++];
 }

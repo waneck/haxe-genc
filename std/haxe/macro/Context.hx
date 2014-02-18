@@ -22,6 +22,7 @@
 package haxe.macro;
 
 import haxe.macro.Expr;
+import haxe.macro.Type.TypedExpr;
 
 /**
 	Context provides an API for macro programming.
@@ -96,6 +97,22 @@ class Context {
 		return load("curpos", 0)();
 	}
 
+	/**
+		Returns the type which is expected at the place the macro is called.
+		
+		This affects usages such as `var x:Int = macroCall()`, where the
+		expected type will be reported as Int.
+		
+		Might return null if no specific type is expected or if the calling
+		macro is not an expression-macro.
+	**/
+	@:require(haxe_ver >= 3.01)
+	public static function getExpectedType():Null<Type> {
+		var l : Type = load("expected_type", 0)();
+		if( l == null ) return null;
+		return l;
+	}
+	
 	/**
 		Returns the current class in which the macro was called.
 		
@@ -260,7 +277,19 @@ class Context {
 	public static function onGenerate( callback : Array<Type> -> Void ) {
 		load("on_generate",1)(callback);
 	}
-
+	
+	/**
+		Adds a callback function `callback` which is invoked after the compiler
+		generation phase.
+		
+		Compilation has completed at this point and cannot be influenced
+		anymore. However, contextual information is still available.
+	**/
+	@:require(haxe_ver >= 3.01)
+	public static function onAfterGenerate( callback : Void -> Void ) {
+		load("after_generate",1)(callback);
+	}
+	
 	/**
 		Adds a callback function `callback` which is invoked when a type name
 		cannot be resolved.
@@ -281,6 +310,17 @@ class Context {
 	**/
 	public static function typeof( e : Expr ) : Type {
 		return load("typeof", 1)(e);
+	}
+
+	/**
+		Types expression `e` and returns the corresponding `TypedExpr`.
+		
+		Typing the expression may result in an compiler error which can be
+		caught using `try ... catch`.
+	**/
+	@:require(haxe_ver >= 3.01)
+	public static function typeExpr( e : Expr ) : TypedExpr {
+		return load("type_expr", 1)(e);
 	}
 
 	/**
@@ -322,6 +362,21 @@ class Context {
 	**/
 	public static function makePosition( inf : { min : Int, max : Int, file : String } ) : Position {
 		return load("make_pos",3)(inf.min,inf.max,untyped inf.file.__s);
+	}
+
+	/**
+		Returns a map of all registered resources for this compilation unit.
+
+		Modifying the returned map has no effect on the compilation, use
+		`haxe.macro.Context.addResource` to add new resources to the compilation unit.
+	**/
+	public static function getResources():haxe.ds.StringMap<haxe.io.Bytes> {
+		var x:haxe.ds.StringMap<neko.NativeString> = load("get_resources",0)();
+		var r = new haxe.ds.StringMap();
+		for (k in x.keys()) {
+			r.set(k, haxe.io.Bytes.ofData(x.get(k)));
+		} 
+		return r;
 	}
 
 	/**
