@@ -93,7 +93,7 @@ class UnitBuilder {
 	static function mkEq(e1, e2, p) {
 		function isFloat(e) {
 			try return switch(Context.typeof(e)) {
-				case TAbstract(_.deref() => {name: "Float"}, _):
+				case TAbstract(_.get() => {name: "Float"}, _):
 					true;
 				case _:
 					false;
