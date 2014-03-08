@@ -34,7 +34,7 @@ class RunTravis {
 		for (t in 0...5) {
 			runCommand("sleep", ["2"]);
 			if (FileSystem.exists(flashlogPath))
-				break;				
+				break;
 		}
 		if (!FileSystem.exists(flashlogPath)) {
 			Sys.println('$flashlogPath not found.');
@@ -65,6 +65,23 @@ class RunTravis {
 		switch (Sys.getEnv("TARGET")) {
 			case "macro", null:
 				runCommand("haxe", ["compile-macro.hxml"]);
+
+
+				//generate documentation
+				runCommand("haxelib", ["git", "hxparse", "https://github.com/Simn/hxparse", "development", "src"]);
+				runCommand("haxelib", ["git", "hxtemplo", "https://github.com/Simn/hxtemplo", "master", "src"]);
+				runCommand("haxelib", ["git", "hxargs", "https://github.com/Simn/hxargs.git"]);
+				runCommand("haxelib", ["git", "markdown", "https://github.com/dpeek/haxe-markdown.git", "master", "src"]);
+
+				runCommand("haxelib", ["git", "hxcpp", "https://github.com/HaxeFoundation/hxcpp.git"]);
+				runCommand("haxelib", ["git", "hxjava", "https://github.com/HaxeFoundation/hxjava.git"]);
+				runCommand("haxelib", ["git", "hxcs", "https://github.com/HaxeFoundation/hxcs.git"]);
+
+				runCommand("haxelib", ["git", "dox", "https://github.com/dpeek/dox.git"]);
+				Sys.setCwd(Sys.getEnv("HOME") + "/haxelib/dox/git/");
+				runCommand("haxe", ["run.hxml"]);
+				runCommand("haxe", ["gen.hxml"]);
+				runCommand("haxelib", ["run", "dox", "-o", "bin/api.zip", "-i", "bin/xml"]);
 			case "neko":
 				runCommand("haxe", ["compile-neko.hxml"]);
 				runCommand("neko", ["unit.n"]);
@@ -78,11 +95,16 @@ class RunTravis {
 
 				//install and build hxcpp
 				runCommand("haxelib", ["git", "hxcpp", "https://github.com/HaxeFoundation/hxcpp.git"]);
-				Sys.setCwd(Sys.getEnv("HOME") + "/haxelib/hxcpp/git/runtime/");
-				runCommand("haxelib", ["run", "hxcpp", "BuildLibs.xml"]);
+				Sys.setCwd(Sys.getEnv("HOME") + "/haxelib/hxcpp/git/project/");
+				runCommand("neko", ["build.n"]);
 				Sys.setCwd(unitDir);
-				
+
 				runCommand("haxe", ["compile-cpp.hxml"]);
+				runCommand("./cpp/Test-debug", []);
+
+				runCommand("rm", ["-rf", "cpp"]);
+
+				runCommand("haxe", ["compile-cpp.hxml", "-D", "HXCPP_M64"]);
 				runCommand("./cpp/Test-debug", []);
 			case "js":
 				runCommand("haxe", ["compile-js.hxml"]);
@@ -91,7 +113,7 @@ class RunTravis {
 				if (Sys.getEnv("TRAVIS_SECURE_ENV_VARS") == "true") {
 					//https://saucelabs.com/opensource/travis
 					runCommand("npm", ["install", "wd"]);
-					runCommand("curl", ["https://gist.github.com/santiycr/5139565/raw/sauce_connect_setup.sh", "|", "bash"]);
+					runCommand("curl", ["https://gist.github.com/santiycr/5139565/raw/sauce_connect_setup.sh", "-L", "|", "bash"]);
 					runCommand("haxelib", ["install", "nodejs"]);
 					runCommand("haxe", ["compile-saucelabs-runner.hxml"]);
 					runCommand("nekotools", ["server", "&"]);
@@ -104,11 +126,11 @@ class RunTravis {
 			case "java":
 				runCommand("haxelib", ["git", "hxjava", "https://github.com/HaxeFoundation/hxjava.git"]);
 				runCommand("haxe", ["compile-java.hxml"]);
-				runCommand("java", ["-jar", "java/java.jar"]);
+				runCommand("java", ["-jar", "java/Test-Debug.jar"]);
 			case "cs":
 				runCommand("sudo", ["apt-get", "install", "mono-devel", "mono-mcs", "-y"]);
 				runCommand("haxelib", ["git", "hxcs", "https://github.com/HaxeFoundation/hxcs.git"]);
-				
+
 				runCommand("haxe", ["compile-cs.hxml"]);
 				runCommand("mono", ["cs/bin/Test-Debug.exe"]);
 

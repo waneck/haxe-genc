@@ -95,6 +95,8 @@ let kwds =
 		"import"; "in"; "instanceof"; "interface"; "let"; "new"; "package"; "private"; "protected";
 		"public"; "return"; "static"; "super"; "switch"; "this"; "throw"; "try"; "typeof"; "var";
 		"void"; "while"; "with"; "yield";
+		(* reserved by closure compiler *)
+		"final"
 	];
 	h
 
@@ -103,7 +105,11 @@ let kwds =
 let kwds2 =
 	let h = Hashtbl.create 0 in
 	List.iter (fun s -> Hashtbl.add h s ()) [
-		"console"; "window";
+		(* https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects *)
+		"Infinity"; "NaN"; "decodeURI"; "decodeURIComponent"; "encodeURI"; "encodeURIComponent";
+		"escape"; "eval"; "isFinite"; "isNaN"; "parseFloat"; "parseInt"; "undefined"; "unescape";
+
+		"JSON"; "Number"; "Object"; "console"; "window";
 	];
 	h
 

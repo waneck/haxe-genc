@@ -265,7 +265,7 @@ let constants =
 	"constructs";"names";"superClass";"interfaces";"fields";"statics";"constructor";"init";"t";
 	"gid";"uid";"atime";"mtime";"ctime";"dev";"ino";"nlink";"rdev";"size";"mode";"pos";"len";
 	"binops";"unops";"from";"to";"array";"op";"isPostfix";"impl";
-	"id";"capture";"extra";"v";"ids";"vars";"en";"overrides"];
+	"id";"capture";"extra";"v";"ids";"vars";"en";"overrides";"status"];
 	h
 
 let h_get = hash "__get" and h_set = hash "__set"
@@ -328,7 +328,7 @@ let parse_float s =
 		if i = String.length s then (if sp = 0 then s else String.sub s sp (i - sp)) else
 		match String.unsafe_get s i with
 		| ' ' when sp = i -> loop (sp + 1) (i + 1)
-		| '0'..'9' | '-' | 'e' | 'E' | '.' -> loop sp (i + 1)
+		| '0'..'9' | '-' | '+' | 'e' | 'E' | '.' -> loop sp (i + 1)
 		| _ -> String.sub s sp (i - sp)
 	in
 	float_of_string (loop 0 0)
@@ -1776,7 +1776,6 @@ let std_lib =
 				incr pos;
 				if !pos >= p && !pos < p + l then UTF8.Buf.add_char buf c;
 			) (vstring s);
-			if !pos < p + l then error();
 			VString (UTF8.Buf.contents buf)
 		);
 		"utf8_get", Fun2 (fun s p ->
@@ -3534,6 +3533,7 @@ type enum_index =
 	| ITConstant
 	| IModuleType
 	| IFieldAccess
+	| IAnonStatus
 
 let enum_name = function
 	| IExpr -> "ExprDef"
@@ -3553,9 +3553,10 @@ let enum_name = function
 	| ITConstant -> "TConstant"
 	| IModuleType -> "ModuleType"
 	| IFieldAccess -> "FieldAccess"
+	| IAnonStatus -> "AnonStatus"
 
 let init ctx =
-	let enums = [IExpr;IBinop;IUnop;IConst;ITParam;ICType;IField;IType;IFieldKind;IMethodKind;IVarAccess;IAccess;IClassKind;ITypedExpr;ITConstant;IModuleType;IFieldAccess] in
+	let enums = [IExpr;IBinop;IUnop;IConst;ITParam;ICType;IField;IType;IFieldKind;IMethodKind;IVarAccess;IAccess;IClassKind;ITypedExpr;ITConstant;IModuleType;IFieldAccess;IAnonStatus] in
 	let get_enum_proto e =
 		match get_path ctx ["haxe";"macro";enum_name e] null_pos with
 		| VObject e ->
@@ -4291,7 +4292,8 @@ and encode_class_kind k =
 		| KGeneric -> 4, []
 		| KGenericInstance (cl, params) -> 5, [encode_clref cl; encode_tparams params]
 		| KMacroType -> 6, []
-		| KAbstractImpl a -> 7, [encode_ref a encode_tabstract (fun() -> s_type_path a.a_path)]
+		| KAbstractImpl a -> 7, [encode_abref a]
+		| KGenericBuild cfl -> 8, []
 	) in
 	enc_enum IClassKind tag pl
 
@@ -4324,7 +4326,20 @@ and encode_ttype t =
 and encode_tanon a =
 	enc_obj [
 		"fields", encode_pmap_array encode_cfield a.a_fields;
+		"status", encode_anon_status !(a.a_status);
 	]
+
+and encode_anon_status s =
+	let tag, pl = (match s with
+		| Closed -> 0, []
+		| Opened -> 1, []
+		| Type.Const -> 2, []
+		| Statics cl -> 3, [encode_clref cl]
+		| EnumStatics en -> 4, [encode_enref en]
+		| AbstractStatics ab -> 5, [encode_abref ab]
+	)
+	in
+	enc_enum IAnonStatus tag pl
 
 and encode_tparams pl =
 	enc_array (List.map encode_type pl)
@@ -4337,6 +4352,9 @@ and encode_enref en =
 
 and encode_cfref cf =
 	encode_ref cf encode_cfield (fun() -> cf.cf_name)
+
+and encode_abref ab =
+	encode_ref ab encode_tabstract (fun() -> s_type_path ab.a_path)
 
 and encode_type t =
 	let rec loop = function
@@ -4369,7 +4387,7 @@ and encode_type t =
 		| TLazy f ->
 			loop (!f())
 		| TAbstract (a, pl) ->
-			8, [encode_ref a encode_tabstract (fun() -> s_type_path a.a_path); encode_tparams pl]
+			8, [encode_abref a; encode_tparams pl]
 	in
 	let tag, pl = loop t in
 	enc_enum IType tag pl
@@ -4449,7 +4467,7 @@ and encode_module_type mt =
 		| TClassDecl c -> 0,[encode_clref c]
 		| TEnumDecl e -> 1,[encode_enref e]
 		| TTypeDecl t -> 2,[encode_ref t encode_ttype (fun () -> s_type_path t.t_path)]
-		| TAbstractDecl a -> 3,[encode_ref a encode_tabstract (fun () -> s_type_path a.a_path)]
+		| TAbstractDecl a -> 3,[encode_abref a]
 	in
 	enc_enum IModuleType tag pl
 

@@ -98,13 +98,33 @@ import cs.system.Type;
 				if (t1 == t2)
 					return v1c.Equals(v2c);
 
+				if (t1 == System.TypeCode.String || t2 == System.TypeCode.String)
+					return false;
+
 				switch(t1)
 				{
+					case System.TypeCode.Decimal:
+						return v1c.ToDecimal(null) == v2c.ToDecimal(null);
 					case System.TypeCode.Int64:
 					case System.TypeCode.UInt64:
-						return v1c.ToUInt64(null) == v2c.ToUInt64(null);
+						if (t2 == System.TypeCode.Decimal)
+							return v1c.ToDecimal(null) == v2c.ToDecimal(null);
+						else
+							return v1c.ToUInt64(null) == v2c.ToUInt64(null);
 					default:
-						return v1c.ToDouble(null) == v2c.ToDouble(null);
+						switch(t2)
+						{
+							case System.TypeCode.Decimal:
+								return v1c.ToDecimal(null) == v2c.ToDecimal(null);
+							case System.TypeCode.Int64:
+							case System.TypeCode.UInt64:
+								if (t2 == System.TypeCode.Decimal)
+									return v1c.ToDecimal(null) == v2c.ToDecimal(null);
+								else
+									return v1c.ToUInt64(null) == v2c.ToUInt64(null);
+							default:
+								return v1c.ToDouble(null) == v2c.ToDouble(null);
+						}
 				}
 			}
 
@@ -661,7 +681,7 @@ import cs.system.Type;
 		if (hxObj != null)
 			return hxObj.__hx_getField_f(field, (fieldHash == 0) ? haxe.lang.FieldLookup.hash(field) : fieldHash, throwErrors, false);
 
-		return (double)slowGetField(obj, field, throwErrors);
+		return toDouble(slowGetField(obj, field, throwErrors));
 
 	')
 	public static function getField_f(obj:Dynamic, field:String, fieldHash:Int, throwErrors:Bool):Float
@@ -689,7 +709,7 @@ import cs.system.Type;
 		if (hxObj != null)
 			return hxObj.__hx_setField_f(field, (fieldHash == 0) ? haxe.lang.FieldLookup.hash(field) : fieldHash, value, false);
 
-		return (double)slowSetField(obj, field, value);
+		return toDouble(slowSetField(obj, field, value));
 
 	')
 	public static function setField_f(obj:Dynamic, field:String, fieldHash:Int, value:Float):Float
@@ -732,6 +752,10 @@ import cs.system.Type;
 			return (To)(object) toDouble(obj);
 		else if (typeof(To) == typeof(int))
 			return (To)(object) toInt(obj);
+		else if (typeof(To) == typeof(float))
+			return (To)(object)(float)toDouble(obj);
+		else if (typeof(To) == typeof(long))
+			return (To)(object)(long)toDouble(obj);
 		else
 			return (To) obj;
 	')

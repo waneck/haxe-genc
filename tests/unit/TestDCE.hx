@@ -116,7 +116,7 @@ class TestDCE extends Test {
 		nhf(bc, "get_x");
 	}
 	
-	#if !cpp
+	#if (!cpp && !java && !cs)
 	public function testProperty2() {
         var a = new RemovePropertyKeepAccessors();
         a.test = 3;
@@ -154,6 +154,9 @@ class TestDCE extends Test {
 		try {
 			throw c;
 		} catch (_:Dynamic) { }
+		#if js
+		if (!js.Browser.supported || js.Browser.navigator.userAgent.indexOf('MSIE 8') == -1)
+		#end
 		hf(ThrownWithToString, "toString");
 	}
 }

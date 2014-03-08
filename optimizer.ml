@@ -42,6 +42,13 @@ let has_side_effect e =
 	with Exit ->
 		true
 
+let mk_untyped_call name p params =
+	{
+		eexpr = TCall({ eexpr = TLocal(alloc_var name t_dynamic); etype = t_dynamic; epos = p }, params);
+		etype = t_dynamic;
+		epos = p;
+	}
+
 let api_inline ctx c field params p =
 	match c.cl_path, field, params with
 	| ([],"Type"),"enumIndex",[{ eexpr = TField (_,FEnum (en,f)) }] ->
@@ -62,7 +69,7 @@ let api_inline ctx c field params p =
 			Some { eexpr = TConst (TString (if b then "true" else "false")); epos = p; etype = ctx.t.tstring }
 		| _ ->
 			None)
-	| ([],"Std"),"string",[v] when ctx.com.platform = Js ->
+(* 	| ([],"Std"),"string",[v] when ctx.com.platform = Js || ctx.com.platform = Flash ->
 		let pos = v.epos in
 		let stringt = ctx.com.basic.tstring in
 		let stringv = mk (TBinop (Ast.OpAdd, mk (TConst (TString "")) stringt pos, v)) stringt pos in
@@ -78,7 +85,7 @@ let api_inline ctx c field params p =
 		| TAbstract ({ a_path = [],"Bool" }, []) ->
 			Some stringv
 		| _ ->
-			None)
+			None) *)
 	| ([],"Std"),"is",[o;t] | (["js"],"Boot"),"__instanceof",[o;t] when ctx.com.platform = Js ->
 		let mk_local ctx n t pos = mk (TLocal (try PMap.find n ctx.locals with _ -> add_local ctx n t)) t pos in
 
@@ -127,6 +134,12 @@ let api_inline ctx c field params p =
 			None (* out range, keep platform-specific behavior *)
 		| _ ->
 			Some { eexpr = TConst (TInt (Int32.of_float f)); etype = ctx.t.tint; epos = p })
+	| (["cs"],"Lib"),("fixed" | "checked" | "unsafe"),[e] ->
+			Some (mk_untyped_call ("__" ^ field ^ "__") p [e])
+	| (["cs"],"Lib"),("lock"),[obj;block] ->
+			Some (mk_untyped_call ("__lock__") p [obj;block])
+	| (["java"],"Lib"),("lock"),[obj;block] ->
+			Some (mk_untyped_call ("__lock__") p [obj;block])
 	| _ ->
 		None
 
@@ -447,7 +460,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 
 		This could be fixed with better post process code cleanup (planed)
 	*)
-	if !cancel_inlining then
+	if !cancel_inlining || (Common.platform ctx.com Js && not !force && (init <> None || !has_vars)) then
 		None
 	else
 		let wrap e =
@@ -740,14 +753,14 @@ let sanitize_expr com e =
 		let e1 = if loop e1 true then parent e1 else e1 in
 		let e2 = if loop e2 false then parent e2 else e2 in
 		{ e with eexpr = TBinop (op,e1,e2) }
-	| TUnop (op,mode,e2) ->
+	| TUnop (op,mode,e1) ->
 		let rec loop ee =
 			match ee.eexpr with
-			| TBinop _ | TIf _ -> parent e2
+			| TBinop _ | TIf _ | TUnop _ -> parent e1
 			| TCast (e,None) -> loop e
-			| _ -> e2
+			| _ -> e1
 		in
-		{ e with eexpr = TUnop (op,mode,loop e2) }
+		{ e with eexpr = TUnop (op,mode,loop e1)}
 	| TIf (e1,e2,eelse) ->
 		let e1 = parent e1 in
 		let e2 = (if (eelse <> None && has_if e2) || (match e2.eexpr with TIf _ -> true | _ -> false) then block e2 else complex e2) in
@@ -1011,6 +1024,9 @@ let rec reduce_loop ctx e =
 	| TCall ({ eexpr = TField (o,FClosure (c,cf)) } as f,el) ->
 		let fmode = (match c with None -> FAnon cf | Some c -> FInstance (c,cf)) in
 		{ e with eexpr = TCall ({ f with eexpr = TField (o,fmode) },el) }
+	| TSwitch (e1,[[{eexpr = TConst (TBool true)}],{eexpr = TConst (TBool true)}],Some ({eexpr = TConst (TBool false)})) ->
+		(* introduced by extractors in some cases *)
+		e1
 	| _ ->
 		reduce_expr ctx e)
 

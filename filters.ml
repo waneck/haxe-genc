@@ -71,6 +71,8 @@ let handle_side_effects com gen_temp e =
 		match e.eexpr with
 		| TBlock el ->
 			{e with eexpr = TBlock (block loop el)}
+		| TCall({eexpr = TLocal v},_) when Meta.has Meta.Unbound v.v_meta ->
+			e
 		| TCall(e1,el) ->
 			let e1 = loop e1 in
 			{e with eexpr = TCall(e1,ordered_list el)}
@@ -119,13 +121,18 @@ let handle_side_effects com gen_temp e =
 		let rec no_side_effect e = match e.eexpr with
 			| TNew _ | TCall _ | TArrayDecl _ | TObjectDecl _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) ->
 				bind e;
+			| TIf _ | TTry _ | TSwitch _ ->
+				(* Technically these are not side-effects, but we have to move them out anyway because their blocks code have side-effects.
+				   This also probably improves readability of the generated code. We can ignore TWhile and TFor because their type is Void,
+				   so they could never appear in a place where side-effects matter. *)
+				bind e
 			| TBinop(op,e1,e2) when Optimizer.has_side_effect e1 || Optimizer.has_side_effect e2 ->
 				bind e;
 			| TConst _ | TLocal _ | TTypeExpr _ | TFunction _
 			| TReturn _ | TBreak | TContinue | TThrow _ | TCast (_,Some _) ->
 				e
 			| TBlock _ ->
-				loop e
+				bind e
 			| _ ->
 				Type.map_expr no_side_effect e
 		in
@@ -995,6 +1002,13 @@ let add_field_inits ctx t =
 		match inits with
 		| [] -> ()
 		| _ ->
+			let cf_ctor = match c.cl_constructor with
+				| None ->
+					List.iter (fun cf -> display_error ctx "Cannot initialize member fields on classes that do not have a constructor" cf.cf_pos) inits;
+					error "Could not initialize member fields" c.cl_pos;
+				| Some cf ->
+					cf
+			in
 			let el = List.map (fun cf ->
 				match cf.cf_expr with
 				| None -> assert false
@@ -1009,25 +1023,13 @@ let add_field_inits ctx t =
 						eassign;
 			) inits in
 			let el = if !need_this then (mk (TVar((v, Some ethis))) ethis.etype ethis.epos) :: el else el in
-			match c.cl_constructor with
-			| None ->
-				let ct = TFun([],ctx.com.basic.tvoid) in
-				let ce = mk (TFunction {
-					tf_args = [];
-					tf_type = ctx.com.basic.tvoid;
-					tf_expr = mk (TBlock el) ctx.com.basic.tvoid c.cl_pos;
-				}) ct c.cl_pos in
-				let ctor = mk_field "new" ct c.cl_pos in
-				ctor.cf_kind <- Method MethNormal;
-				c.cl_constructor <- Some { ctor with cf_expr = Some ce };
-			| Some cf ->
-				match cf.cf_expr with
-				| Some { eexpr = TFunction f } ->
-					let bl = match f.tf_expr with {eexpr = TBlock b } -> b | x -> [x] in
-					let ce = mk (TFunction {f with tf_expr = mk (TBlock (el @ bl)) ctx.com.basic.tvoid c.cl_pos }) cf.cf_type cf.cf_pos in
-					c.cl_constructor <- Some {cf with cf_expr = Some ce }
-				| _ ->
-					assert false
+			match cf_ctor.cf_expr with
+			| Some { eexpr = TFunction f } ->
+				let bl = match f.tf_expr with {eexpr = TBlock b } -> b | x -> [x] in
+				let ce = mk (TFunction {f with tf_expr = mk (TBlock (el @ bl)) ctx.com.basic.tvoid c.cl_pos }) cf_ctor.cf_type cf_ctor.cf_pos in
+				c.cl_constructor <- Some {cf_ctor with cf_expr = Some ce }
+			| _ ->
+				assert false
 	in
 	match t with
 	| TClassDecl c ->
@@ -1113,7 +1115,7 @@ let run com tctx main =
 		Codegen.Abstract.handle_abstract_casts tctx;
 		blockify_ast;
 		(match com.platform with
-			| Cpp -> (fun e ->
+			| Cpp | Flash8 -> (fun e ->
 				let save = save_locals tctx in
 				let e = handle_side_effects com (Typecore.gen_local tctx) e in
 				save();

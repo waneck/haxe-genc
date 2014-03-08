@@ -37,8 +37,8 @@ class StringBuf {
 		return len;
 	}
 
-	public function add( x : Dynamic ) : Void {
-		b.push(x);
+	public function add<T>( x : T ) : Void {
+		b.push(Std.string(x));
 	}
 
 	public inline function addSub( s : String, pos : Int, ?len : Int ) : Void {

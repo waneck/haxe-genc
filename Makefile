@@ -11,6 +11,8 @@
 .SUFFIXES : .ml .mli .cmo .cmi .cmx .mll .mly
 
 INSTALL_DIR=/usr
+INSTALL_BIN_DIR=$(INSTALL_DIR)/bin
+INSTALL_LIB_DIR=$(INSTALL_DIR)/lib/haxe
 
 OUTPUT=haxe
 EXTENSION=
@@ -38,7 +40,12 @@ genswf9 genswf genjava gencs analyzer genc interp dce filters typer matcher vers
 
 ADD_REVISION=0
 
+# using $(CURDIR) on Windows will not work since it might be a Cygwin path
+ifdef SYSTEMROOT
+EXTENSION=.exe
+else
 export HAXE_STD_PATH=$(CURDIR)/std
+endif
 
 ifneq ($(ADD_REVISION),0)
 	VERSION_EXTRA="let version_extra = Some \" (git build $(shell git rev-parse --abbrev-ref HEAD) @ $(shell git describe --always)) \""
@@ -68,35 +75,35 @@ haxe: $(MODULES:=.cmx)
 	$(OCAMLOPT) -o $(OUTPUT) $(NATIVE_LIBS) $(LIBS) $(MODULES:=.cmx)
 
 haxelib:
-	$(CURDIR)/$(OUTPUT) --cwd "$(CURDIR)/std/tools/haxelib" haxelib.hxml
-	cp std/tools/haxelib/haxelib$(EXTENSION) haxelib$(EXTENSION)
+	(cd $(CURDIR)/extra/haxelib_src && $(CURDIR)/$(OUTPUT) haxelib.hxml && nekotools boot bin/haxelib.n)
+	cp extra/haxelib_src/bin/haxelib$(EXTENSION) haxelib$(EXTENSION)
 
-haxedoc:
-	$(CURDIR)/$(OUTPUT) --cwd "$(CURDIR)/std/tools/haxedoc" haxedoc.hxml
-	cp std/tools/haxedoc/haxedoc$(EXTENSION) haxedoc$(EXTENSION)
-
-tools: haxelib haxedoc
+tools: haxelib
 
 install:
-	cp haxe $(INSTALL_DIR)/bin/haxe
-	rm -rf $(INSTALL_DIR)/lib/haxe/std
-	-mkdir -p $(INSTALL_DIR)/lib/haxe
-	cp -rf std $(INSTALL_DIR)/lib/haxe/std
-	-mkdir -p $(INSTALL_DIR)/lib/haxe/lib
-	chmod -R a+rx $(INSTALL_DIR)/lib/haxe
-	chmod 777 $(INSTALL_DIR)/lib/haxe/lib
-	cp std/tools/haxelib/haxelib.sh $(INSTALL_DIR)/bin/haxelib
-	cp std/tools/haxedoc/haxedoc.sh $(INSTALL_DIR)/bin/haxedoc
-	chmod a+rx $(INSTALL_DIR)/bin/haxe $(INSTALL_DIR)/bin/haxelib $(INSTALL_DIR)/bin/haxedoc
+	-rm -f $(INSTALL_LIB_DIR)
+	-mkdir -p $(INSTALL_LIB_DIR)
+	rm -rf $(INSTALL_LIB_DIR)/std
+	cp -rf std $(INSTALL_LIB_DIR)/std
+	cp -rf extra $(INSTALL_LIB_DIR)
+	-mkdir -p $(INSTALL_LIB_DIR)/lib
+	rm -f $(INSTALL_BIN_DIR)/haxe
+	cp haxe $(INSTALL_LIB_DIR)
+	ln -s $(INSTALL_LIB_DIR)/haxe $(INSTALL_BIN_DIR)/haxe
+	chmod -R a+rx $(INSTALL_LIB_DIR)
+	chmod 777 $(INSTALL_LIB_DIR)/lib
+	# cp extra/haxelib_src/haxelib_script.sh $(INSTALL_DIR)/bin/haxelib
+	echo "#!/bin/sh" > $(INSTALL_BIN_DIR)/haxelib
+	echo "exec haxe -cp $(INSTALL_LIB_DIR)/extra/haxelib_src/src --run tools.haxelib.Main \"\$$@\"" >> $(INSTALL_BIN_DIR)/haxelib
+	chmod a+rx $(INSTALL_BIN_DIR)/haxe $(INSTALL_BIN_DIR)/haxelib
 
 # will install native version of the tools instead of script ones
 install_tools: tools
-	cp haxelib ${INSTALL_DIR}/bin/haxelib
-	cp haxedoc ${INSTALL_DIR}/bin/haxedoc
-	chmod a+rx $(INSTALL_DIR)/bin/haxelib $(INSTALL_DIR)/bin/haxedoc
+	cp haxelib ${INSTALL_BIN_DIR}/haxelib
+	chmod a+rx $(INSTALL_BIN_DIR)/haxelib
 
 uninstall:
-	rm -rf $(INSTALL_DIR)/bin/haxe $(INSTALL_DIR)/bin/haxelib $(INSTALL_DIR)/lib/haxe $(INSTALL_DIR)/bin/haxedoc
+	rm -rf $(INSTALL_BIN_DIR)/haxe $(INSTALL_BIN_DIR)/haxelib $(INSTALL_LIB_DIR)
 
 export:
 	cp haxe*.exe doc/CHANGES.txt $(EXPORT)
@@ -176,10 +183,10 @@ clean_libs:
 	make -C libs/ttflib clean
 
 clean_haxe:
-	rm -f $(MODULES:=.obj) $(MODULES:=.o) $(MODULES:=.cmx) $(MODULES:=.cmi) lexer.ml
+	rm -f $(MODULES:=.obj) $(MODULES:=.o) $(MODULES:=.cmx) $(MODULES:=.cmi) lexer.ml $(OUTPUT)
 
 clean_tools:
-	rm -f $(OUTPUT) haxelib haxedoc
+	rm -f $(OUTPUT) haxelib
 
 # SUFFIXES
 .ml.cmx:
@@ -191,4 +198,4 @@ clean_tools:
 .mll.ml:
 	ocamllex $<
 
-.PHONY: haxe libs version.cmx
+.PHONY: haxe libs version.cmx haxelib

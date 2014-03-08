@@ -77,7 +77,7 @@ let make_module ctx mpath file tdecls loadp =
 				e_constrs = PMap.empty;
 				e_names = [];
 				e_type = {
-					t_path = fst path, "#" ^ snd path;
+					t_path = fst path, "Enum<" ^ (snd path) ^ ">";
 					t_module = m;
 					t_doc = None;
 					t_pos = p;
@@ -768,17 +768,16 @@ let check_overloads ctx c =
 		) (f :: f.cf_overloads)) (c.cl_ordered_fields @ c.cl_ordered_statics)
 
 let check_overriding ctx c =
-	let p = c.cl_pos in
 	match c.cl_super with
 	| None ->
 		(match c.cl_overrides with
 		| [] -> ()
 		| i :: _ ->
-			display_error ctx ("Field " ^ i.cf_name ^ " is declared 'override' but doesn't override any field") p)
+			display_error ctx ("Field " ^ i.cf_name ^ " is declared 'override' but doesn't override any field") i.cf_pos)
 	| Some (csup,params) ->
 		PMap.iter (fun i f ->
+			let p = f.cf_pos in
 			let check_field f get_super_field is_overload = try
-				let p = f.cf_pos in
 				(if is_overload && not (Meta.has Meta.Overload f.cf_meta) then
 					display_error ctx ("Missing @:overload declaration for field " ^ i) p);
 				let t, f2 = get_super_field csup i in
@@ -1418,7 +1417,7 @@ let build_module_def ctx mt meta fvars context_init fbuild =
 			let s = try String.concat "." (List.rev (string_list_of_expr_path epath)) with Error (_,p) -> error "Build call parameter must be a class path" p in
 			if ctx.in_macro then error "You cannot use @:build inside a macro : make sure that your enum is not used in macro" p;
 			let old = ctx.g.get_build_infos in
-			ctx.g.get_build_infos <- (fun() -> Some (mt, fvars()));
+			ctx.g.get_build_infos <- (fun() -> Some (mt, List.map snd (t_infos mt).mt_types, fvars()));
 			context_init();
 			let r = try apply_macro ctx MBuild s el p with e -> ctx.g.get_build_infos <- old; raise e in
 			ctx.g.get_build_infos <- old;
@@ -1501,7 +1500,7 @@ let init_class ctx c p context_init herits fields =
 			true
 		else match parent with
 			| Some { cf_public = p } -> p
-			| _ -> c.cl_extern || c.cl_interface || extends_public || (ctx.com.version < 30200 && match c.cl_kind with KAbstractImpl _ -> true | _ -> false)
+			| _ -> c.cl_extern || c.cl_interface || extends_public
 	in
 	let rec get_parent c name =
 		match c.cl_super with
@@ -1840,7 +1839,11 @@ let init_class ctx c p context_init herits fields =
 							(* the first argument of a to-function must be the underlying type, not the abstract *)
 							(try unify_raise ctx t (tfun (tthis :: args) m) f.cff_pos with Error (Unify l,p) -> error (error_msg (Unify l)) p);
 							if not (Meta.has Meta.Impl cf.cf_meta) then cf.cf_meta <- (Meta.Impl,[],cf.cf_pos) :: cf.cf_meta;
-							a.a_to <- (follow m, Some cf) :: a.a_to
+							let m = match follow m with
+								| TMono _ when (match cf.cf_type with TFun(_,r) -> r == t_dynamic | _ -> false) -> t_dynamic
+								| m -> m
+							in
+							a.a_to <- (m, Some cf) :: a.a_to
 						| (Meta.ArrayAccess,_,_) :: _ ->
 							if is_macro then error "Macro array-access functions are not supported" p;
 							a.a_array <- cf :: a.a_array;
@@ -1990,6 +1993,7 @@ let init_class ctx c p context_init herits fields =
 				| e :: l ->
 					let sc = match fst e with
 						| EConst (Ident s) -> s
+						| EBinop ((OpEq|OpNotEq|OpGt|OpGte|OpLt|OpLte) as op,(EConst (Ident s),_),(EConst ((Int _ | Float _ | String _) as c),_)) -> s ^ s_binop op ^ s_constant c
 						| _ -> ""
 					in
 					if not (Parser.is_true (Parser.eval ctx.com e)) then
@@ -2269,6 +2273,7 @@ let rec init_module_type ctx context_init do_init (decl,p) =
 		let c = (match get_type d.d_name with TClassDecl c -> c | _ -> assert false) in
 		let herits = d.d_flags in
 		if Meta.has Meta.Generic c.cl_meta && c.cl_types <> [] then c.cl_kind <- KGeneric;
+		if Meta.has Meta.GenericBuild c.cl_meta then c.cl_kind <- KGenericBuild d.d_data;
 		if c.cl_path = (["haxe";"macro"],"MacroType") then c.cl_kind <- KMacroType;
 		c.cl_extern <- List.mem HExtern herits;
 		c.cl_interface <- List.mem HInterface herits;
@@ -2411,7 +2416,10 @@ let rec init_module_type ctx context_init do_init (decl,p) =
 		(*
 			we exceptionnaly allow follow here because we don't care the type we get as long as it's not our own
 		*)
-		if t.t_type == follow tt then error "Recursive typedef is not allowed" p;
+		(match d.d_data with
+		| CTExtend _ -> ()
+		| _ ->
+			if t.t_type == follow tt then error "Recursive typedef is not allowed" p);
 		(match t.t_type with
 		| TMono r ->
 			(match !r with
@@ -2446,10 +2454,13 @@ let rec init_module_type ctx context_init do_init (decl,p) =
 				a.a_this <- at;
 				is_type := true;
 			| APrivAbstract -> ()
-		) d.d_flags
-		(* this was assuming that implementations imply underlying type, but that shouldn't be necessary (issue #2333) *)
-(* 		if not !is_type && (match a.a_impl with Some _ -> true | None -> not (Meta.has Meta.CoreType a.a_meta)) then
-			error "Abstract is missing underlying type declaration" a.a_pos *)
+		) d.d_flags;
+		if not !is_type then begin
+			if Meta.has Meta.CoreType a.a_meta then
+				a.a_this <- TAbstract(a,List.map snd a.a_types)
+			else
+				error "Abstract is missing underlying type declaration" a.a_pos
+		end
 
 let type_module ctx m file tdecls p =
 	let m, decls, tdecls = make_module ctx m file tdecls p in

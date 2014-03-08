@@ -165,6 +165,7 @@ and tclass_kind =
 	| KGeneric
 	| KGenericInstance of tclass * tparams
 	| KMacroType
+	| KGenericBuild of class_field list
 	| KAbstractImpl of tabstract
 
 and metadata = Ast.metadata
@@ -456,7 +457,7 @@ let rec s_type ctx t =
 			(if b then "?" else "") ^ (if s = "" then "" else s ^ " : ") ^ s_fun ctx t true
 		) l) ^ " -> " ^ s_fun ctx t false
 	| TAnon a ->
-	let fl = PMap.fold (fun f acc -> ((if Meta.has Meta.Optional f.cf_meta then " ?" else " ") ^ f.cf_name ^ " : " ^ s_type ctx f.cf_type) :: acc) a.a_fields [] in
+		let fl = PMap.fold (fun f acc -> ((if Meta.has Meta.Optional f.cf_meta then " ?" else " ") ^ f.cf_name ^ " : " ^ s_type ctx f.cf_type) :: acc) a.a_fields [] in
 		"{" ^ (if not (is_closed a) then "+" else "") ^  String.concat "," fl ^ " }"
 	| TDynamic t2 ->
 		"Dynamic" ^ s_type_params ctx (if t == t2 then [] else [t2])
@@ -975,11 +976,18 @@ let quick_field t n =
 	| TAnon a ->
 		(match !(a.a_status) with
 		| EnumStatics e ->
-			assert false (* to replace with FEnum later *)
+			let ef = PMap.find n e.e_constrs in
+			FEnum(e,ef)
 		| Statics c ->
 			FStatic (c,PMap.find n c.cl_statics)
-		| AbstractStatics _ ->
-			assert false
+		| AbstractStatics a ->
+			begin match a.a_impl with
+				| Some c ->
+					let cf = PMap.find n c.cl_statics in
+					FStatic(c,cf) (* is that right? *)
+				| _ ->
+					raise Not_found
+			end
 		| _ ->
 			FAnon (PMap.find n a.a_fields))
 	| TDynamic _ ->
@@ -1232,6 +1240,11 @@ and unify_from_field ab tl a b ?(allow_transitive_cast=true) (t,cfo) =
 				let monos = List.map (fun _ -> mk_mono()) cf.cf_params in
 				let map t = apply_params ab.a_types tl (apply_params cf.cf_params monos t) in
 				unify_func a (map t);
+				List.iter2 (fun m (name,t) -> match follow t with
+					| TInst ({ cl_kind = KTypeParameter constr },_) when constr <> [] ->
+						List.iter (fun tc -> match follow m with TMono _ -> raise (Unify_error []) | _ -> unify m (map tc) ) constr
+					| _ -> ()
+				) monos cf.cf_params;
 				unify (map r) b;
 			| _ -> assert false)
 		| _ ->
@@ -1248,8 +1261,13 @@ and unify_to_field ab tl b ?(allow_transitive_cast=true) (t,cfo) =
 	let a = TAbstract(ab,tl) in
 	if (List.exists (fun (b2,a2) -> fast_eq a a2 && fast_eq b b2) (!abstract_cast_stack)) then false else begin
 	abstract_cast_stack := (b,a) :: !abstract_cast_stack;
-	let unify_func = match follow b with TAbstract({a_impl = Some _},_) when ab.a_impl <> None || not allow_transitive_cast -> type_eq EqStrict | _ -> unify in
-	let b = try begin match cfo with
+	let unify_func = match follow b with
+		| TAbstract(ab2,_) when not (Meta.has Meta.CoreType ab.a_meta) || not (Meta.has Meta.CoreType ab2.a_meta) || not allow_transitive_cast ->
+			type_eq EqStrict
+		| _ ->
+			unify
+	in
+	let r = try begin match cfo with
 		| Some cf -> (match follow cf.cf_type with
 			| TFun((_,_,ta) :: _,_) ->
 				let monos = List.map (fun _ -> mk_mono()) cf.cf_params in
@@ -1257,7 +1275,7 @@ and unify_to_field ab tl b ?(allow_transitive_cast=true) (t,cfo) =
 				let athis = map ab.a_this in
 				(* we cannot allow implicit casts when the this type is not completely known yet *)
 				if has_mono athis then raise (Unify_error []);
-				type_eq EqStrict athis (map ta);
+				with_variance (type_eq EqStrict) athis (map ta);
 				(* immediate constraints checking is ok here because we know there are no monomorphs *)
 				List.iter2 (fun m (name,t) -> match follow t with
 					| TInst ({ cl_kind = KTypeParameter constr },_) when constr <> [] ->
@@ -1273,35 +1291,51 @@ and unify_to_field ab tl b ?(allow_transitive_cast=true) (t,cfo) =
 	with Unify_error _ -> false
 	in
 	abstract_cast_stack := List.tl !abstract_cast_stack;
-	b
+	r
 	end
+
+and unify_with_variance t1 t2 =
+	let allows_variance_to t (tf,cfo) = match cfo with
+		| None -> type_iseq tf t
+		| Some _ -> false
+	in
+	match follow t1,follow t2 with
+	| TInst(c1,tl1),TInst(c2,tl2) when c1 == c2 ->
+		List.iter2 unify_with_variance tl1 tl2
+	| TEnum(en1,tl1),TEnum(en2,tl2) when en1 == en2 ->
+		List.iter2 unify_with_variance tl1 tl2
+	| TAbstract(a1,pl1),TAbstract(a2,pl2) ->
+		let ta1 = apply_params a1.a_types pl1 a1.a_this in
+		let ta2 = apply_params a2.a_types pl2 a2.a_this in
+		if not (Meta.has Meta.CoreType a1.a_meta) && not (Meta.has Meta.CoreType a2.a_meta) then
+			type_eq EqStrict ta1 ta2;
+		if not (List.exists (allows_variance_to ta2) a1.a_to) && not (List.exists (allows_variance_to ta1) a2.a_from) then
+			error [cannot_unify t1 t2]
+	| TAbstract(a,pl),t ->
+		type_eq EqStrict (apply_params a.a_types pl a.a_this) t;
+		if not (List.exists (allows_variance_to t) a.a_to) then error [cannot_unify t1 t2]
+	| t,TAbstract(a,pl) ->
+		type_eq EqStrict t (apply_params a.a_types pl a.a_this);
+		if not (List.exists (allows_variance_to t) a.a_from) then error [cannot_unify t1 t2]
+	| _ ->
+		error [cannot_unify t1 t2]
 
 and unify_types a b tl1 tl2 =
 	List.iter2 (fun t1 t2 ->
 		try
-			type_eq EqRightDynamic t1 t2
+			with_variance (type_eq EqRightDynamic) t1 t2
 		with Unify_error l ->
 			let err = cannot_unify a b in
-			let allows_variance_to t (tf,cfo) = match cfo with
-				| None -> type_iseq tf t
-				| Some _ -> false
-			in
-			(try (match follow t1, follow t2 with
-				| TAbstract({a_impl = Some _} as a1,pl1),TAbstract({a_impl = Some _ } as a2,pl2) ->
-					let ta1 = apply_params a1.a_types pl1 a1.a_this in
-					let ta2 = apply_params a2.a_types pl2 a2.a_this in
-					type_eq EqStrict ta1 ta2;
-					if not (List.exists (allows_variance_to ta2) a1.a_to) && not (List.exists (allows_variance_to ta1) a2.a_from) then raise (Unify_error l)
-				| TAbstract({a_impl = Some _} as a,pl),t ->
-					type_eq EqStrict (apply_params a.a_types pl a.a_this) t;
-					if not (List.exists (allows_variance_to t) a.a_to) then raise (Unify_error l)
-				| t,TAbstract({a_impl = Some _ } as a,pl) ->
-					type_eq EqStrict t (apply_params a.a_types pl a.a_this);
-					if not (List.exists (allows_variance_to t) a.a_from) then raise (Unify_error l)
-				| _ -> raise (Unify_error l))
-			with Unify_error _ ->
-				error (err :: (Invariant_parameter (t1,t2)) :: l))
+			error (err :: (Invariant_parameter (t1,t2)) :: l)
 	) tl1 tl2
+
+and with_variance f t1 t2 =
+	try
+		f t1 t2
+	with Unify_error l -> try
+		unify_with_variance t1 t2
+	with Unify_error _ ->
+		raise (Unify_error l)
 
 and unify_with_access t1 f2 =
 	match f2.cf_kind with
@@ -1489,7 +1523,19 @@ let map_expr_type f ft fv e =
 	| TEnumParameter (e1,ef,i) ->
 		{ e with eexpr = TEnumParameter(f e1,ef,i); etype = ft e.etype }
 	| TField (e1,v) ->
-		{ e with eexpr = TField (f e1,v); etype = ft e.etype }
+		let e1 = f e1 in
+		let v = try
+			let n = match v with
+				| FClosure _ -> raise Not_found
+				| FAnon f | FInstance (_,f) | FStatic (_,f) -> f.cf_name
+				| FEnum (_,f) -> f.ef_name
+				| FDynamic n -> n
+			in
+			quick_field e1.etype n
+		with Not_found ->
+			v
+		in
+		{ e with eexpr = TField (e1,v); etype = ft e.etype }
 	| TParenthesis e1 ->
 		{ e with eexpr = TParenthesis (f e1); etype = ft e.etype }
 	| TUnop (op,pre,e1) ->

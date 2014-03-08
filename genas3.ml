@@ -262,7 +262,7 @@ let rec type_str ctx t p =
 	| TInst (c,_) ->
 		(match c.cl_kind with
 		| KNormal | KGeneric | KGenericInstance _ | KAbstractImpl _ -> s_path ctx false c.cl_path p
-		| KTypeParameter _ | KExtension _ | KExpr _ | KMacroType -> "*")
+		| KTypeParameter _ | KExtension _ | KExpr _ | KMacroType | KGenericBuild _ -> "*")
 	| TFun _ ->
 		"Function"
 	| TMono r ->
@@ -580,10 +580,10 @@ and gen_expr ctx e =
 		print ctx " %s " (Ast.s_binop op);
 		gen_value_op ctx e2;
 	(* variable fields on interfaces are generated as (class["field"] as class) *)
-	| TField ({etype = TInst({cl_interface = true} as c,_)} as e,FInstance (_,{ cf_name = s }))
+	| TField ({etype = TInst({cl_interface = true} as c,_)} as ei,FInstance (_,{ cf_name = s }))
 		when (try (match (PMap.find s c.cl_fields).cf_kind with Var _ -> true | _ -> false) with Not_found -> false) ->
 		spr ctx "(";
-		gen_value ctx e;
+		gen_value ctx ei;
 		print ctx "[\"%s\"]" s;
 		print ctx " as %s)" (type_str ctx e.etype e.epos);
 	| TField({eexpr = TArrayDecl _} as e1,s) ->
@@ -850,7 +850,7 @@ and gen_value ctx e =
 		begin match s with
 		| "*" ->
 			gen_value ctx e1
-		| "Function" ->
+		| "Function" | "Array" ->
 			spr ctx "((";
 			gen_value ctx e1;
 			print ctx ") as %s)" s;
@@ -947,7 +947,10 @@ let generate_field ctx static f =
 		| _ -> ()
 	) f.cf_meta;
 	let public = f.cf_public || Hashtbl.mem ctx.get_sets (f.cf_name,static) || (f.cf_name = "main" && static)
-	    || f.cf_name = "resolve" || Ast.Meta.has Ast.Meta.Public f.cf_meta || (match ctx.curclass.cl_kind with KAbstractImpl _ -> Ast.Meta.has Ast.Meta.Op f.cf_meta | _ -> false) in
+	    || f.cf_name = "resolve" || Ast.Meta.has Ast.Meta.Public f.cf_meta
+	    (* consider all abstract methods public to avoid issues with inlined private access *)
+	    || (match ctx.curclass.cl_kind with KAbstractImpl _ -> true | _ -> false)
+	in
 	let rights = (if static then "static " else "") ^ (if public then "public" else "protected") in
 	let p = ctx.curclass.cl_pos in
 	match f.cf_expr, f.cf_kind with

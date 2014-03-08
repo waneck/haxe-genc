@@ -22,7 +22,7 @@ class Test #if swf_mark implements mt.Protect #end {
 		count++;
 		if (!Math.isFinite(v) || !Math.isFinite(v2))
 			eq(v, v2, pos);
-		else if ( Math.abs(v - v2) > 1e-15 ) {
+		else if ( Math.abs(v - v2) > 1e-10 ) {
 			report(v+" should be "+v2,pos);
 			success = false;
 		}
@@ -204,7 +204,7 @@ class Test #if swf_mark implements mt.Protect #end {
 	}
 
 	static function resetTimer() {
-		#if (neko || php || cpp)
+		#if (neko || php || cpp || java || cs)
 		#else
 		if( timer != null ) timer.stop();
 		timer = new haxe.Timer(10000);

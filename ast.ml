@@ -54,11 +54,13 @@ module Meta = struct
 		| Debug
 		| Decl
 		| DefParam
+    | Delegate
 		| Depend
 		| Deprecated
 		| DynamicObject
 		| Enum
 		| EnumConstructorParam
+		| Event
 		| Exhaustive
 		| Expose
 		| Extern
@@ -72,6 +74,7 @@ module Meta = struct
 		| FunctionCode
 		| FunctionTailCode
 		| Generic
+		| GenericBuild
 		| Getter
 		| Hack
 		| HaxeGeneric
@@ -111,6 +114,7 @@ module Meta = struct
 		| Overload
 		| Plain
 		| PrivateAccess
+		| Property
 		| Protected
 		| Public
 		| PublicFields

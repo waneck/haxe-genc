@@ -31,73 +31,7 @@
 	The unsigned Int type is only defined for Flash9 and C#.
 	Simulate it for other platforms.
 **/
-abstract UInt(Int) from Int {
-
-	@:commutative @:op(A + B) private static inline function addWithFloat(a:UInt, b:Float):Float {
-		return a.toFloat() + b;
-	}
-
-	@:commutative @:op(A * B) private static inline function mulWithFloat(a:UInt, b:Float):Float {
-		return a.toFloat() * b;
-	}
-
-	@:op(A / B) private static inline function divFloat(a:UInt, b:Float):Float {
-		return a.toFloat() / b;
-	}
-
-	@:op(A / B) private static inline function floatDiv(a:Float, b:UInt):Float {
-		return a / b.toFloat();
-	}
-
-	@:op(A - B) private static inline function subFloat(a:UInt, b:Float):Float {
-		return a.toFloat() - b;
-	}
-
-	@:op(A - B) private static inline function floatSub(a:Float, b:UInt):Float {
-		return a - b.toFloat();
-	}
-
-	@:op(A > B) private static inline function gtFloat(a:UInt, b:Float):Bool {
-		return a.toFloat() > b;
-	}
-
-	@:op(A >= B) private static inline function gteFloat(a:UInt, b:Float):Bool {
-		return a.toFloat() >= b;
-	}
-
-
-	@:op(A > B) private static inline function floatGt(a:Float, b:UInt):Bool {
-		return a > b.toFloat();
-	}
-
-	@:op(A >= B) private static inline function floatGte(a:Float, b:UInt):Bool {
-		return a >= b.toFloat();
-	}
-
-	@:op(A < B) private static inline function ltFloat(a:UInt, b:Float):Bool {
-		return a.toFloat() < b;
-	}
-
-	@:op(A <= B) private static inline function lteFloat(a:UInt, b:Float):Bool {
-		return a.toFloat() <= b;
-	}
-
-
-	@:op(A < B) private static inline function floatLt(a:Float, b:UInt):Bool {
-		return a < b.toFloat();
-	}
-
-	@:op(A <= B) private static inline function floatLte(a:Float, b:UInt):Bool {
-		return a <= b.toFloat();
-	}
-
-	@:op(A % B) private static inline function modFloat(a:UInt, b:Float):Float {
-		return a.toFloat() % b;
-	}
-
-	@:op(A % B) private static inline function floatMod(a:Float, b:UInt):Float {
-		return a % b.toFloat();
-	}
+abstract UInt(Int) from Int to Int {
 
 	@:op(A + B) private static inline function add(a:UInt, b:UInt):UInt {
 		return a.toInt() + b.toInt();
@@ -188,6 +122,72 @@ abstract UInt(Int) from Int {
 	@:op(A % B) private static inline function mod(a:UInt, b:UInt):UInt {
 		return a.toInt() % b.toInt();
 	}
+	
+	@:commutative @:op(A + B) private static inline function addWithFloat(a:UInt, b:Float):Float {
+		return a.toFloat() + b;
+	}
+
+	@:commutative @:op(A * B) private static inline function mulWithFloat(a:UInt, b:Float):Float {
+		return a.toFloat() * b;
+	}
+
+	@:op(A / B) private static inline function divFloat(a:UInt, b:Float):Float {
+		return a.toFloat() / b;
+	}
+
+	@:op(A / B) private static inline function floatDiv(a:Float, b:UInt):Float {
+		return a / b.toFloat();
+	}
+
+	@:op(A - B) private static inline function subFloat(a:UInt, b:Float):Float {
+		return a.toFloat() - b;
+	}
+
+	@:op(A - B) private static inline function floatSub(a:Float, b:UInt):Float {
+		return a - b.toFloat();
+	}
+
+	@:op(A > B) private static inline function gtFloat(a:UInt, b:Float):Bool {
+		return a.toFloat() > b;
+	}
+
+	@:op(A >= B) private static inline function gteFloat(a:UInt, b:Float):Bool {
+		return a.toFloat() >= b;
+	}
+
+
+	@:op(A > B) private static inline function floatGt(a:Float, b:UInt):Bool {
+		return a > b.toFloat();
+	}
+
+	@:op(A >= B) private static inline function floatGte(a:Float, b:UInt):Bool {
+		return a >= b.toFloat();
+	}
+
+	@:op(A < B) private static inline function ltFloat(a:UInt, b:Float):Bool {
+		return a.toFloat() < b;
+	}
+
+	@:op(A <= B) private static inline function lteFloat(a:UInt, b:Float):Bool {
+		return a.toFloat() <= b;
+	}
+
+
+	@:op(A < B) private static inline function floatLt(a:Float, b:UInt):Bool {
+		return a < b.toFloat();
+	}
+
+	@:op(A <= B) private static inline function floatLte(a:Float, b:UInt):Bool {
+		return a <= b.toFloat();
+	}
+
+	@:op(A % B) private static inline function modFloat(a:UInt, b:Float):Float {
+		return a.toFloat() % b;
+	}
+
+	@:op(A % B) private static inline function floatMod(a:Float, b:UInt):Float {
+		return a % b.toFloat();
+	}
 
 	@:op(~A) private inline function negBits():UInt {
 		return ~this;
@@ -214,7 +214,7 @@ abstract UInt(Int) from Int {
 		return Std.string(toFloat());
 	}
 
-	@:to private inline function toInt():Int {
+	private inline function toInt():Int {
 		return this;
 	}
 
@@ -227,10 +227,5 @@ abstract UInt(Int) from Int {
 			return int;
 		}
 	}
-	
-	@:to private inline function toDynamic():Dynamic {
-		return toFloat();
-	}
-
 }
 #end

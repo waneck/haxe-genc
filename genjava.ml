@@ -562,6 +562,8 @@ struct
             | _ ->
               { e with eexpr = TCall(run efield, List.map run args) }
           )
+(*         | TCall( { eexpr = TField(ef, FInstance({ cl_path = [], "String" }, { cf_name = ("toString") })) }, [] ) ->
+          run ef *)
 
         | TCast(expr, m) when is_boxed_type e.etype ->
           (* let unboxed_type gen t tbyte tshort tchar tfloat = match follow t with *)
@@ -1899,15 +1901,17 @@ let configure gen =
   TArrayTransform.configure gen (TArrayTransform.default_implementation gen (
   fun e ->
     match e.eexpr with
+      | TArray ({ eexpr = TLocal { v_extra = Some( _ :: _, _) } }, _) -> (* captured transformation *)
+        false
       | TArray(e1, e2) ->
-        ( match run_follow gen e1.etype with
+        ( match run_follow gen (follow e1.etype) with
           | TInst({ cl_path = (["java"], "NativeArray") }, _) -> false
           | _ -> true )
       | _ -> assert false
   ) "__get" "__set" );
 
   let field_is_dynamic t field =
-    match field_access gen (gen.greal_type t) field with
+    match field_access_esp gen (gen.greal_type t) field with
       | FClassField (cl,p,_,_,_,t,_) ->
         is_dynamic (apply_params cl.cl_types p t)
       | FEnumField _ -> false
@@ -1920,7 +1924,7 @@ let configure gen =
   in
 
   let is_dynamic_expr e = is_dynamic e.etype || match e.eexpr with
-    | TField(tf, f) -> field_is_dynamic tf.etype (field_name f)
+    | TField(tf, f) -> field_is_dynamic tf.etype f
     | _ -> false
   in
 
@@ -1947,12 +1951,12 @@ let configure gen =
     (DynamicOperators.abstract_implementation gen (fun e -> match e.eexpr with
       | TBinop (Ast.OpEq, e1, e2)
       | TBinop (Ast.OpAdd, e1, e2)
-      | TBinop (Ast.OpNotEq, e1, e2) -> is_dynamic e1.etype or is_dynamic e2.etype or is_type_param e1.etype or is_type_param e2.etype
+      | TBinop (Ast.OpNotEq, e1, e2) -> is_dynamic e1.etype || is_dynamic e2.etype || is_type_param e1.etype || is_type_param e2.etype
       | TBinop (Ast.OpLt, e1, e2)
       | TBinop (Ast.OpLte, e1, e2)
       | TBinop (Ast.OpGte, e1, e2)
-      | TBinop (Ast.OpGt, e1, e2) -> is_dynamic e.etype or is_dynamic_expr e1 or is_dynamic_expr e2 or is_string e1.etype or is_string e2.etype
-      | TBinop (_, e1, e2) -> is_dynamic e.etype or is_dynamic_expr e1 or is_dynamic_expr e2
+      | TBinop (Ast.OpGt, e1, e2) -> is_dynamic e.etype || is_dynamic_expr e1 || is_dynamic_expr e2 || is_string e1.etype || is_string e2.etype
+      | TBinop (_, e1, e2) -> is_dynamic e.etype || is_dynamic_expr e1 || is_dynamic_expr e2
       | TUnop (_, _, e1) -> is_dynamic_expr e1
       | _ -> false)
     (fun e1 e2 ->
@@ -2380,8 +2384,11 @@ let convert_java_enum ctx p pe =
   let meta = ref [Meta.Native, [EConst (String (real_java_path ctx pe.cpath) ), p], p ] in
   let data = ref [] in
   List.iter (fun f ->
-    if List.mem JEnum f.jf_flags then
+    (* if List.mem JEnum f.jf_flags then *)
+    match f.jf_vmsignature with
+    | TObject( path, [] ) when path = pe.cpath && List.mem JStatic f.jf_flags && List.mem JFinal f.jf_flags ->
       data := { ec_name = f.jf_name; ec_doc = None; ec_meta = []; ec_args = []; ec_pos = p; ec_params = []; ec_type = None; } :: !data;
+    | _ -> ()
   ) pe.cfields;
 
   EEnum {
@@ -2390,7 +2397,7 @@ let convert_java_enum ctx p pe =
     d_params = []; (* enums never have type parameters *)
     d_meta = !meta;
     d_flags = [EExtern];
-    d_data = !data;
+    d_data = List.rev !data;
   }
 
   let convert_java_field ctx p jc field =
@@ -2837,6 +2844,7 @@ let normalize_jclass com cls =
   let cmethods = ref methods in
   let all_methods = ref methods in
   let all_fields = ref cls.cfields in
+  let super_fields = ref [] in
   let super_methods = ref [] in
   (* fix overrides *)
   let rec loop cls = try
@@ -2849,6 +2857,7 @@ let normalize_jclass com cls =
       super_methods := cls.cmethods @ !super_methods;
       all_methods := cls.cmethods @ !all_methods;
       all_fields := cls.cfields @ !all_fields;
+      super_fields := cls.cfields @ !super_fields;
       let overriden = ref [] in
       cmethods := List.map (fun jm ->
         (* TODO rewrite/standardize empty spaces *)
@@ -2871,6 +2880,7 @@ let normalize_jclass com cls =
   if not (List.mem JInterface cls.cflags) then begin
     cmethods := List.filter (fun f -> List.exists (function | JPublic | JProtected -> true | _ -> false) f.jf_flags) !cmethods;
     all_fields := List.filter (fun f -> List.exists (function | JPublic | JProtected -> true | _ -> false) f.jf_flags) !all_fields;
+    super_fields := List.filter (fun f -> List.exists (function | JPublic | JProtected -> true | _ -> false) f.jf_flags) !super_fields;
   end;
   loop cls;
   (* look for interfaces and add missing implementations (may happen on abstracts or by vmsig differences *)
@@ -2938,6 +2948,13 @@ let normalize_jclass com cls =
       not (List.exists (filter_field f) cmethods)
     else
       not (List.exists (filter_field f) !nonstatics) && not (List.exists (fun f2 -> f != f2 && f.jf_name = f2.jf_name && not (List.mem JStatic f2.jf_flags)) !all_fields) ) cfields
+  in
+  (* now filter any method that clashes with a field - on a superclass *)
+  let cmethods = List.filter (fun f ->
+    if List.mem JStatic f.jf_flags then
+      true
+    else
+      not (List.exists (filter_field f) !super_fields) ) cmethods
   in
   (* removing duplicate fields. They are there because of return type covariance in Java *)
   (* Also, if a method overrides a previous definition, and changes a type parameters' variance, *)

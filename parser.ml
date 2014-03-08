@@ -62,6 +62,11 @@ let quote_ident s =
 	with Exit ->
 		quoted_ident_prefix ^ s
 
+let unquote_ident f =
+	let pf = quoted_ident_prefix in
+	let pflen = String.length pf in
+	if String.length f >= pflen && String.sub f 0 pflen = pf then String.sub f pflen (String.length f - pflen), false else f, true
+
 let cache = ref (DynArray.create())
 let last_doc = ref None
 let use_doc = ref false
@@ -535,7 +540,11 @@ let semicolon s =
 let rec	parse_file s =
 	last_doc := None;
 	match s with parser
-	| [< '(Kwd Package,_); p = parse_package; _ = semicolon; l = parse_type_decls p []; '(Eof,_) >] -> p , l
+	| [< '(Kwd Package,_); pack = parse_package; s >] ->
+		begin match s with parser
+		| [< '(Const(Ident _),p) when pack = [] >] -> error (Custom "Package name must start with a lowercase character") p
+		| [< _ = semicolon; l = parse_type_decls pack []; '(Eof,_) >] -> pack , l
+		end
 	| [< l = parse_type_decls [] []; '(Eof,_) >] -> [] , l
 
 and parse_type_decls pack acc s =
@@ -709,6 +718,9 @@ and parse_class_field_resume tdecl s =
 		in
 		let rec loop k =
 			match List.rev_map fst (Stream.npeek k s) with
+			(* metadata *)
+			| Kwd _ :: At :: _ | Kwd _ :: DblDot :: At :: _ ->
+				loop (k + 1)
 			(* field declaration *)
 			| Const _ :: Kwd Function :: _
 			| Kwd New :: Kwd Function :: _ ->
