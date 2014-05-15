@@ -1087,6 +1087,7 @@ let run com tctx main =
 	end;
 	if not (Common.defined com Define.NoDeprecationWarnings) then
 		Codegen.DeprecationCheck.run com;
+	List.iter (run_expression_filters tctx [Analyzer.run com]) com.types;
 	(* PASS 1: general expression filters *)
  	let filters = [
  		Codegen.UnificationCallback.run (check_unification com);
