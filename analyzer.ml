@@ -190,10 +190,112 @@ module Simplifier = struct
 		end
 end
 
+module Ssa = struct
+	type ssa_context = {
+		mutable ssa_var_map : (int,tvar) PMap.t;
+		mutable ssa_var_values : (int,texpr) PMap.t;
+	}
+
+	let apply e =
+		let var_map = ref PMap.empty in
+		let var_count = ref PMap.empty in
+		let ssa = {
+			ssa_var_map = PMap.empty;
+			ssa_var_values = PMap.empty;
+		} in
+		let set_value v e =
+			ssa.ssa_var_values <- PMap.add v.v_id e ssa.ssa_var_values
+		in
+		let assign v e =
+			let v2 = try
+				let count = (PMap.find v.v_id !var_count) + 1 in
+				var_count := PMap.add v.v_id count !var_count;
+				let name = Printf.sprintf "%s<%i>" v.v_name count in
+				let v2 = alloc_var name v.v_type in
+				var_map := PMap.add v.v_id v2 !var_map;
+				ssa.ssa_var_map <- PMap.add v2.v_id v ssa.ssa_var_map;
+				v2
+			with Not_found ->
+				v
+			in
+			set_value v e;
+			mk (TLocal v2) v2.v_type e.epos
+		in
+		let rec loop e = match e.eexpr with
+			| TVar(v,eo) ->
+				var_count := PMap.add v.v_id (-1) !var_count;
+				begin match eo with
+					| None ->
+						()
+					| Some e ->
+						set_value v e
+				end;
+				e
+			| TBinop(OpAssign,{eexpr = TLocal v},e2) ->
+				{e with eexpr = TBinop(OpAssign,assign v e2, e2) }
+			| TLocal v ->
+				begin try
+					let v2 = PMap.find v.v_id !var_map in
+					mk (TLocal v2) v2.v_type e.epos
+				with Not_found ->
+					e
+				end
+			| _ ->
+				Type.map_expr loop e
+		in
+		loop e,ssa
+
+	let unapply ssa e =
+		let rec loop e = match e.eexpr with
+			| TLocal v ->
+				begin try
+					let v2 = PMap.find v.v_id ssa.ssa_var_map in
+					{e with eexpr = TLocal v2}
+				with Not_found ->
+					e
+				end
+			| _ ->
+				Type.map_expr loop e
+		in
+		loop e
+end
+
+module ConstPropagation = struct
+	open Ssa
+	let run ssa e =
+		let rec loop e = match e.eexpr with
+			| TLocal v ->
+				let rec find v =
+					let e2 = PMap.find v.v_id ssa.ssa_var_values in
+					let rec loop e2 = match e2.eexpr with
+						| TConst _ ->
+							e2
+						| TLocal v ->
+							find v
+						| _ ->
+							e
+					in
+					loop e2
+				in
+				begin try
+					find v
+				with Not_found ->
+					e
+				end
+			| _ ->
+				Type.map_expr loop e
+		in
+		loop e
+end
+
 let run com e =
 	let n = ref (-1) in
 	let gen_local t =
 		incr n;
 		alloc_var ("_" ^ (string_of_int !n)) t
 	in
-	Simplifier.run com gen_local e
+	let e = Simplifier.run com gen_local e in
+	let e,ssa = Ssa.apply e in
+	let e = ConstPropagation.run ssa e in
+	let e = Ssa.unapply ssa e in
+	e
