@@ -54,7 +54,7 @@ package haxe.ds;
 	public function iterator() : Iterator<T> {
 		return untyped {
 			ref : h,
-			it : keys(),
+			it : __keys__(h).iterator(),
 			hasNext : function() { return __this__.it.hasNext(); },
 			next : function() { var i = __this__.it.next(); return __this__.ref[i]; }
 		};
