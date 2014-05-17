@@ -6,21 +6,45 @@ module Simplifier = struct
 	let mk_block_context com gen_temp =
 		let block_el = ref [] in
 		let push e = block_el := e :: !block_el in
-		let declare_temp t eo p =
+		let rec assign ev e =
+			let mk_assign e2 = mk (TBinop(OpAssign,ev,e2)) e2.etype e2.epos in
+			let rec loop e = match e.eexpr with
+	 			| TBlock el ->
+					begin match List.rev el with
+						| e1 :: el ->
+							let el = List.rev ((loop e1) :: el) in
+							{e with eexpr = TBlock el}
+						| _ ->
+							mk_assign e
+					end
+				| TIf(e1,e2,eo) ->
+					let e2 = loop e2 in
+					let eo = match eo with None -> None | Some e3 -> Some (loop e3) in
+					{e with eexpr = TIf(e1,e2,eo)}
+				| _ ->
+					mk_assign e
+			in
+			push (loop e)
+		and declare_temp t eo p =
 			let v = gen_temp t in
-			let e = mk (TVar (v,eo)) com.basic.tvoid p in
+			let e = mk (TVar (v,None)) com.basic.tvoid p in
 			push e;
-			mk (TLocal v) t p
-		in
-		let push_block () =
+			let e_v = mk (TLocal v) t p in
+			begin match eo with
+				| None ->
+					()
+				| Some e1 ->
+					assign e_v e1
+			end;
+			e_v
+		and push_block () =
 			let cur = !block_el in
 			block_el := [];
 			fun () ->
 				let added = !block_el in
 				block_el := cur;
 				List.rev added
-		in
-		let rec block f el =
+		and block f el =
 			let close = push_block() in
 			List.iter (fun e ->
 				push (f e)
