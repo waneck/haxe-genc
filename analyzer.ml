@@ -2,11 +2,15 @@ open Ast
 open Common
 open Type
 
+let s_expr = s_expr (s_type (print_context()))
+let debug e = if e.epos.pfile = "src/Main.hx" then print_endline (s_expr e)
+
 module Simplifier = struct
 	let mk_block_context com gen_temp =
 		let block_el = ref [] in
 		let push e = block_el := e :: !block_el in
 		let assign ev e =
+			(* debug e; *)
 			let mk_assign e2 = mk (TBinop(OpAssign,ev,e2)) e2.etype e2.epos in
 			let rec loop e = match e.eexpr with
 	 			| TBlock el ->
@@ -28,6 +32,9 @@ module Simplifier = struct
 					) cases in
 					let edef = match edef with None -> None | Some edef -> Some (loop edef) in
 					{e with eexpr = TSwitch(e1,cases,edef)}
+				| TBinop(OpAssign,({eexpr = TLocal _} as e1),e2) ->
+					push e;
+					mk_assign e1
 				| _ ->
 					mk_assign e
 			in
@@ -133,8 +140,8 @@ module Simplifier = struct
 				let e2 = loop e2 in
 				{e with eexpr = TBinop(op,e1,e2)}
 			| TBinop((OpAssign | OpAssignOp _) as op,e1,e2) ->
-				let e1 = loop e1 in
 				let e2 = bind e2 in
+				let e1 = loop e1 in
 				{e with eexpr = TBinop(op,e1,e2)}
 	 		| TBinop(op,e1,e2) ->
 				begin match ordered_list [e1;e2] with
@@ -196,7 +203,7 @@ module Ssa = struct
 		mutable ssa_var_values : (int,texpr) PMap.t;
 	}
 
-	let apply e =
+	let apply com e =
 		let var_map = ref PMap.empty in
 		let var_count = ref PMap.empty in
 		let ssa = {
@@ -204,6 +211,7 @@ module Ssa = struct
 			ssa_var_values = PMap.empty;
 		} in
 		let set_value v e =
+			(* if e.epos.pfile = "src/Main.hx" then Printf.printf "set value %s = %s\n" v.v_name (s_expr e); *)
 			ssa.ssa_var_values <- PMap.add v.v_id e ssa.ssa_var_values
 		in
 		let assign v e =
@@ -218,21 +226,36 @@ module Ssa = struct
 			with Not_found ->
 				v
 			in
-			set_value v e;
+			set_value v2 e;
 			mk (TLocal v2) v2.v_type e.epos
+		in
+		let declare v =
+			var_count := PMap.add v.v_id (-1) !var_count;
 		in
 		let rec loop e = match e.eexpr with
 			| TVar(v,eo) ->
-				var_count := PMap.add v.v_id (-1) !var_count;
-				begin match eo with
+				declare v;
+				let eo = match eo with
 					| None ->
-						()
+						None
 					| Some e ->
-						set_value v e
-				end;
-				e
+						let e = loop e in
+						set_value v e;
+						Some e
+				in
+				{e with eexpr = TVar(v,eo)}
+			| TFunction tf ->
+				List.iter (fun (v,_) -> declare v) tf.tf_args;
+				{e with eexpr = TFunction {tf with tf_expr = loop tf.tf_expr}}
 			| TBinop(OpAssign,{eexpr = TLocal v},e2) ->
-				{e with eexpr = TBinop(OpAssign,assign v e2, e2) }
+				let e2 = loop e2 in
+				{e with eexpr = TBinop(OpAssign,assign v e2,e2)}
+(* 			| TUnop((Increment | Decrement) as op,_,({eexpr = TLocal v} as e1)) ->
+				let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
+				let binop = if op = Increment then OpAdd else OpSub in
+				let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
+				(* {e with eexpr = TBinop(OpAssign,assign v e_op, e_op) } *)
+				assign v e_op *)
 			| TLocal v ->
 				begin try
 					let v2 = PMap.find v.v_id !var_map in
@@ -243,7 +266,8 @@ module Ssa = struct
 			| _ ->
 				Type.map_expr loop e
 		in
-		loop e,ssa
+		let e = loop e in
+		e,ssa
 
 	let unapply ssa e =
 		let rec loop e = match e.eexpr with
@@ -282,6 +306,9 @@ module ConstPropagation = struct
 				with Not_found ->
 					e
 				end
+			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
+				let e2 = loop e2 in
+				{e with eexpr = TBinop(OpAssign,e1,e2)}
 			| _ ->
 				Type.map_expr loop e
 		in
@@ -295,7 +322,7 @@ let run com e =
 		alloc_var ("_" ^ (string_of_int !n)) t
 	in
 	let e = Simplifier.run com gen_local e in
-	let e,ssa = Ssa.apply e in
+	let e,ssa = Ssa.apply com e in
 	let e = ConstPropagation.run ssa e in
 	let e = Ssa.unapply ssa e in
 	e
