@@ -1100,7 +1100,8 @@ let run com tctx main =
 		Codegen.Abstract.handle_abstract_casts tctx;
 		blockify_ast;
 		(if Common.defined com Define.As3 then (fun e -> e) else Analyzer.run com);
-		if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else Optimizer.sanitize tctx;
+		(* if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else *)
+		Optimizer.sanitize tctx;
 		check_local_vars_init;
 		captured_vars com;
 	] in
