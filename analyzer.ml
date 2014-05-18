@@ -232,7 +232,27 @@ module Ssa = struct
 		let declare v =
 			var_count := PMap.add v.v_id (-1) !var_count;
 		in
+		let cur_el = ref [] in
+		let post_el = ref [] in
 		let rec loop e = match e.eexpr with
+			| TBlock el ->
+				let old = !cur_el in
+				cur_el := [];
+				List.iter (fun e ->
+					let e = loop e in
+					cur_el := e :: !cur_el;
+					match !post_el with
+						| [] ->
+							()
+						| el ->
+							List.iter (fun e ->
+								cur_el := e :: !cur_el
+							) el;
+							post_el := [];
+				) el;
+				let new_el = !cur_el in
+				cur_el := old;
+				{e with eexpr = TBlock (List.rev new_el)}
 			| TVar(v,eo) ->
 				declare v;
 				let eo = match eo with
@@ -250,12 +270,20 @@ module Ssa = struct
 			| TBinop(OpAssign,{eexpr = TLocal v},e2) ->
 				let e2 = loop e2 in
 				{e with eexpr = TBinop(OpAssign,assign v e2,e2)}
-(* 			| TUnop((Increment | Decrement) as op,_,({eexpr = TLocal v} as e1)) ->
+			| TUnop((Increment | Decrement) as op,flag,({eexpr = TLocal v} as e1)) ->
 				let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 				let binop = if op = Increment then OpAdd else OpSub in
+				let e1 = loop e1 in
 				let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
-				(* {e with eexpr = TBinop(OpAssign,assign v e_op, e_op) } *)
-				assign v e_op *)
+				let ev = assign v e_op in
+				let e_assign = {e with eexpr = TBinop(OpAssign,ev,e_op) } in
+				if flag = Prefix then begin
+					cur_el := e_assign :: !cur_el;
+					ev
+				end else begin
+					post_el := e_assign :: !post_el;
+					e1
+				end
 			| TLocal v ->
 				begin try
 					let v2 = PMap.find v.v_id !var_map in
@@ -323,6 +351,6 @@ let run com e =
 	in
 	let e = Simplifier.run com gen_local e in
 	let e,ssa = Ssa.apply com e in
-	let e = ConstPropagation.run ssa e in
+	(* let e = ConstPropagation.run ssa e in *)
 	let e = Ssa.unapply ssa e in
 	e
