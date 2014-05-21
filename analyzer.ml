@@ -119,11 +119,11 @@ module Simplifier = struct
 				{e with eexpr = TNew(c,tl,ordered_list el)}
 			| TArrayDecl el ->
 				{e with eexpr = TArrayDecl (ordered_list el)}
-			| TObjectDecl _ ->
-				e
-(* 			| TObjectDecl fl ->
+(* 			| TObjectDecl _ ->
+				e *)
+			| TObjectDecl fl ->
 				let el = ordered_list (List.map snd fl) in
-				{e with eexpr = TObjectDecl (List.map2 (fun (n,_) e -> n,e) fl el)} *)
+				{e with eexpr = TObjectDecl (List.map2 (fun (n,_) e -> n,e) fl el)}
 			| TBinop(OpBoolAnd | OpBoolOr as op,e1,e2) ->
 				let e1 = loop e1 in
 				let e_then = mk (TBlock (block loop [e2])) e2.etype e2.epos in
@@ -371,7 +371,7 @@ module ConstPropagation = struct
 	open Ssa
 	let run ssa e =
 		let rec loop e = match e.eexpr with
-			| TLocal v ->
+			| TLocal v when follow v.v_type != t_dynamic ->
 				begin try
 					let e' = loop (PMap.find v.v_id ssa.ssa_var_values) in
 					begin match e'.eexpr with
@@ -458,7 +458,7 @@ let run com e =
 	let e = Simplifier.run com gen_local e in
 	let e = try
 		let e,ssa = Ssa.apply com e in
-		let e = ConstPropagation.run ssa e in
+		(* let e = ConstPropagation.run ssa e in *)
 		let e = Ssa.unapply ssa e in
 		let e = LocalDce.run e in
 		e
