@@ -35,6 +35,9 @@ module Simplifier = struct
 				| TBinop(OpAssign,({eexpr = TLocal _} as e1),e2) ->
 					push e;
 					mk_assign e1
+				| TBinop(OpAssignOp op,({eexpr = TLocal _} as e1),e2) ->
+					push e;
+					mk_assign e1
 				| _ ->
 					mk_assign e
 			in
@@ -214,6 +217,12 @@ module Ssa = struct
 			(* if e.epos.pfile = "src/Main.hx" then Printf.printf "set value %s = %s\n" v.v_name (s_expr e); *)
 			ssa.ssa_var_values <- PMap.add v.v_id e ssa.ssa_var_values
 		in
+		let save () =
+			let old = ssa.ssa_var_values in
+			(fun () ->
+				ssa.ssa_var_values <- old
+			)
+		in
 		let assign v e =
 			let v2 = try
 				let count = (PMap.find v.v_id !var_count) + 1 in
@@ -234,6 +243,7 @@ module Ssa = struct
 		in
 		let cur_el = ref [] in
 		let post_el = ref [] in
+		let first_function = ref true in
 		let rec loop e = match e.eexpr with
 			| TBlock el ->
 				let old = !cur_el in
@@ -265,11 +275,20 @@ module Ssa = struct
 				in
 				{e with eexpr = TVar(v,eo)}
 			| TFunction tf ->
+				if not !first_function then raise Exit;
+				first_function := false;
 				List.iter (fun (v,_) -> declare v) tf.tf_args;
 				{e with eexpr = TFunction {tf with tf_expr = loop tf.tf_expr}}
 			| TBinop(OpAssign,{eexpr = TLocal v},e2) ->
 				let e2 = loop e2 in
 				{e with eexpr = TBinop(OpAssign,assign v e2,e2)}
+			| TBinop(OpAssignOp op,({eexpr = TLocal v} as e1),e2) ->
+				let e1 = loop e1 in
+				let e2 = loop e2 in
+				let e_op = mk (TBinop(op,e1,e2)) e.etype e.epos in
+				let ev = assign v e_op in
+				let e_assign = {e with eexpr = TBinop(OpAssign,ev,e_op) } in
+				e_assign
 			| TUnop((Increment | Decrement) as op,flag,({eexpr = TLocal v} as e1)) ->
 				let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 				let binop = if op = Increment then OpAdd else OpSub in
@@ -284,6 +303,42 @@ module Ssa = struct
 					post_el := e_assign :: !post_el;
 					e1
 				end
+			| TIf(e1,e2,eo) ->
+				let e1 = loop e1 in
+				let restore1 = save() in
+				let e2 = loop e2 in
+				restore1();
+				let eo = match eo with
+					| None ->
+						None
+					| Some e ->
+						let restore2 = save() in
+						let e = loop e in
+						restore2();
+						Some e
+				in
+				{e with eexpr = TIf(e1,e2,eo)}
+			| TSwitch(e1,cases,eo) ->
+				let e1 = loop e1 in
+				let cases = List.map (fun (el,e) ->
+					let restore = save() in
+					let el = List.map loop el in
+					let e = loop e in
+					restore();
+					el,e
+				) cases in
+				let eo = match eo with
+					| None ->
+						None
+					| Some e ->
+						let restore = save() in
+						let e = loop e in
+						restore();
+						Some e
+				in
+				{e with eexpr = TSwitch(e1,cases,eo)}
+			| TWhile _ | TFor _ ->
+				raise Exit
 			| TLocal v ->
 				begin try
 					let v2 = PMap.find v.v_id !var_map in
@@ -317,23 +372,74 @@ module ConstPropagation = struct
 	let run ssa e =
 		let rec loop e = match e.eexpr with
 			| TLocal v ->
-				let rec find v =
-					let e2 = PMap.find v.v_id ssa.ssa_var_values in
-					let rec loop e2 = match e2.eexpr with
+				begin try
+					let e' = loop (PMap.find v.v_id ssa.ssa_var_values) in
+					begin match e'.eexpr with
+						| TConst (TThis | TSuper) ->
+							e
 						| TConst _ ->
-							e2
-						| TLocal v ->
-							find v
+							e'
 						| _ ->
 							e
-					in
-					loop e2
-				in
-				begin try
-					find v
+					end
 				with Not_found ->
 					e
 				end
+			| TBinop((OpAssign | OpAssignOp _) as op,({eexpr = TLocal v} as e1),e2) ->
+				let e2 = loop e2 in
+				{e with eexpr = TBinop(op,e1,e2)}
+			| TBinop(op,e1,e2) ->
+				let e1 = loop e1 in
+				let e2 = loop e2 in
+				let e = {e with eexpr = TBinop(op,e1,e2)} in
+				let e' = Optimizer.optimize_binop e op e1 e2 in
+				e'
+			| _ ->
+				Type.map_expr loop e
+		in
+		loop e
+end
+
+module LocalDce = struct
+	let run e =
+		let is_used v = Meta.has Meta.Used v.v_meta in
+		let use v = v.v_meta <- (Meta.Used,[],Ast.null_pos) :: v.v_meta in
+		let rec filter e = match e.eexpr with
+			| TVar(v,eo) when not (is_used v) ->
+				begin match eo with
+					| None ->
+						None
+					| Some e when not (Optimizer.has_side_effect e) ->
+						None
+					| Some e ->
+						Some e
+				end
+			| TBinop(OpAssign,{eexpr = TLocal v},e2) when not (is_used v) ->
+				filter e2
+			| TLocal v when not (is_used v) ->
+				None
+			| _ ->
+				Some e
+		in
+		let rec loop e = match e.eexpr with
+			| TBlock el ->
+				let rec block el = match el with
+					| e :: el ->
+						let el = block el in
+						let e = loop e in
+						begin match filter e with
+							| None ->
+								el
+							| Some e ->
+								e :: el
+						end
+					| [] ->
+						[]
+				in
+				{e with eexpr = TBlock (block el)}
+			| TLocal v ->
+				use v;
+				e
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
 				let e2 = loop e2 in
 				{e with eexpr = TBinop(OpAssign,e1,e2)}
@@ -350,7 +456,13 @@ let run com e =
 		alloc_var ("_" ^ (string_of_int !n)) t
 	in
 	let e = Simplifier.run com gen_local e in
-	let e,ssa = Ssa.apply com e in
-	(* let e = ConstPropagation.run ssa e in *)
-	let e = Ssa.unapply ssa e in
+	let e = try
+		let e,ssa = Ssa.apply com e in
+		let e = ConstPropagation.run ssa e in
+		let e = Ssa.unapply ssa e in
+		let e = LocalDce.run e in
+		e
+	with Exit ->
+		e
+	in
 	e
