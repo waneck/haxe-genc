@@ -195,19 +195,19 @@ class TestCSharp extends Test
 		eq(cl.test,40);
 	}
 
-	public function testChecked()
-	{
-		exc(function()
-				{
-					cs.Lib.checked({
-						var x = 1000;
-						while(true)
-					{
-						x *= x;
-					}
-					});
-				});
-	}
+	//public function testChecked()
+	//{
+		//exc(function()
+				//{
+					//cs.Lib.checked({
+						//var x = 1000;
+						//while(true)
+					//{
+						//x *= x;
+					//}
+					//});
+				//});
+	//}
 
 	public function testUncheckedAttribute()
 	{

@@ -9,6 +9,8 @@ class InlineCtor {
 }
 
 class Test {
+	#if !static_analyzer
+
 	@:js('3;')
 	static function testNoOpRemoval() {
 		1;
