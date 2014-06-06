@@ -2,11 +2,15 @@ var path = "/dir1/dir2/file.ext";
 var path2 = "/dir1/dir.with.dots\\file";
 var path3 = ".htaccess";
 var path4 = "/dir/";
+var path5 = "..";
+var path6 = ".";
 
 var p1 = new haxe.io.Path(path);
 var p2 = new haxe.io.Path(path2);
 var p3 = new haxe.io.Path(path3);
 var p4 = new haxe.io.Path(path4);
+var p5 = new haxe.io.Path(path5);
+var p6 = new haxe.io.Path(path6);
 
 p1.ext == "ext";
 p1.dir == "/dir1/dir2";
@@ -23,6 +27,14 @@ p3.file == "";
 p4.ext == null;
 p4.dir == "/dir";
 p4.file == "";
+
+p5.ext == null;
+p5.dir == "..";
+p5.file == "";
+
+p6.ext == null;
+p6.dir == ".";
+p6.file == "";
 
 // toString
 p1.toString() == path;
@@ -66,6 +78,9 @@ haxe.io.Path.normalize("/dir1/dir2/../../test.foo") == "/test.foo";
 haxe.io.Path.normalize("dir1/dir2/dir3/dir4/../../../dir5") == "dir1/dir5";
 haxe.io.Path.normalize("C:\\Windows\\..\\Users/Waneck on Windows///.haxelib") == "C:/Users/Waneck on Windows/.haxelib";
 haxe.io.Path.normalize("http://haxe.org/downloads") == "http://haxe.org/downloads";
+haxe.io.Path.normalize("../mydir") == "../mydir";
+haxe.io.Path.normalize("../../mydir") == "../../mydir";
+haxe.io.Path.normalize("dir1/.././../mydir/..") == "..";
 
 // join
 haxe.io.Path.join(["dir1/dir2", "dir3/dir4"]) == "dir1/dir2/dir3/dir4";

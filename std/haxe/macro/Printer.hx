@@ -24,6 +24,7 @@ package haxe.macro;
 
 import haxe.macro.Expr;
 using Lambda;
+using StringTools;
 
 class Printer {
 	var tabs:String;
@@ -69,9 +70,19 @@ class Printer {
 			printBinop(op)
 			+ "=";
 	}
-	public function printString(s:String) {
-		return '"' + s.split("\n").join("\\n").split("\t").join("\\t").split("'").join("\\'").split('"').join("\\\"") #if sys .split("\x00").join("\\x00") #end + '"';
+
+	function escapeString(s:String,delim:String) {
+		return delim + s.replace("\n","\\n").replace("\t","\\t").replace("'","\\'").replace('"',"\\\"") #if sys .replace("\x00","\\x00") #end + delim;
 	}
+
+	public function printFormatString(s:String) {
+		return escapeString(s,"'");
+	}
+
+	public function printString(s:String) {
+		return escapeString(s,'"');
+	}
+
 	public function printConstant(c:Constant) return switch(c) {
 		case CString(s): printString(s);
 		case CIdent(s),
@@ -90,7 +101,7 @@ class Printer {
 		(tp.pack.length > 0 ? tp.pack.join(".") + "." : "")
 		+ tp.name
 		+ (tp.sub != null ? '.${tp.sub}' : "")
-		+ (tp.params.length > 0 ? "<" + tp.params.map(printTypeParam).join(", ") + ">" : "");
+		+ (tp.params == null ? "" : tp.params.length > 0 ? "<" + tp.params.map(printTypeParam).join(", ") + ">" : "");
 
 	// TODO: check if this can cause loops
 	public function printComplexType(ct:ComplexType) return switch(ct) {
@@ -115,7 +126,7 @@ class Printer {
 		case ADynamic: "dynamic";
 		case AMacro: "macro";
 	}
-	
+
 	public function printField(field:Field) return
 		(field.doc != null && field.doc != "" ? "/**\n" + tabs + tabString + StringTools.replace(field.doc, "\n", "\n" + tabs + tabString) + "\n" + tabs + "**/\n" + tabs : "")
 		+ (field.meta != null && field.meta.length > 0 ? field.meta.map(printMetadata).join('\n$tabs') + '\n$tabs' : "")
@@ -138,7 +149,7 @@ class Printer {
 		+ opt(arg.value, printExpr, " = ");
 
 	public function printFunction(func:Function) return
-		(func.params.length > 0 ? "<" + func.params.map(printTypeParamDecl).join(", ") + ">" : "")
+		(func.params == null ? "" : func.params.length > 0 ? "<" + func.params.map(printTypeParamDecl).join(", ") + ">" : "")
 		+ "(" + func.args.map(printFunctionArg).join(", ") + ")"
 		+ opt(func.ret, printComplexType, ":")
 		+ opt(func.expr, printExpr, " ");
@@ -150,6 +161,9 @@ class Printer {
 
 
 	public function printExpr(e:Expr) return e == null ? "#NULL" : switch(e.expr) {
+		#if macro
+		case EConst(CString(s)): haxe.macro.MacroStringTools.isFormatExpr(e) ? printFormatString(s) : printString(s);
+		#end
 		case EConst(c): printConstant(c);
 		case EArray(e1, e2): '${printExpr(e1)}[${printExpr(e2)}]';
 		case EBinop(op, e1, e2): '${printExpr(e1)} ${printBinop(op)} ${printExpr(e2)}';
@@ -211,21 +225,21 @@ class Printer {
 	public function printExprs(el:Array<Expr>, sep:String) {
 		return el.map(printExpr).join(sep);
 	}
-	
+
 	function printExtension(tpl:Array<TypePath>, fields: Array<Field>) {
 		return '{\n$tabs>' + tpl.map(printTypePath).join(',\n$tabs>') + ","
 		    + (fields.length > 0 ? ('\n$tabs' + fields.map(printField).join(';\n$tabs') + ";\n}") : ("\n}"));
 	}
-	
+
 	function printStructure(fields:Array<Field>) {
 		return fields.length == 0 ? "{ }" :
 			'{\n$tabs' + fields.map(printField).join(';\n$tabs') + ";\n}";
 	}
-	
+
 	public function printTypeDefinition(t:TypeDefinition, printPackage = true):String {
 		var old = tabs;
 		tabs = tabString;
-		
+
 		var str = t == null ? "#NULL" :
 			(printPackage && t.pack.length > 0 && t.pack[0] != "" ? "package " + t.pack.join(".") + ";\n" : "") +
 			(t.meta != null && t.meta.length > 0 ? t.meta.map(printMetadata).join(" ") + " " : "") + (t.isExtern ? "extern " : "") + switch (t.kind) {
@@ -286,7 +300,7 @@ class Printer {
 					}].join("\n")
 					+ "\n}";
 			}
-		
+
 		tabs = old;
 		return str;
 	}

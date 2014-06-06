@@ -333,7 +333,7 @@ class XmlParser {
 		}
 		return ml;
 	}
-	
+
 	function xoverloads( x : Fast ) : List<ClassField> {
 		var l = new List();
 		for ( m in x.elements ) {
@@ -393,7 +393,7 @@ class XmlParser {
 		};
 	}
 
-	function xclassfield( x : Fast, ?defPublic ) : ClassField {
+	function xclassfield( x : Fast, ?defPublic = false ) : ClassField {
 		var e = x.elements;
 		var t = xtype(e.next());
 		var doc = null;
@@ -415,7 +415,7 @@ class XmlParser {
 			doc : doc,
 			get : if( x.has.get ) mkRights(x.att.get) else RNormal,
 			set : if( x.has.set ) mkRights(x.att.set) else RNormal,
-			params : if( x.has.params ) mkTypeParams(x.att.params) else null,
+			params : if( x.has.params ) mkTypeParams(x.att.params) else [],
 			platforms : defplat(),
 			meta : meta,
 			overloads: overloads

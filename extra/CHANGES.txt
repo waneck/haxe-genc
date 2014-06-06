@@ -1,15 +1,115 @@
-2014-??-??: 3.1.1
+2014-??-??: 3.2.0
+
+	New features:
+
+	all : add --display mode for toplevel completion
+	all : add --display mode for position and usage information
+	python : added python target
+	flash : flash player 12-14 support
+	js : add @:jsRequire and js.Lib.require
+	cs : add @:bridgeProperties, which creates native property bridges for all haxe properties in the annotated class
+
+	Bugfixes:
+
+	all : fixed nullability of abstracts over functions
+	all : fixed some equality checks between UInt and Int
+	all : fixed rare issue with abstract casts
+	all : fixed some internal code which relied on unspecified evaluation order
+	all : fixed exhaustiveness checks involving guards
+	all : fixed issue involving recursively constrained type parameters and @:generic
+	all : fixed type inference issue in map literals
+	all : fixed type inference issue when calling abstract method from within the abstract
+	cpp : fixed issue with the side-effect handler
+	cpp : fixed issue with NativeArray in --no-inline mode
+	php : fixed issue with invalid references for closures in for-loops
+
+	General improvements and optimizations:
+
+	all : disallowed using `super` in value positions
+	all : check exhaustiveness of explicit Null types
+	all : resolve unqualified identifiers to @:enum abstract constructors
+	all : determine @:generic type parameters from constructor call if possible
+	all : properly disallowed field redefinition in extending interface
+	neko : create output directory if it does not exist
+	js : inline Math methods and fields
+
+	Macro features and changes:
+
+	macro : added Context.getLocalTVars
+
+	Deprecations:
+
+	all : deprecated structurally extending classes and interfaces
+
+2014-04-13: 3.1.3
+
+	Bugfixes:
+
+	all : fixed handling of abstract variance
+	flash : ensure correct endianess in haxe.io.BytesBuffer
+	cpp : fixed issue involving class paths with spaces
+	php : fixed >>>
+	macro : fixed haxe.macro.Compiler.keep
+
+	General improvements and optimizations:
+
+	all : give @:deprecated warnings by default, allow -D no-deprecation-warnings
+	cpp : optimized Vector implementation
+
+	Standard Library:
+
+	all : renamed Bytes.readDouble/Float to getDouble/Float to avoid inheritance issues
+	all : deprecated Bytes.readString in favor of getString
+	all : added pretty-printing to haxe.format.JsonPrinter (and haxe.Json)
+
+2014-03-29: 3.1.2
+
+	Bugfixes:
+
+	all : disallowed spaces between >>, >>>, >>= and >>>=
+	all : fix branching issue when switching on Dynamic values with only one case
+	all : added missing abstract cast call when checking for equality
+	all : fixed member fields initializations on parent classes that have no constructor
+	all : fixed toString usage of abstracts which are argument to Std.string
+	flash : avoid rare FP 12 PPAPI JIT crash
+	cpp : fixed bug in side-effect handler which caused incorrect behavior of while loops
+	js : fixed missing print function for enum values with DCE
+	macro : make sure member field initializations are respected
+
+	General improvements and optimizations:
+
+	all : cached file exist checks to speed up compilations with a lot of class paths
+	all : improved completion related to super class fields
+	all : allowed iterating on abstract which have get_length and @:arrayAccess fields
+	js : improved Type.allEnums implementation to avoid issues with obfuscation
+
+	Standard Library:
+
+	all : added haxe.io.Bytes.readDouble/Float
+	all : added haxe.io.BytesBuffer.addString/Float/Double
+
+2014-03-15: 3.1.1
+
+	New features:
+
+	all : added -D deprecation-warnings
+	all : allowed \u escape sequences in strings
+	cs : implemented haxe.CallStack
 
 	Bugfixes:
 
 	all : fixed wrong handling of "" and null in haxe.io.Path.join
 	all : fixed invalid cast-to-self generation on some abstracts
 	all : removed @:to Dynamic from UInt to avoid issues in the Map selection algorithm
+	all : fixed various issues with UInt
+	all : fixed position setter in haxe.io.BytesInput
 	all : fixed various issues with member/static extension macros
-	all : disallowed member field initialization of classes without constructors
 	flash : fixed invalid override involving single-constraint type parameters
-	flash8: fixed various bugs
-	js : disable Std.string optimization of basic type to avoid problems with null values
+	flash8 : fixed various bugs
+	js : fixed a problem with Std.string(null) being optimized incorrectly
+	js : fixed custom generators
+	cpp : dealt with string literals that are too long for MSVC
+	cs : fixed various issues with -net-lib
 
 2014-03-04: 3.1.0
 
@@ -544,7 +644,7 @@
 	php: minor optimization (removed foreach from std code)
 	php: implemented haxe.Stack
 	php: changed exception handler to use Haxe call stack
-	php: changed special vars to use the » prefix instead of __
+	php: changed special vars to use the '\xBB' prefix instead of __
 	php: fixed use of reserved keywords for var names
 	php: List iterator is now class based (faster)
 	php: fixed behavior of class variables having assigned functions

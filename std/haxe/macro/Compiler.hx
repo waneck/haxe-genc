@@ -26,7 +26,7 @@ import haxe.macro.Expr;
 	All these methods can be called for compiler configuration macros.
 **/
 class Compiler {
-	
+
 	macro static public function getDefine( key : String ) {
 		return macro $v{haxe.macro.Context.definedValue(key)};
 	}
@@ -39,7 +39,7 @@ class Compiler {
 	public static function allowPackage( v : String ) {
 		untyped load("allow_package", 1)(v.__s);
 	}
-	
+
 	public static function define( flag : String, ?value : String ) untyped {
 		var v = flag + (value == null ? "" : "= " + value);
 		load("define", 1)(v.__s);
@@ -90,7 +90,15 @@ class Compiler {
 	}
 
 	/**
-		Include for compilation all classes defined in the given package excluding the ones referenced in the ignore list.
+		Includes all modules in package `pack` in the compilation.
+
+		In order to include single modules, their paths can be listed directly
+		on command line: `haxe ... ModuleName pack.ModuleName`.
+
+		@param rec If true, recursively adds all sub-packages.
+		@param ignore Array of module names to ignore for inclusion.
+		@param classPaths Array of additional class paths to check. This can be
+		    used to add packages outside the usual class paths.
 	**/
 	public static function include( pack : String, ?rec = true, ?ignore : Array<String>, ?classPaths : Array<String> ) {
 		var skip = if( ignore == null ) {
@@ -98,11 +106,15 @@ class Compiler {
 		} else {
 			function(c) return Lambda.has(ignore, c);
 		}
+		var displayValue = Context.definedValue("display");
 		if( classPaths == null ) {
 			classPaths = Context.getClassPath();
 			// do not force inclusion when using completion
-			if( Context.defined("display") )
-				return;
+			switch (displayValue) {
+				case null:
+				case "usage":
+				case _: return;
+			}
 			// normalize class path
 			for( i in 0...classPaths.length ) {
 				var cp = StringTools.replace(classPaths[i], "\\", "/");
@@ -232,45 +244,94 @@ class Compiler {
 	}
 
 	/**
-		Mark a class (or array of classes) with the metadata @:keep.
-		
-		Note that this does not imply inclusion of the class(es): If a class is
-		neither referenced nor added via [Compiler.include], it will not be part
-		of the output even if @:keep was added.
+		Marks types or packages to be kept by DCE and includes them for
+		compilation.
+
+		This also extends to the sub-types of resolved modules.
+
+		In order to include module sub-types directly, their full dot path
+		including the containing module has to be used
+		(e.g. msignal.Signal.Signal0).
+
+		@param path A package, module or sub-type dot path to keep.
+		@param paths An Array of package, module or sub-type dot paths to keep.
+		@param recursive If true, recurses into sub-packages for package paths.
 	**/
-	public static function keep(?path : String, ?paths : Array<String>, rec = false)
+	public static function keep(?path : String, ?paths : Array<String>, ?recursive:Bool = true)
 	{
 		if (null == paths)
 			paths = [];
 		if (null != path)
 			paths.push(path);
-		for (path in paths)
-		{
-			for ( p in Context.getClassPath() ) {
-				var p = p + path.split(".").join("/");
-				if (sys.FileSystem.exists(p) && sys.FileSystem.isDirectory(p))
-				{
-					for( file in sys.FileSystem.readDirectory(p) ) {
+		for (path in paths) {
+			var found:Bool = false;
+			var moduleFirstCharacter:String = ((path.indexOf(".") < 0)?path:path.substring(path.lastIndexOf(".")+1)).charAt(0);
+			var startsWithUpperCase:Bool = (moduleFirstCharacter == moduleFirstCharacter.toUpperCase());//needed because FileSystem is not case sensitive
+			var moduleRoot = (path.indexOf(".") < 0)?"":path.substring(0, path.lastIndexOf("."));
+			var moduleRootFirstCharacter:String = ((moduleRoot.indexOf(".") < 0)?moduleRoot:moduleRoot.substring(moduleRoot.lastIndexOf(".")+1)).charAt(0);
+			var rootStartsWithUpperCase:Bool = (moduleRootFirstCharacter == moduleRootFirstCharacter.toUpperCase());//needed because FileSystem is not case sensitive
+			for ( classPath in Context.getClassPath() ) {
+				var moduleRootPath = (moduleRoot == "")?"":(classPath + moduleRoot.split(".").join("/") + ".hx");
+				var fullPath = classPath + path.split(".").join("/");
+				var isValidModule:Bool = startsWithUpperCase && sys.FileSystem.exists(fullPath + ".hx");
+				var isValidSubType:Bool = !isValidModule && moduleRootPath != "" && rootStartsWithUpperCase && sys.FileSystem.exists(moduleRootPath);
+				var isValidDirectory:Bool = !isValidSubType && sys.FileSystem.exists(fullPath) && sys.FileSystem.isDirectory(fullPath);
+				if ( !isValidDirectory && !isValidModule && !isValidSubType)
+					continue;
+				else
+					found = true;
+
+				if(isValidDirectory) {
+					for( file in sys.FileSystem.readDirectory(fullPath) ) {
 						if( StringTools.endsWith(file, ".hx") ) {
 							var module = path + "." + file.substr(0, file.length - 3);
-							var types = Context.getModule(module);
-							for (type in types)
-							{
-								switch(type)
-								{
-									case TInst(cls, _):
-										addMetadata("@:keep", cls.toString());
-									default:
-										//
-								}
-							}
-						} else if( rec && sys.FileSystem.isDirectory(p + "/" + file) )
+							keepModule(module);
+						} else if( recursive && sys.FileSystem.isDirectory(fullPath + "/" + file) )
 							keep(path + "." + file, true);
 					}
-				} else {
-					addMetadata("@:keep", path);
-					break;
+				} else if(isValidModule){
+					keepModule(path);
+				} else if(isValidSubType){
+					keepSubType(path);
 				}
+			}
+
+			if (!found)
+				Context.warning("file or directory not found, can't keep: "+path, Context.currentPos());
+		}
+	}
+
+	private static function keepSubType( path : String )
+	{
+		var module = path.substring(0, path.lastIndexOf("."));
+		var subType = module.substring(0, module.lastIndexOf(".")) + "." + path.substring(path.lastIndexOf(".") + 1);
+		var types = Context.getModule(module);
+		var found:Bool = false;
+		for (type in types) {
+			switch(type) {
+				case TInst(cls, _):
+					if (cls.toString() == subType) {
+						found = true;
+						cls.get().meta.add(":keep", [], cls.get().pos);
+					}
+				default:
+					//
+			}
+		}
+
+		if (!found)
+			Context.warning("subtype not found, can't keep: "+path, Context.currentPos());
+	}
+
+	private static function keepModule( path : String )
+	{
+		var types = Context.getModule(path);
+		for (type in types) {
+			switch(type) {
+				case TInst(cls, _):
+					cls.get().meta.add(":keep", [], cls.get().pos);
+				default:
+					//
 			}
 		}
 	}

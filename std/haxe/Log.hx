@@ -97,6 +97,17 @@ class Log {
 		#elseif c
 			var s = Std.string(v);
 			c.CStdio.printf("%s:%i: %.*s\\n", [infos.fileName, infos.lineNumber, s.length, s]);
+		#elseif (python)
+			var str:String = null;
+			if (infos != null) {
+				str = infos.fileName + ":" + Std.string(infos.lineNumber) + ": " + v;
+				if (infos.customParams != null) {
+					str += "," + infos.customParams.join(",");
+				}
+			} else {
+				str = v;
+			}
+			python.Lib.println(str);
 		#end
 	}
 

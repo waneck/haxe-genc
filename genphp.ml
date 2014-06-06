@@ -509,7 +509,7 @@ let fun_block ctx f p =
 	let e = List.fold_left (fun e (v,c) ->
 		match c with
 		| None | Some TNull -> e
-		| Some c -> Codegen.concat (Codegen.set_default ctx.com v c p) e
+		| Some c -> Type.concat (Codegen.set_default ctx.com v c p) e
 	) e f.tf_args in
 	if ctx.com.debug then begin
 		Codegen.stack_block ctx.stack ctx.curclass ctx.curmethod e
@@ -1516,6 +1516,9 @@ and gen_expr ctx e =
 		newline ctx;
 		print ctx "while($%s->hasNext()) {" tmp;
 		let bend = open_block ctx in
+		newline ctx;
+		(* unset loop variable (issue #2900) *)
+		print ctx "unset($%s)" v;
 		newline ctx;
 		print ctx "$%s = $%s->next()" v tmp;
 		gen_while_expr ctx e;

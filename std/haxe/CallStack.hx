@@ -99,6 +99,16 @@ class CallStack {
 			stack.shift();
 			stack.pop();
 			return stack;
+		#elseif cs
+			return makeStack(new cs.system.diagnostics.StackTrace(1, true));
+		#elseif python
+			var stack = [];
+			var infos = python.lib.Traceback.extract_stack();
+			infos.pop();
+			infos.reverse();
+			for (elem in infos)
+				stack.push(FilePos(null, elem._1, elem._2));
+			return stack;
 		#else
 			return []; // Unsupported
 		#end
@@ -155,6 +165,19 @@ class CallStack {
 			stack.shift();
 			stack.pop();
 			return stack;
+		#elseif cs
+			return makeStack(new cs.system.diagnostics.StackTrace(cs.internal.Exceptions.exception, true));
+		#elseif python
+			var stack = [];
+			var exc = python.lib.Sys.exc_info();
+			if (exc._3 != null)
+			{
+				var infos = python.lib.Traceback.extract_tb(exc._3);
+				infos.reverse();
+				for (elem in infos)
+					stack.push(FilePos(null, elem._1, elem._2));
+			}
+			return stack;
 		#else
 			return []; // Unsupported
 		#end
@@ -199,7 +222,7 @@ class CallStack {
 	}
 
 	#if cpp @:noStack #end /* Do not mess up the exception stack */
-	private static function makeStack(s) {
+	private static function makeStack(s #if cs : cs.system.diagnostics.StackTrace #end) {
 		#if neko
 			var a = new Array();
 			var l = untyped __dollar__asize(s);
@@ -278,6 +301,24 @@ class CallStack {
 			} else {
 				return cast s;
 			}
+		#elseif cs
+			var stack = [];
+			for (i in 0...s.FrameCount)
+			{
+				var frame = s.GetFrame(i);
+				var m = frame.GetMethod();
+
+				var method = StackItem.Method(m.ReflectedType.ToString(), m.Name);
+
+				var fileName = frame.GetFileName();
+				var lineNumber = frame.GetFileLineNumber();
+
+				if (fileName != null || lineNumber >= 0)
+					stack.push(FilePos(method, fileName, lineNumber));
+				else
+					stack.push(method);
+			}
+			return stack;
 		#else
 			return null;
 		#end

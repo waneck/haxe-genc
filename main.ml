@@ -45,7 +45,7 @@ exception Abort
 exception Completion of string
 
 
-let version = 3100
+let version = 3200
 let version_major = version / 1000
 let version_minor = (version mod 1000) / 100
 let version_revision = (version mod 100)
@@ -55,6 +55,8 @@ let measure_times = ref false
 let prompt = ref false
 let start_time = ref (get_time())
 let global_cache = ref None
+
+let path_sep = if Sys.os_type = "Unix" then "/" else "\\"
 
 let get_real_path p =
 	try
@@ -928,7 +930,7 @@ try
 	let interp = ref false in
 	let swf_version = ref false in
 	Common.define_value com Define.HaxeVer (float_repres (float_of_int version /. 1000.));
-	Common.define_value com Define.HxcppApiLevel "310";
+	Common.define_value com Define.HxcppApiLevel "312";
 	Common.raw_define com "haxe3";
 	Common.define_value com Define.Dce "std";
 	com.warning <- (fun msg p -> message ctx ("Warning : " ^ msg) p);
@@ -1005,6 +1007,9 @@ try
 		("-c",Arg.String (fun dir ->
 			set_platform C dir;
 		),"<directory> : generate C code into target directory");
+		("-python",Arg.String (fun dir ->
+			set_platform Python dir;
+		),"<file> : generate Python code as target file");
 		("-xml",Arg.String (fun file ->
 			Parser.use_doc := true;
 			xml_out := Some file
@@ -1045,7 +1050,7 @@ try
 		("-swf-version",Arg.Float (fun v ->
 			if not !swf_version || com.flash_version < v then com.flash_version <- v;
 			swf_version := true;
-		),"<version> : change the SWF version (6 to 10)");
+		),"<version> : change the SWF version");
 		("-swf-header",Arg.String (fun h ->
 			try
 				swf_header := Some (match ExtString.String.nsplit h ":" with
@@ -1072,8 +1077,15 @@ try
 			Genjava.add_java_lib com file false
 		),"<file> : add an external JAR or class directory library");
 		("-net-lib",Arg.String (fun file ->
-			Gencs.add_net_lib com file false
-		),"<file> : add an external .NET DLL file");
+			let file, is_std = match ExtString.String.nsplit file "@" with
+				| [file] ->
+					file,false
+				| [file;"std"] ->
+					file,true
+				| _ -> raise Exit
+			in
+			Gencs.add_net_lib com file is_std
+		),"<file>[@std] : add an external .NET DLL file");
 		("-net-std",Arg.String (fun file ->
 			Gencs.add_net_std com file
 		),"<file> : add a root std .NET DLL search path");
@@ -1133,17 +1145,28 @@ try
 			| _ ->
 				let file, pos = try ExtString.String.split file_pos "@" with _ -> failwith ("Invalid format : " ^ file_pos) in
 				let file = unquote file in
-				let pos, mode = try ExtString.String.split pos "@" with _ -> pos,"" in
-				let mode = match mode with
-					| "position" -> DMPosition
-					| "usage" -> DMUsage
-					| "metadata" -> DMMetadata
-					| _ -> DMDefault
+				let pos, smode = try ExtString.String.split pos "@" with _ -> pos,"" in
+				let activate_special_display_mode () =
+					Common.define com Define.NoCOpt;
+					Parser.use_parser_resume := false
+				in
+				let mode = match smode with
+					| "position" ->
+						activate_special_display_mode();
+						DMPosition
+					| "usage" ->
+						activate_special_display_mode();
+						DMUsage
+					| "toplevel" ->
+						activate_special_display_mode();
+						DMToplevel
+					| _ ->
+						DMDefault
 				in
 				let pos = try int_of_string pos with _ -> failwith ("Invalid format : "  ^ pos) in
 				com.display <- mode;
 				Common.display_default := mode;
-				Common.define com Define.Display;
+				Common.define_value com Define.Display (if smode <> "" then smode else "1");
 				Parser.use_doc := true;
 				Parser.resume_display := {
 					Ast.pfile = Common.unique_full_path file;
@@ -1281,13 +1304,13 @@ try
 		com.main_class <- None;
 		let real = get_real_path (!Parser.resume_display).Ast.pfile in
 		(* try to fix issue on windows when get_real_path fails (8.3 DOS names disabled) *)
-		let real = (match List.rev (ExtString.String.nsplit real "\\") with
-		| file :: path when String.length file > 0 && file.[0] >= 'a' && file.[1] <= 'z' -> file.[0] <- char_of_int (int_of_char file.[0] - int_of_char 'a' + int_of_char 'A'); String.concat "\\" (List.rev (file :: path))
+		let real = (match List.rev (ExtString.String.nsplit real path_sep) with
+		| file :: path when String.length file > 0 && file.[0] >= 'a' && file.[1] <= 'z' -> file.[0] <- char_of_int (int_of_char file.[0] - int_of_char 'a' + int_of_char 'A'); String.concat path_sep (List.rev (file :: path))
 		| _ -> real) in
 		classes := lookup_classes com real;
 		if !classes = [] then begin
 			if not (Sys.file_exists real) then failwith "Display file does not exist";
-			(match List.rev (ExtString.String.nsplit real "\\") with
+			(match List.rev (ExtString.String.nsplit real path_sep) with
 			| file :: _ when file.[0] >= 'a' && file.[1] <= 'z' -> failwith ("Display file '" ^ file ^ "' should not start with a lowercase letter")
 			| _ -> ());
 			failwith "Display file was not found in class path";
@@ -1345,24 +1368,36 @@ try
 			Gencs.before_generate com;
 			add_std "cs"; "cs"
 		| Java ->
-      let old_flush = ctx.flush in
-      ctx.flush <- (fun () ->
-        List.iter (fun (_,_,close,_,_) -> close()) com.java_libs;
-        old_flush()
-      );
+			let old_flush = ctx.flush in
+			ctx.flush <- (fun () ->
+				List.iter (fun (_,_,close,_,_) -> close()) com.java_libs;
+				old_flush()
+			);
 			Genjava.before_generate com;
 			add_std "java"; "java"
+		| Python ->
+			add_std "python";
+			"python"
 	) in
 	(* if we are at the last compilation step, allow all packages accesses - in case of macros or opening another project file *)
-	if com.display <> DMNone && not ctx.has_next then com.package_rules <- PMap.foldi (fun p r acc -> match r with Forbidden -> acc | _ -> PMap.add p r acc) com.package_rules PMap.empty;
+	begin match com.display with
+		| DMNone | DMToplevel ->
+			()
+		| _ ->
+			if not ctx.has_next then com.package_rules <- PMap.foldi (fun p r acc -> match r with Forbidden -> acc | _ -> PMap.add p r acc) com.package_rules PMap.empty;
+	end;
 	com.config <- get_config com; (* make sure to adapt all flags changes defined after platform *)
 
-	(* check file extension. In case of wrong commandline, we don't want
-		to accidentaly delete a source file. *)
-	if not !no_output && file_extension com.file = ext then delete_file com.file;
 	List.iter (fun f -> f()) (List.rev (!pre_compilation));
 	if !classes = [([],"Std")] && not !force_typing then begin
-		if !cmds = [] && not !did_something then Arg.usage basic_args_spec usage;
+		let help_spec = basic_args_spec @ [
+			("-help", Arg.Unit (fun () -> ()),": show extended help information");
+			("--help", Arg.Unit (fun () -> ()),": show extended help information");
+			("--help-defines", Arg.Unit (fun () -> ()),": print help for all compiler specific defines");
+			("--help-metas", Arg.Unit (fun () -> ()),": print help for all compiler metadatas");
+			("<dot-path>", Arg.Unit (fun () -> ()),": compile the module specified by dot-path");
+		] in
+		if !cmds = [] && not !did_something then Arg.usage help_spec usage;
 	end else begin
 		ctx.setup();
 		Common.log com ("Classpath : " ^ (String.concat ";" com.class_path));
@@ -1376,7 +1411,7 @@ try
 		t();
 		if ctx.has_error then raise Abort;
 		begin match com.display with
-			| DMNone | DMUsage ->
+			| DMNone | DMUsage | DMPosition ->
 				()
 			| _ ->
 				if ctx.has_next then raise Abort;
@@ -1389,6 +1424,9 @@ try
 		com.modules <- modules;
 		Filters.run com tctx main;
 		if ctx.has_error then raise Abort;
+		(* check file extension. In case of wrong commandline, we don't want
+			to accidentaly delete a source file. *)
+		if not !no_output && file_extension com.file = ext then delete_file com.file;
 		(match !xml_out with
 		| None -> ()
 		| Some "hx" ->
@@ -1439,6 +1477,9 @@ try
 		| C ->
 			Common.log com ("Generating C in : " ^ com.file);
 			Genc.generate com;
+		| Python ->
+			Common.log com ("Generating python in : " ^ com.file);
+			Genpy.generate com;
 		);
 	end;
 	Sys.catch_break false;
@@ -1474,6 +1515,8 @@ with
 		message ctx msg p;
 		List.iter (message ctx "Called from") l;
 		error ctx "Aborted" Ast.null_pos;
+	| Codegen.Generic_Exception(m,p) ->
+		error ctx m p
 	| Arg.Bad msg ->
 		error ctx ("Error: " ^ msg) Ast.null_pos
 	| Failure msg when not (is_debug_run()) ->
@@ -1509,23 +1552,30 @@ with
 	| Typecore.DisplayPosition pl ->
 		let b = Buffer.create 0 in
 		let error_printer file line = sprintf "%s:%d:" (Common.unique_full_path file) line in
+		Buffer.add_string b "<list>\n";
 		List.iter (fun p ->
 			let epos = Lexer.get_error_pos error_printer p in
-			Buffer.add_string b "<pos>\n";
+			Buffer.add_string b "<pos>";
 			Buffer.add_string b epos;
-			Buffer.add_string b "\n</pos>\n";
+			Buffer.add_string b "</pos>\n";
 		) pl;
+		Buffer.add_string b "</list>";
 		raise (Completion (Buffer.contents b))
-	| Typer.DisplayMetadata m ->
+	| Typer.DisplayToplevel il ->
 		let b = Buffer.create 0 in
-		List.iter (fun (m,el,p) ->
-			Buffer.add_string b ("<meta name=\"" ^ (fst (MetaInfo.to_string m)) ^ "\"");
-			if el = [] then Buffer.add_string b "/>" else begin
-				Buffer.add_string b ">\n";
-				List.iter (fun e -> Buffer.add_string b ((htmlescape (Ast.s_expr e)) ^ "\n")) el;
-				Buffer.add_string b "</meta>\n";
-			end
-		) m;
+		Buffer.add_string b "<il>\n";
+		let ctx = print_context() in
+		let s_type t = htmlescape (s_type ctx t) in
+		List.iter (fun id -> match id with
+			| Typer.ITLocal v -> Buffer.add_string b (Printf.sprintf "<i k=\"local\" t=\"%s\">%s</i>\n" (s_type v.v_type) v.v_name);
+			| Typer.ITMember(c,cf) -> Buffer.add_string b (Printf.sprintf "<i k=\"member\" t=\"%s\">%s</i>\n" (s_type cf.cf_type) cf.cf_name);
+			| Typer.ITStatic(c,cf) -> Buffer.add_string b (Printf.sprintf "<i k=\"static\" t=\"%s\">%s</i>\n" (s_type cf.cf_type) cf.cf_name);
+			| Typer.ITEnum(en,ef) -> Buffer.add_string b (Printf.sprintf "<i k=\"enum\" t=\"%s\">%s</i>\n" (s_type ef.ef_type) ef.ef_name);
+			| Typer.ITGlobal(mt,s,t) -> Buffer.add_string b (Printf.sprintf "<i k=\"global\" p=\"%s\" t=\"%s\">%s</i>\n" (s_type_path (t_infos mt).mt_path) (s_type t) s);
+			| Typer.ITType(mt) -> Buffer.add_string b (Printf.sprintf "<i k=\"type\" p=\"%s\">%s</i>\n" (s_type_path (t_infos mt).mt_path) (snd (t_infos mt).mt_path));
+			| Typer.ITPackage s -> Buffer.add_string b (Printf.sprintf "<i k=\"package\">%s<i>\n" s)
+		) il;
+		Buffer.add_string b "</il>";
 		raise (Completion (Buffer.contents b))
 	| Parser.TypePath (p,c) ->
 		(match c with

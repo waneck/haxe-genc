@@ -59,7 +59,6 @@ and vabstract =
 	| AZipD of zlib
 	| AUtf8 of UTF8.Buf.buf
 	| ASocket of Unix.file_descr
-	| ATExpr of texpr
 	| ATDecl of module_type
 	| AUnsafe of Obj.t
 	| ALazyType of (unit -> Type.t) ref
@@ -203,6 +202,7 @@ let dec_array_ref = ref (fun v -> assert false)
 let enc_string_ref = ref (fun s -> assert false)
 let make_ast_ref = ref (fun _ -> assert false)
 let make_complex_type_ref = ref (fun _ -> assert false)
+let encode_tvar_ref = ref (fun _ -> assert false)
 let get_ctx() = (!get_ctx_ref)()
 let enc_array (l:value list) : value = (!enc_array_ref) l
 let dec_array (l:value) : value list = (!dec_array_ref) l
@@ -218,6 +218,7 @@ let enc_hash (h:('a,'b) Hashtbl.t) : value = (!enc_hash_ref) h
 let make_ast (e:texpr) : Ast.expr = (!make_ast_ref) e
 let enc_string (s:string) : value = (!enc_string_ref) s
 let make_complex_type (t:Type.t) : Ast.complex_type = (!make_complex_type_ref) t
+let encode_tvar (v:tvar) : value = (!encode_tvar_ref) v
 
 let to_int f = Int32.of_float (mod_float f 2147483648.0)
 let need_32_bits i = Int32.compare (Int32.logand (Int32.add i 0x40000000l) 0x80000000l) Int32.zero <> 0
@@ -1636,11 +1637,25 @@ let std_lib =
 			Unix.chdir (vstring s);
 			VNull;
 		);
-		"sys_string", Fun0 (fun() ->
-			VString (match Sys.os_type with
-			| "Unix" -> "Linux"
-			| "Win32" | "Cygwin" -> "Windows"
-			| s -> s)
+		"sys_string", (
+			let cached_sys_name = ref None in
+			Fun0 (fun() ->
+				VString (match Sys.os_type with
+				| "Unix" ->
+					(match !cached_sys_name with
+					| Some n -> n
+					| None ->
+						let ic = Unix.open_process_in "uname" in
+						let uname = (match input_line ic with
+							| "Darwin" -> "Mac"
+							| n -> n
+						) in
+						close_in ic;
+						cached_sys_name := Some uname;
+						uname)
+				| "Win32" | "Cygwin" -> "Windows"
+				| s -> s)
+			)
 		);
 		"sys_is64", Fun0 (fun() ->
 			VBool (Sys.word_size = 64)
@@ -2165,7 +2180,8 @@ let macro_lib =
 		);
 		"parse", Fun3 (fun s p b ->
 			match s, p, b with
-			| VString s, VAbstract (APos p), VBool b -> encode_expr ((get_ctx()).curapi.parse_string s p b)
+			| VString s, VAbstract (APos p), VBool b when s <> "" ->
+				(try encode_expr ((get_ctx()).curapi.parse_string s p b) with Invalid_expr -> error())
 			| _ -> error()
 		);
 		"make_expr", Fun2 (fun v p ->
@@ -2427,10 +2443,18 @@ let macro_lib =
 		"local_using", Fun0 (fun() ->
 			enc_array (List.map encode_clref ((get_ctx()).curapi.get_local_using()))
 		);
-		"local_vars", Fun0 (fun() ->
+		"local_vars", Fun1 (fun as_var ->
+			let as_var = match as_var with
+				| VNull | VBool false -> false
+				| VBool true -> true
+				| _ -> error()
+			in
 			let vars = (get_ctx()).curapi.get_local_vars() in
 			let h = Hashtbl.create 0 in
-			PMap.iter (fun n v -> Hashtbl.replace h (VString n) (encode_type v.v_type)) vars;
+			if as_var then
+				PMap.iter (fun n v -> Hashtbl.replace h (VString n) (encode_tvar v)) vars
+			else
+				PMap.iter (fun n v -> Hashtbl.replace h (VString n) (encode_type v.v_type)) vars;
 			enc_hash h
 		);
 		"follow", Fun2 (fun v once ->
@@ -2470,6 +2494,7 @@ let macro_lib =
 			| VString cp ->
 				let com = ccom() in
 				com.class_path <- (Common.normalize_path cp) :: com.class_path;
+				Hashtbl.clear com.file_lookup_cache;
 				VNull
 			| _ ->
 				error()
@@ -2481,6 +2506,15 @@ let macro_lib =
 				(match com.platform with
 				| Flash -> Genswf.add_swf_lib com file false
 				| Java -> Genjava.add_java_lib com file false
+				| Cs ->
+					let file, is_std = match ExtString.String.nsplit file "@" with
+						| [file] ->
+							file,false
+						| [file;"std"] ->
+							file,true
+						| _ -> failwith ("unsupported file@`std` format: " ^ file)
+					in
+					Gencs.add_net_lib com file is_std
 				| _ -> failwith "Unsupported platform");
 				VNull
 			| _ ->
@@ -4436,7 +4470,7 @@ let vopt f v = match v with
 
 let rec encode_tconst c =
 	let tag, pl = match c with
-		| TInt i -> 0,[VInt (Int32.to_int i)]
+		| TInt i -> 0,[best_int i]
 		| TFloat f -> 1,[enc_string f]
 		| TString s -> 2,[enc_string s]
 		| TBool b -> 3,[VBool b]
@@ -4558,7 +4592,7 @@ and encode_texpr_list el =
 
 let decode_tconst c =
 	match decode_enum c with
-	| 0, [s] -> TInt (match s with VInt i -> Int32.of_int i | _ -> raise Invalid_expr)
+	| 0, [s] -> TInt (match s with VInt i -> Int32.of_int i | VInt32 i -> i | _ -> raise Invalid_expr)
 	| 1, [s] -> TFloat (dec_string s)
 	| 2, [s] -> TString (dec_string s)
 	| 3, [s] -> TBool (dec_bool s)
@@ -4954,4 +4988,5 @@ encode_clref_ref := encode_clref;
 enc_string_ref := enc_string;
 enc_hash_ref := enc_hash;
 encode_texpr_ref := encode_texpr;
-decode_texpr_ref := decode_texpr
+decode_texpr_ref := decode_texpr;
+encode_tvar_ref := encode_tvar;

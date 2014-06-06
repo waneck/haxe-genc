@@ -35,11 +35,11 @@ typedef T = {
 		prop = "prop";
 		propAcc = "0";
 	}
-	
+
 	public function get_propAcc() {
 		return "1";
 	}
-	
+
 	public function set_propAcc(v) {
 		return this.propAcc = v.toUpperCase();
 	}
@@ -120,6 +120,25 @@ enum EVMTest {
 	EVMD(n:EVMTest);
 	EVME(?n:EVMTest);
 	EVMF(a:Array<EVMTest>);
+}
+
+class NonRttiClass { }
+
+@:rtti
+@:keepSub
+class RttiClass1 {
+    static var v:String;
+    public function f() {
+        return 33.0;
+    }
+}
+
+class RttiClass2 extends RttiClass1 { }
+
+class RttiClass3 extends RttiClass1 {
+	override function f():Int {
+		return 33;
+	}
 }
 
 #if !macro

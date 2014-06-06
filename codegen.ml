@@ -47,15 +47,6 @@ let binop op a b t p =
 let index com e index t p =
 	mk (TArray (e,mk (TConst (TInt (Int32.of_int index))) com.basic.tint p)) t p
 
-let concat e1 e2 =
-	let e = (match e1.eexpr, e2.eexpr with
-		| TBlock el1, TBlock el2 -> TBlock (el1@el2)
-		| TBlock el, _ -> TBlock (el @ [e2])
-		| _, TBlock el -> TBlock (e1 :: el)
-		| _ , _ -> TBlock [e1;e2]
-	) in
-	mk e e2.etype (punion e1.epos e2.epos)
-
 let type_constant com c p =
 	let t = com.basic in
 	match c with
@@ -312,11 +303,12 @@ let rec build_generic ctx c p tl =
 			()
 	in
 	List.iter check_recursive tl;
-	let gctx = try make_generic ctx c.cl_types tl p with Generic_Exception (msg,p) -> error msg p in
-	let name = (snd c.cl_path) ^ "_" ^ gctx.name in
 	if !recurse then begin
 		TInst (c,tl) (* build a normal instance *)
-	end else try
+	end else begin
+	let gctx = make_generic ctx c.cl_types tl p in
+	let name = (snd c.cl_path) ^ "_" ^ gctx.name in
+	try
 		Typeload.load_instance ctx { tpackage = pack; tname = name; tparams = []; tsub = None } p false
 	with Error(Module_not_found path,_) when path = (pack,name) ->
 		let m = (try Hashtbl.find ctx.g.modules (Hashtbl.find ctx.g.types_module c.cl_path) with Not_found -> assert false) in
@@ -369,8 +361,18 @@ let rec build_generic ctx c p tl =
 			let f = { f with cf_type = t} in
 			(* delay the expression mapping to make sure all cf_type fields are set correctly first *)
 			(delays := (fun () ->
-				try (match f.cf_expr with None -> () | Some e -> f.cf_expr <- Some (generic_substitute_expr gctx e))
-				with Unify_error l -> error (error_msg (Unify l)) f.cf_pos) :: !delays);
+				try (match f.cf_expr with
+					| None ->
+						begin match f.cf_kind with
+							| Method _ when not c.cl_interface && not c.cl_extern ->
+								display_error ctx (Printf.sprintf "Field %s has no expression (possible typing order issue)" f.cf_name) f.cf_pos;
+								display_error ctx (Printf.sprintf "While building %s" (s_type_path cg.cl_path)) p;
+							| _ ->
+								()
+						end
+					| Some e -> f.cf_expr <- Some (generic_substitute_expr gctx e)
+				) with Unify_error l ->
+					error (error_msg (Unify l)) f.cf_pos) :: !delays);
 			f
 		in
 		if c.cl_init <> None || c.cl_dynamic <> None then error "This class can't be generic" p;
@@ -406,7 +408,7 @@ let rec build_generic ctx c p tl =
 					| _ -> assert false)
 				| _ -> Some(cs,pl)
 		);
-		Typeload.add_constructor ctx cg p;
+		Typeload.add_constructor ctx cg false p;
 		cg.cl_kind <- KGenericInstance (c,tl);
 		cg.cl_interface <- c.cl_interface;
 		cg.cl_constructor <- (match cg.cl_constructor, c.cl_constructor, c.cl_super with
@@ -427,6 +429,7 @@ let rec build_generic ctx c p tl =
 		) c.cl_ordered_fields;
 		List.iter (fun f -> f()) !delays;
 		TInst (cg,[])
+	end
 
 (* -------------------------------------------------------------------------- *)
 (* HAXE.XML.PROXY *)
@@ -522,14 +525,28 @@ let build_metadata com t =
 (* -------------------------------------------------------------------------- *)
 (* MACRO TYPE *)
 
-let get_macro_path e args p =
+let get_macro_path ctx e args p =
 	let rec loop e =
 		match fst e with
 		| EField (e,f) -> f :: loop e
 		| EConst (Ident i) -> [i]
 		| _ -> error "Invalid macro call" p
 	in
-	(match loop e with
+	let path = match e with
+		| (EConst(Ident i)),_ ->
+			let path = try
+				if not (PMap.mem i ctx.curclass.cl_statics) then raise Not_found;
+				ctx.curclass.cl_path
+			with Not_found -> try
+				(t_infos (fst (PMap.find i ctx.m.module_globals))).mt_path
+			with Not_found ->
+				error "Invalid macro call" p
+			in
+			i :: (snd path) :: (fst path)
+		| _ ->
+			loop e
+	in
+	(match path with
 	| meth :: cl :: path -> (List.rev path,cl), meth, args
 	| _ -> error "Invalid macro call" p)
 
@@ -537,9 +554,9 @@ let build_macro_type ctx pl p =
 	let path, field, args = (match pl with
 		| [TInst ({ cl_kind = KExpr (ECall (e,args),_) },_)]
 		| [TInst ({ cl_kind = KExpr (EArrayDecl [ECall (e,args),_],_) },_)] ->
-			get_macro_path e args p
+			get_macro_path ctx e args p
 		| _ ->
-			error "MacroType require a single expression call parameter" p
+			error "MacroType requires a single expression call parameter" p
 	) in
 	let old = ctx.ret in
 	let t = (match ctx.g.do_macro ctx MMacroType path field args p with
@@ -551,8 +568,8 @@ let build_macro_type ctx pl p =
 
 let build_macro_build ctx c pl cfl p =
 	let path, field, args = match Meta.get Meta.GenericBuild c.cl_meta with
-		| _,[ECall(e,args),_],_ -> get_macro_path e args p
-		| _ -> assert false
+		| _,[ECall(e,args),_],_ -> get_macro_path ctx e args p
+		| _ -> error "genericBuild requires a single expression call parameter" p
 	in
 	let old = ctx.ret,ctx.g.get_build_infos in
 	ctx.g.get_build_infos <- (fun() -> Some (TClassDecl c, pl, cfl));
@@ -639,13 +656,13 @@ module Abstract = struct
 
 	let find_to ab pl b =
 		if follow b == t_dynamic then
-			List.find (fun (t,_) -> t == t_dynamic) ab.a_to
+			List.find (fun (t,_) -> follow t == t_dynamic) ab.a_to
 		else
 			List.find (Type.unify_to_field ab pl b) ab.a_to
 
 	let find_from ab pl a b =
 		if follow a == t_dynamic then
-			List.find (fun (t,_) -> t == t_dynamic) ab.a_from
+			List.find (fun (t,_) -> follow t == t_dynamic) ab.a_from
 		else
 			List.find (Type.unify_from_field ab pl a b) ab.a_from
 
@@ -681,17 +698,9 @@ module Abstract = struct
 				maybe_recurse (apply_params a.a_types pl a.a_this)
 
 	let make_static_call ctx c cf a pl args t p =
-		let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
-		let ethis = mk (TTypeExpr (TClassDecl c)) ta p in
-	  	let monos = List.map (fun _ -> mk_mono()) cf.cf_params in
-		let map t = apply_params a.a_types pl (apply_params cf.cf_params monos t) in
-		let ef = mk (TField (ethis,(FStatic (c,cf)))) (map cf.cf_type) p in
-		make_call ctx ef args (map t) p
+		make_static_call ctx c cf (apply_params a.a_types pl) args t p
 
 	let rec do_check_cast ctx tleft eright p =
-		let tright = follow eright.etype in
-		let tleft = follow tleft in
-		if tleft == tright then eright else
 		let recurse cf f =
 			if cf == ctx.curfield || List.mem cf !cast_stack then error "Recursive implicit cast" p;
 			cast_stack := cf :: !cast_stack;
@@ -699,50 +708,50 @@ module Abstract = struct
 			cast_stack := List.tl !cast_stack;
 			r
 		in
-		try (match tright,tleft with
-			| (TAbstract({a_impl = Some c1} as a1,pl1) as t1),(TAbstract({a_impl = Some c2} as a2,pl2) as t2) ->
-				if a1 == a2 then
+		let find a tl f =
+			let tcf,cfo = f() in
+			let mk_cast () =
+				let tcf = apply_params a.a_types tl tcf in
+				if type_iseq tcf tleft then
 					eright
-				else begin
-					let c,cfo,a,pl = try
-						if Meta.has Meta.MultiType a1.a_meta then raise Not_found;
-						c1,snd (find_to a1 pl1 t2),a1,pl1
-					with Not_found ->
-						if Meta.has Meta.MultiType a2.a_meta then raise Not_found;
-						c2,snd (find_from a2 pl2 t1 t2),a2,pl2
-					in
-					match cfo with
-					| None -> eright
-					| Some cf ->
-						recurse cf (fun () -> make_static_call ctx c cf a pl [eright] tleft p)
-				end
-			| _, TMono _ | TMono _, _ ->
-				eright
-			| TAbstract({a_impl = Some c} as a,pl),t2 when not (Meta.has Meta.MultiType a.a_meta) ->
-				begin match find_to a pl t2 with
-					| tcf,None ->
-						let tcf = apply_params a.a_types pl tcf in
-						if type_iseq tcf tleft then eright else do_check_cast ctx tcf eright p
-					| _,Some cf ->
-						recurse cf (fun () -> make_static_call ctx c cf a pl [eright] tleft p)
-				end
-			| t1,(TAbstract({a_impl = Some c} as a,pl) as t2) when not (Meta.has Meta.MultiType a.a_meta) ->
-				begin match find_from a pl t1 t2 with
-					| tcf,None ->
-						let tcf = apply_params a.a_types pl tcf in
-						if type_iseq tcf tleft then eright else do_check_cast ctx tcf eright p
-					| _,Some cf ->
-						recurse cf (fun () -> make_static_call ctx c cf a pl [eright] tleft p)
-				end
-			| _ ->
-				eright)
+				else
+					(* TODO: causes Java overload issues *)
+					(* let eright = mk (TCast(eright,None)) tleft p in *)
+					do_check_cast ctx tcf eright p
+			in
+			match cfo,a.a_impl with
+				| None,_ ->
+					mk_cast();
+				| Some cf,_ when Meta.has Meta.MultiType a.a_meta ->
+					mk_cast();
+				| Some cf,Some c ->
+					recurse cf (fun () -> make_static_call ctx c cf a tl [eright] tleft p)
+				| _ ->
+					assert false
+		in
+		if type_iseq tleft eright.etype then
+			eright
+		else try
+			begin match follow eright.etype with
+				| TAbstract(a,tl) ->
+					find a tl (fun () -> find_to a tl tleft)
+				| _ ->
+					raise Not_found
+			end
+		with Not_found -> try
+			begin match follow tleft with
+				| TAbstract(a,tl) ->
+					find a tl (fun () -> find_from a tl eright.etype tleft)
+				| _ ->
+					raise Not_found
+			end
 		with Not_found ->
 			eright
 
 	let check_cast ctx tleft eright p =
 		if ctx.com.display <> DMNone then eright else do_check_cast ctx tleft eright p
 
-	let find_multitype_specialization a pl p =
+	let find_multitype_specialization com a pl p =
 		let m = mk_mono() in
 		let tl = match Meta.get Meta.MultiType a.a_meta with
 			| _,[],_ -> pl
@@ -753,10 +762,31 @@ module Abstract = struct
 					| _ -> error "Type parameter expected" (pos e)
 				) el;
 				let tl = List.map2 (fun (n,_) t -> if Hashtbl.mem relevant n || not (has_mono t) then t else t_dynamic) a.a_types pl in
+				if com.platform = Js && a.a_path = ([],"Map") then begin match tl with
+					| t1 :: _ ->
+						let rec loop stack t =
+							if List.exists (fun t2 -> fast_eq t t2) stack then
+								t
+							else begin
+								let stack = t :: stack in
+								match follow t with
+								| TAbstract ({ a_path = [],"Class" },_) ->
+									error (Printf.sprintf "Cannot use %s as key type to Map because Class<T> is not comparable" (s_type (print_context()) t1)) p;
+								| TEnum(en,tl) ->
+									PMap.iter (fun _ ef -> ignore(loop stack ef.ef_type)) en.e_constrs;
+									Type.map (loop stack) t
+								| t ->
+									Type.map (loop stack) t
+							end
+						in
+						ignore(loop [] t1)
+					| _ -> assert false
+				end;
 				tl
 		in
 		let _,cfo =
-			try find_to a tl m
+			try
+				find_to a tl m
 			with Not_found ->
 				let at = apply_params a.a_types pl a.a_this in
 				let st = s_type (print_context()) at in
@@ -773,9 +803,21 @@ module Abstract = struct
 		let rec loop ctx e = match e.eexpr with
 			| TNew({cl_kind = KAbstractImpl a} as c,pl,el) ->
 				(* a TNew of an abstract implementation is only generated if it is a multi type abstract *)
-				let cf,m = find_multitype_specialization a pl e.epos in
+				let cf,m = find_multitype_specialization ctx.com a pl e.epos in
 				let e = make_static_call ctx c cf a pl ((mk (TConst TNull) (TAbstract(a,pl)) e.epos) :: el) m e.epos in
 				{e with etype = m}
+			| TCall({eexpr = TField(_,FStatic({cl_path=[],"Std"},{cf_name = "string"}))},[e1]) when (match follow e1.etype with TAbstract({a_impl = Some _},_) -> true | _ -> false) ->
+				begin match follow e1.etype with
+					| TAbstract({a_impl = Some c} as a,tl) ->
+						begin try
+							let cf = PMap.find "toString" c.cl_statics in
+							make_static_call ctx c cf a tl [e1] ctx.t.tstring e.epos
+						with Not_found ->
+							e
+						end
+					| _ ->
+						assert false
+				end
 			| TCall(e1, el) ->
 				begin try
 					begin match e1.eexpr with
@@ -900,21 +942,44 @@ let detect_usage com =
 	let usage = ref [] in
 	List.iter (fun t -> match t with
 		| TClassDecl c ->
+			let check_constructor c p =
+				try
+					let _,cf = get_constructor (fun cf -> cf.cf_type) c in
+					if Meta.has Meta.Usage cf.cf_meta then
+						usage := p :: !usage;
+				with Not_found ->
+					()
+			in
 			let rec expr e = match e.eexpr with
-				| TField(_,fa) ->
-					begin match extract_field fa with
-						| Some cf when Meta.has Meta.Usage cf.cf_meta ->
-							let p = {e.epos with pmin = e.epos.pmax - (String.length cf.cf_name)} in
-							usage := p :: !usage;
-						| _ ->
-							()
-					end;
+				| TField(_,FEnum(_,ef)) when Meta.has Meta.Usage ef.ef_meta ->
+					let p = {e.epos with pmin = e.epos.pmax - (String.length ef.ef_name)} in
+					usage := p :: !usage;
+					Type.iter expr e
+				| TField(_,(FAnon cf | FInstance (_,cf) | FStatic (_,cf) | FClosure (_,cf))) when Meta.has Meta.Usage cf.cf_meta ->
+					let p = {e.epos with pmin = e.epos.pmax - (String.length cf.cf_name)} in
+					usage := p :: !usage;
 					Type.iter expr e
 				| TLocal v when Meta.has Meta.Usage v.v_meta ->
 					usage := e.epos :: !usage
+				| TVar (v,_) when com.display = DMPosition && Meta.has Meta.Usage v.v_meta ->
+					raise (Typecore.DisplayPosition [e.epos])
+				| TFunction tf when com.display = DMPosition && List.exists (fun (v,_) -> Meta.has Meta.Usage v.v_meta) tf.tf_args ->
+					raise (Typecore.DisplayPosition [e.epos])
+				| TTypeExpr mt when (Meta.has Meta.Usage (t_infos mt).mt_meta) ->
+					usage := e.epos :: !usage
+				| TNew (c,_,_) ->
+					check_constructor c e.epos;
+					Type.iter expr e;
+				| TCall({eexpr = TConst TSuper},_) ->
+					begin match c.cl_super with
+						| Some (c,_) ->
+							check_constructor c e.epos
+						| _ ->
+							()
+					end
 				| _ -> Type.iter expr e
 			in
-			let field cf = match cf.cf_expr with None -> () | Some e -> expr e in
+			let field cf = ignore(follow cf.cf_type); match cf.cf_expr with None -> () | Some e -> expr e in
 			(match c.cl_constructor with None -> () | Some cf -> field cf);
 			(match c.cl_init with None -> () | Some e -> expr e);
 			List.iter field c.cl_ordered_statics;
@@ -1537,4 +1602,170 @@ struct
 			in
 
 			List.map fst (loop [] !rated)
+end;;
+
+
+module UnificationCallback = struct
+	let tf_stack = ref []
+
+	let check_call_params f el tl =
+		let rec loop acc el tl = match el,tl with
+			| e :: el, (n,_,t) :: tl ->
+				loop ((f e t) :: acc) el tl
+			| [], [] ->
+				acc
+			| [],_ ->
+				acc
+			| e :: el, [] ->
+				loop (e :: acc) el []
+		in
+		List.rev (loop [] el tl)
+
+	let check_call f el t = match follow t with
+		| TFun(args,_) ->
+			check_call_params f el args
+		| _ ->
+			el
+
+	let rec run f e =
+		let f e t =
+			(* TODO: I don't think this should cause errors on Flash target *)
+			(* if not (type_iseq e.etype t) then f e t else e *)
+			f e t
+		in
+		let check e = match e.eexpr with
+			| TBinop((OpAssign | OpAssignOp _ as op),e1,e2) ->
+				let e2 = f e2 e1.etype in
+				{e with eexpr = TBinop(op,e1,e2)}
+			| TVar(v,Some e) ->
+				let eo = Some (f e v.v_type) in
+				{ e with eexpr = TVar(v,eo) }
+			| TCall(e1,el) ->
+				let el = check_call f el e1.etype in
+				{e with eexpr = TCall(e1,el)}
+			| TNew(c,tl,el) ->
+				begin try
+					let tcf,_ = get_constructor (fun cf -> apply_params c.cl_types tl cf.cf_type) c in
+					let el = check_call f el tcf in
+					{e with eexpr = TNew(c,tl,el)}
+				with Not_found ->
+					e
+				end
+			| TArrayDecl el ->
+				begin match follow e.etype with
+					| TInst({cl_path=[],"Array"},[t]) -> {e with eexpr = TArrayDecl(List.map (fun e -> f e t) el)}
+					| _ -> e
+				end
+			| TObjectDecl fl ->
+				begin match follow e.etype with
+					| TAnon an ->
+						let fl = List.map (fun (n,e) ->
+							let e = try
+								let t = (PMap.find n an.a_fields).cf_type in
+								f e t
+							with Not_found ->
+								e
+							in
+							n,e
+						) fl in
+						{ e with eexpr = TObjectDecl fl }
+					| _ -> e
+				end
+			| TReturn (Some e1) ->
+				begin match !tf_stack with
+					| tf :: _ -> { e with eexpr = TReturn (Some (f e1 tf.tf_type))}
+					| _ -> e
+				end
+			| _ ->
+				e
+		in
+		match e.eexpr with
+			| TFunction tf ->
+				tf_stack := tf :: !tf_stack;
+				let etf = {e with eexpr = TFunction({tf with tf_expr = run f tf.tf_expr})} in
+				tf_stack := List.tl !tf_stack;
+				etf
+			| _ ->
+				check (Type.map_expr (run f) e)
+end;;
+
+module DeprecationCheck = struct
+
+	let curclass = ref null_class
+
+	let warned_positions = Hashtbl.create 0
+
+	let print_deprecation_message com meta s p_usage =
+		let s = match meta with
+			| _,[EConst(String s),_],_ -> s
+			| _ -> Printf.sprintf "Usage of this %s is deprecated" s
+		in
+		if not (Hashtbl.mem warned_positions p_usage) then begin
+			Hashtbl.replace warned_positions p_usage true;
+			com.warning s p_usage;
+		end
+
+	let check_meta com meta s p_usage =
+		try
+			print_deprecation_message com (Meta.get Meta.Deprecated meta) s p_usage;
+		with Not_found ->
+			()
+
+	let check_cf com cf p = check_meta com cf.cf_meta "field" p
+
+	let check_class com c p = if c != !curclass then check_meta com c.cl_meta "class" p
+
+	let check_enum com en p = check_meta com en.e_meta "enum" p
+
+	let check_ef com ef p = check_meta com ef.ef_meta "enum field" p
+
+	let check_typedef com t p = check_meta com t.t_meta "typedef" p
+
+	let check_module_type com mt p = match mt with
+		| TClassDecl c -> check_class com c p
+		| TEnumDecl en -> check_enum com en p
+		| _ -> ()
+
+	let run com =
+		let rec expr e = match e.eexpr with
+			| TField(e1,fa) ->
+				expr e1;
+				begin match fa with
+					| FStatic(c,cf) | FInstance(c,cf) ->
+						check_class com c e.epos;
+						check_cf com cf e.epos
+					| FAnon cf ->
+						check_cf com cf e.epos
+					| FClosure(co,cf) ->
+						(match co with None -> () | Some c -> check_class com c e.epos);
+						check_cf com cf e.epos
+					| FEnum(en,ef) ->
+						check_enum com en e.epos;
+						check_ef com ef e.epos;
+					| _ ->
+						()
+				end
+			| TNew(c,_,el) ->
+				List.iter expr el;
+				check_class com c e.epos;
+				(match c.cl_constructor with None -> () | Some cf -> check_cf com cf e.epos)
+			| TTypeExpr(mt) | TCast(_,Some mt) ->
+				check_module_type com mt e.epos
+			| TMeta((Meta.Deprecated,_,_) as meta,e1) ->
+				print_deprecation_message com meta "field" e1.epos;
+				expr e1;
+			| _ ->
+				Type.iter expr e
+		in
+		List.iter (fun t -> match t with
+			| TClassDecl c ->
+				curclass := c;
+				let field cf = match cf.cf_expr with None -> () | Some e -> expr e in
+				(match c.cl_constructor with None -> () | Some cf -> field cf);
+				(match c.cl_init with None -> () | Some e -> expr e);
+				List.iter field c.cl_ordered_statics;
+				List.iter field c.cl_ordered_fields;
+			| _ ->
+				()
+		) com.types
 end

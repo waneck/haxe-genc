@@ -361,7 +361,7 @@ module Filters = struct
 					| vars ->
 						(* let expr = { eexpr = TVars(List.rev vars); etype = gen.gcom.basic.tvoid; epos = ret.epos } in *)
 						let new_vars = List.rev vars in
-						let prepend_vars e =  List.fold_left (fun expr (v,eo) -> Codegen.concat (mk_var_expr v eo ret.epos) expr) e new_vars in
+						let prepend_vars e =  List.fold_left (fun expr (v,eo) -> Type.concat (mk_var_expr v eo ret.epos) expr) e new_vars in
 						declared_vars := [];
 						match ret.eexpr with
 						| TFunction tf ->
@@ -939,7 +939,7 @@ module SwitchHandler = struct
 				match dt with
 				| DTExpr e ->
 					let egoto = mk_goto_meta i_last in
-					Codegen.concat e egoto
+					Type.concat e egoto
 				| DTGuard(e1,dt,dto) ->
 					let ethen = mk_dt dt in
 					let eelse = match dto with None -> None | Some dt -> Some (mk_dt dt) in
@@ -950,7 +950,7 @@ module SwitchHandler = struct
 						v,Some e
 					) vl in
 					let evars = mk (TVars vl) gen.gcom.basic.tvoid e.epos in
-					Codegen.concat evars (mk_dt dt)
+					Type.concat evars (mk_dt dt)
 				| DTGoto i ->
 					mk_goto_meta i
 				| DTSwitch(e1,cl,dto) ->
@@ -961,18 +961,18 @@ module SwitchHandler = struct
 			let el,i = Array.fold_left (fun (acc,i) dt ->
 				let elabel = mk_label_meta i in
 				let edt = mk_dt dt in
-				(Codegen.concat elabel edt) :: acc,i + 1
+				(Type.concat elabel edt) :: acc,i + 1
 			) ([],0) dt.dt_dt_lookup in
 			let e = gen.map (Expr.mk_block gen.gcom e.epos el) in
 			let e = Expr.add_meta (Meta.Custom ":patternMatching") e in
 			List.iter (fun (v,_) -> check_var_name v) dt.dt_var_init;
 			let einit = mk (TVars dt.dt_var_init) gen.gcom.basic.tvoid e.epos in
 			let elabel = mk_label_meta i in
-			let e1 = Codegen.concat einit (Codegen.concat e elabel) in
+			let e1 = Type.concat einit (Type.concat e elabel) in
 			if dt.dt_first = i - 1 then
 				e1
 			else
-				Codegen.concat (mk_goto_meta dt.dt_first) e1 *)
+				Type.concat (mk_goto_meta dt.dt_first) e1 *)
 		| TSwitch(e1,cases,def) when StringHandler.is_string e1.etype ->
 			let length_map = Hashtbl.create 0 in
 			List.iter (fun (el,e) ->
@@ -1290,12 +1290,12 @@ module ExprTransformation = struct
 				| TReturn _ | TBreak _ | TContinue -> Some epop
 				| _ -> None
 			) in
-			let ec1 = if found then ec1 else Codegen.concat ec1 epop in
+			let ec1 = if found then ec1 else Type.concat ec1 epop in
 			let c1 = [Expr.mk_int gen.gcom 0 e.epos],ec1 in
 			let def = ref None in
 			let cl = c1 :: (ExtList.List.filter_map (fun (v,e) ->
 				let evar = mk (TVar (v,Some (Expr.mk_static_field_2 hxc.c_exception "thrownObject" p))) gen.gcon.com.basic.tvoid p in
-				let e = Codegen.concat evar (Codegen.concat epopassign (gen.map e)) in
+				let e = Type.concat evar (Type.concat epopassign (gen.map e)) in
 				if v.v_type == t_dynamic then begin
 					def := Some e;
 					None;
@@ -1309,7 +1309,7 @@ module ExprTransformation = struct
 			let epeek = Expr.mk_static_call_2 gen.gcon.hxc.c_exception "peek" [] p in
 			let el = [Expr.mk_deref gen.gcon.hxc p epeek;Expr.mk_int gen.gcom (get_type_id gen.gcon e1.etype) p] in
 			let ejmp = Expr.mk_static_call_2 gen.gcon.hxc.c_csetjmp "longjmp" el p in
-			Codegen.concat eassign ejmp
+			Type.concat eassign ejmp
 		| TArrayDecl [] ->
 			let c,t = match follow (gen.gcon.com.basic.tarray (mk_mono())) with
 				| TInst(c,[t]) -> c,t
@@ -1340,7 +1340,7 @@ module ExprTransformation2 = struct
 			let enext = mk (TField(ev,quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
 			let eassign = Expr.mk_binop OpAssign (Expr.mk_local v e.epos) enext v.v_type e.epos in
-			let ebody = Codegen.concat eassign (gen.map e2) in
+			let ebody = Type.concat eassign (gen.map e2) in
 			mk (TBlock [
 				mk (TVar (vtemp,Some e1)) gen.gcom.basic.tvoid e1.epos;
 				mk (TWhile((mk (TParenthesis ehasnext) ehasnext.etype ehasnext.epos),ebody,NormalWhile)) gen.gcom.basic.tvoid e1.epos;
@@ -1709,7 +1709,7 @@ module VTableHandler = struct
 			let e_assign_ptr = (Expr.mk_binop OpAssign e_vt e_alloc t_voidp null_pos) in
 			let e_block =  Expr.mk_block con.com null_pos (e_assign_ptr :: l_easgn) in
 			c.cl_init <- ( match c.cl_init with
-			| Some code -> Some (Codegen.concat e_block code)
+			| Some code -> Some (Type.concat e_block code)
 			| None      -> Some e_block )
 
 		in
@@ -2197,7 +2197,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 		spr ctx "{";
 		let generate_case_expr e =
 			let e = if Meta.has (Meta.Custom ":patternMatching") ctx.fctx.meta then e
-			else Codegen.concat e (Expr.add_meta (Meta.Custom ":really") (mk TBreak e.etype e.epos)) in
+			else Type.concat e (Expr.add_meta (Meta.Custom ":really") (mk TBreak e.etype e.epos)) in
 			generate_expr ctx false e
 		in
 		let b = open_block ctx in
@@ -2737,11 +2737,11 @@ let generate_make_file con =
 let initialize_class con c =
 	let add_init e = match c.cl_init with
 		| None -> c.cl_init <- Some e
-		| Some e2 -> c.cl_init <- Some (Codegen.concat e2 e)
+		| Some e2 -> c.cl_init <- Some (Type.concat e2 e)
 	in
 	let add_member_init e = match c.cl_constructor with
 		| Some ({cf_expr = Some ({eexpr = TFunction tf} as ef)} as cf) ->
-			cf.cf_expr <- Some ({ef with eexpr = TFunction {tf with tf_expr = Codegen.concat tf.tf_expr e}})
+			cf.cf_expr <- Some ({ef with eexpr = TFunction {tf with tf_expr = Type.concat tf.tf_expr e}})
 		| _ ->
 			failwith "uhm..."
 	in

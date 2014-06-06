@@ -186,7 +186,7 @@ class Reader {
 		}
 		return l;
 	}
-	
+
 	public static function readZip( i : haxe.io.Input ) {
 		var r = new Reader(i);
 		return r.read();
@@ -195,8 +195,7 @@ class Reader {
 	public static function unzip( f : Entry ) {
 		if( !f.compressed )
 			return f.data;
-		#if neko
-		var c = new neko.zip.Uncompress(-15);
+		var c = new haxe.zip.Uncompress(-15);
 		var s = haxe.io.Bytes.alloc(f.fileSize);
 		var r = c.execute(f.data,0,s,0);
 		c.close();
@@ -205,9 +204,6 @@ class Reader {
 		f.compressed = false;
 		f.dataSize = f.fileSize;
 		f.data = s;
-		#else
-		throw "No uncompress support";
-		#end
 		return f.data;
 	}
 

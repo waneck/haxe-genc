@@ -229,7 +229,7 @@ let rec type_str ctx t p =
 	| TEnum _ | TInst _ when List.memq t ctx.local_types ->
 		"*"
 	| TAbstract ({ a_impl = Some _ } as a,pl) ->
-		type_str ctx (apply_params a.a_types pl a.a_this) p
+		type_str ctx (Codegen.Abstract.get_underlying_type a pl) p
 	| TAbstract (a,_) ->
 		(match a.a_path with
 		| [], "Void" -> "void"
@@ -387,14 +387,18 @@ let gen_function_header ctx name f params p =
 		" " ^ loop meta
 	);
 	concat ctx "," (fun (v,c) ->
-		let tstr = type_str ctx v.v_type p in
-		print ctx "%s : %s" (s_ident v.v_name) tstr;
-		match c with
-		| None ->
-			if ctx.constructor_block then print ctx " = %s" (default_value tstr);
-		| Some c ->
-			spr ctx " = ";
-			gen_constant ctx p c
+		match v.v_name with
+			| "__arguments__" ->
+				print ctx "...__arguments__"
+			| _ ->
+				let tstr = type_str ctx v.v_type p in
+				print ctx "%s : %s" (s_ident v.v_name) tstr;
+				match c with
+				| None ->
+					if ctx.constructor_block then print ctx " = %s" (default_value tstr);
+				| Some c ->
+					spr ctx " = ";
+					gen_constant ctx p c
 	) f.tf_args;
 	print ctx ") : %s " (type_str ctx f.tf_type p);
 	(fun () ->
@@ -417,9 +421,11 @@ let rec gen_call ctx e el r =
 		spr ctx " is ";
 		gen_value ctx e2;
 	| TLocal { v_name = "__in__" } , [e1;e2] ->
+		spr ctx "(";
 		gen_value ctx e1;
 		spr ctx " in ";
 		gen_value ctx e2;
+		spr ctx ")"
 	| TLocal { v_name = "__as__" }, [e1;e2] ->
 		gen_value ctx e1;
 		spr ctx " as ";

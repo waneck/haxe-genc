@@ -39,8 +39,9 @@ type current_fun =
 	| FunMember
 	| FunStatic
 	| FunConstructor
-	| FunMemberLocal
 	| FunMemberAbstract
+	| FunMemberClassLocal
+	| FunMemberAbstractLocal
 
 type macro_mode =
 	| MExpr
@@ -195,7 +196,6 @@ let string_error s sl msg =
 
 let string_source t = match follow t with
 	| TInst(c,_) -> List.map (fun cf -> cf.cf_name) c.cl_ordered_fields
-	| TEnum(en,_) -> en.e_names
 	| TAnon a -> PMap.fold (fun cf acc -> cf.cf_name :: acc) a.a_fields []
 	| TAbstract({a_impl = Some c},_) -> List.map (fun cf -> cf.cf_name) c.cl_ordered_statics
 	| _ -> []
@@ -272,6 +272,14 @@ let type_expr ctx e with_type = (!type_expr_ref) ctx e with_type
 let unify_min ctx el = (!unify_min_ref) ctx el
 
 let match_expr ctx e cases def with_type p = !match_expr_ref ctx e cases def with_type p
+
+let make_static_call ctx c cf map args t p =
+	let ta = TAnon { a_fields = c.cl_statics; a_status = ref (Statics c) } in
+	let ethis = mk (TTypeExpr (TClassDecl c)) ta p in
+	let monos = List.map (fun _ -> mk_mono()) cf.cf_params in
+	let map t = map (apply_params cf.cf_params monos t) in
+	let ef = mk (TField (ethis,(FStatic (c,cf)))) (map cf.cf_type) p in
+	make_call ctx ef args (map t) p
 
 let unify ctx t1 t2 p =
 	try

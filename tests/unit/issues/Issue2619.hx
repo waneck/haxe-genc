@@ -1,7 +1,7 @@
 package unit.issues;
 import unit.Test;
 
-private abstract A(String) {
+private abstract A(String) to String {
 	public function new(s) this = s;
 }
 
@@ -17,14 +17,14 @@ class Issue2619 extends Test {
 			e;
 		}
 		eq("foo", s);
-		
+
 		var s:String = try {
 			throw new A("foo");
 		} catch(e:String) {
 			e;
 		}
 		eq("foo", s);
-		
+
 		t(unit.TestType.typeError(
 			try { }
 			catch(e:A) { }

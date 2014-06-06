@@ -23,7 +23,7 @@
 /**
 	The DateTools class contains some extra functionalities for handling `Date`
 	instances and timestamps.
-	
+
 	In the context of haxe dates, a timestamp is defined as the number of
 	milliseconds elapsed since 1st January 1970.
 **/
@@ -123,7 +123,7 @@ class DateTools {
 
 	/**
 		Returns the result of adding timestamp `t` to Date `d`.
-		
+
 		This is a convenience function for calling
 		`Date.fromTime(d.getTime() + t)`.
 	**/
@@ -135,7 +135,7 @@ class DateTools {
 
 	/**
 		Returns the number of days in the month of Date `d`.
-		
+
 		This method handles leap years.
 	**/
 	public static function getMonthDays( d : Date ) : Int {
@@ -199,13 +199,13 @@ class DateTools {
 	public static function make( o : { ms : Float, seconds : Int, minutes : Int, hours : Int, days : Int } ) {
 		return o.ms + 1000.0 * (o.seconds + 60.0 * (o.minutes + 60.0 * (o.hours + 24.0 * o.days)));
 	}
-	
-	#if (js || flash || php || cpp)
+
+	#if (js || flash || php || cpp || python)
 	/**
 		Retrieve Unix timestamp value from Date components. Takes same argument sequence as the Date constructor.
 	**/
 	public static #if (js || flash || php) inline #end function makeUtc(year : Int, month : Int, day : Int, hour : Int, min : Int, sec : Int ):Float {
-	    #if (js || flash)
+	    #if (js || flash || python)
 		   return untyped Date.UTC(year, month, day, hour, min, sec);
 		#elseif php
 		   return untyped __call__("gmmktime", hour, min, sec, month + 1, day, year) * 1000;

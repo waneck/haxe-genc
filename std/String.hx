@@ -106,7 +106,7 @@ extern class String {
 
 		If `this` String is the empty String "", the result is not consistent
 		across targets and may either be `[]` (on Js, Cpp) or `[""]`.
-		
+
 		If `delimiter` is the empty String "", `this` String is split into an
 		Array of `this.length` elements, where the elements correspond to the
 		characters of `this` String.

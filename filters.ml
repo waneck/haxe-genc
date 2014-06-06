@@ -92,6 +92,19 @@ let handle_side_effects com gen_temp e =
 				e1,mk (TConst (TBool(false))) com.basic.tbool e.epos
 			in
 			mk (TIf(e_if,e_then,Some e_else)) com.basic.tbool e.epos
+		| TBinop((OpAssign | OpAssignOp _) as op,{eexpr = TArray(e11,e12)},e2) ->
+			let e1 = match ordered_list [e11;e12] with
+				| [e1;e2] ->
+					{e with eexpr = TArray(e1,e2)}
+				| _ ->
+					assert false
+			in
+			let e2 = loop e2 in
+			{e with eexpr = TBinop(op,e1,e2)}
+		| TBinop((OpAssign | OpAssignOp _) as op,e1,e2) ->
+			let e1 = loop e1 in
+			let e2 = loop e2 in
+			{e with eexpr = TBinop(op,e1,e2)}
  		| TBinop(op,e1,e2) ->
 			begin match ordered_list [e1;e2] with
 				| [e1;e2] ->
@@ -106,47 +119,29 @@ let handle_side_effects com gen_temp e =
 				| _ ->
 					assert false
 			end
+		| TWhile(e1,e2,flag) when (match e1.eexpr with TParenthesis {eexpr = TConst(TBool true)} -> false | _ -> true) ->
+			let p = e.epos in
+			let e_break = mk TBreak t_dynamic p in
+			let e_not = mk (TUnop(Not,Prefix,Codegen.mk_parent e1)) e1.etype e1.epos in
+			let e_if = mk (TIf(e_not,e_break,None)) com.basic.tvoid p in
+			let e_block = if flag = NormalWhile then Type.concat e_if e2 else Type.concat e2 e_if in
+			let e_true = mk (TConst (TBool true)) com.basic.tbool p in
+			let e = mk (TWhile(Codegen.mk_parent e_true,e_block,NormalWhile)) e.etype p in
+			loop e
 		| _ ->
 			Type.map_expr loop e
 	and ordered_list el =
-		let had_side_effect = ref false in
-		let bind e =
-			if !had_side_effect then
-				declare_temp e.etype (Some (loop e)) e.epos
-			else begin
-				had_side_effect := true;
-				e
-			end
-		in
-		let rec no_side_effect e = match e.eexpr with
-			| TNew _ | TCall _ | TArrayDecl _ | TObjectDecl _ | TBinop ((OpAssignOp _ | OpAssign),_,_) | TUnop ((Increment|Decrement),_,_) ->
-				bind e;
-			| TIf _ | TTry _ | TSwitch _ ->
-				(* Technically these are not side-effects, but we have to move them out anyway because their blocks code have side-effects.
-				   This also probably improves readability of the generated code. We can ignore TWhile and TFor because their type is Void,
-				   so they could never appear in a place where side-effects matter. *)
-				bind e
-			| TBinop(op,e1,e2) when Optimizer.has_side_effect e1 || Optimizer.has_side_effect e2 ->
-				bind e;
-			| TConst _ | TLocal _ | TTypeExpr _ | TFunction _
-			| TReturn _ | TBreak | TContinue | TThrow _ | TCast (_,Some _) ->
-				e
-			| TBlock _ ->
-				bind e
+		match el with
+			| [e] ->
+				el
 			| _ ->
-				Type.map_expr no_side_effect e
-		in
-		let rec loop2 acc el = match el with
-			| e :: el ->
-				let e = no_side_effect e in
-				if !had_side_effect then
-					(List.map no_side_effect (List.rev el)) @ e :: acc
+				let bind e =
+					declare_temp e.etype (Some (loop e)) e.epos
+				in
+				if (List.exists Optimizer.has_side_effect) el then
+					List.map bind el
 				else
-					loop2 (e :: acc) el
-			| [] ->
-				acc
-		in
-		List.map loop (loop2 [] (List.rev el))
+					el
 	in
 	let e = loop e in
 	match close_block() with
@@ -351,12 +346,12 @@ let check_local_vars_init e =
 				vars := intersect !vars v1)
 		| TWhile (cond,e,flag) ->
 			(match flag with
-			| NormalWhile ->
+			| NormalWhile when (match cond.eexpr with TParenthesis {eexpr = TConst (TBool true)} -> false | _ -> true) ->
 				loop vars cond;
 				let old = !vars in
 				loop vars e;
 				vars := old;
-			| DoWhile ->
+			| _ ->
 				loop vars e;
 				loop vars cond)
 		| TTry (e,catches) ->
@@ -542,13 +537,13 @@ let captured_vars com e =
 			let vtmp = mk_var v used in
 			let it = wrap used it in
 			let expr = wrap used expr in
-			mk (TFor (vtmp,it,Codegen.concat (mk_init v vtmp e.epos) expr)) e.etype e.epos
+			mk (TFor (vtmp,it,Type.concat (mk_init v vtmp e.epos) expr)) e.etype e.epos
 		| TTry (expr,catchs) ->
 			let catchs = List.map (fun (v,e) ->
 				let e = wrap used e in
 				try
 					let vtmp = mk_var v used in
-					vtmp, Codegen.concat (mk_init v vtmp e.epos) e
+					vtmp, Type.concat (mk_init v vtmp e.epos) e
 				with Not_found ->
 					v, e
 			) catchs in
@@ -596,7 +591,7 @@ let captured_vars com e =
 			let fargs = List.map (fun (v,o) ->
 				if PMap.mem v.v_id used then
 					let vtmp = mk_var v used in
-					fexpr := Codegen.concat (mk_init v vtmp e.epos) !fexpr;
+					fexpr := Type.concat (mk_init v vtmp e.epos) !fexpr;
 					vtmp, o
 				else
 					v, o
@@ -846,6 +841,15 @@ let rename_local_vars com e =
 	loop e;
 	e
 
+let check_unification com e t =
+	begin match follow e.etype,follow t with
+		| TEnum _,TDynamic _ ->
+			add_feature com "may_print_enum";
+		| _ ->
+			()
+	end;
+	e
+
 (* PASS 1 end *)
 
 (* Saves a class state so it can be restored later, e.g. after DCE or native path rewrite *)
@@ -967,6 +971,7 @@ let add_rtti ctx t =
 
 (* Adds member field initializations as assignments to the constructor *)
 let add_field_inits ctx t =
+	let is_as3 = Common.defined ctx.com Define.As3 && not ctx.in_macro in
 	let apply c =
 		let ethis = mk (TConst TThis) (TInst (c,List.map snd c.cl_types)) c.cl_pos in
 		(* TODO: we have to find a variable name which is not used in any of the functions *)
@@ -975,8 +980,8 @@ let add_field_inits ctx t =
 		let inits,fields = List.fold_left (fun (inits,fields) cf ->
 			match cf.cf_kind,cf.cf_expr with
 			| Var _, Some _ ->
-				if Common.defined ctx.com Define.As3 then (inits, cf :: fields) else (cf :: inits, cf :: fields)
-			| Method MethDynamic, Some e when Common.defined ctx.com Define.As3 ->
+				if is_as3 then (inits, cf :: fields) else (cf :: inits, cf :: fields)
+			| Method MethDynamic, Some e when is_as3 ->
 				(* TODO : this would have a better place in genSWF9 I think - NC *)
 				(* we move the initialization of dynamic functions to the constructor and also solve the
 				   'this' problem along the way *)
@@ -1002,13 +1007,6 @@ let add_field_inits ctx t =
 		match inits with
 		| [] -> ()
 		| _ ->
-			let cf_ctor = match c.cl_constructor with
-				| None ->
-					List.iter (fun cf -> display_error ctx "Cannot initialize member fields on classes that do not have a constructor" cf.cf_pos) inits;
-					error "Could not initialize member fields" c.cl_pos;
-				| Some cf ->
-					cf
-			in
 			let el = List.map (fun cf ->
 				match cf.cf_expr with
 				| None -> assert false
@@ -1016,20 +1014,32 @@ let add_field_inits ctx t =
 					let lhs = mk (TField(ethis,FInstance (c,cf))) cf.cf_type e.epos in
 					cf.cf_expr <- None;
 					let eassign = mk (TBinop(OpAssign,lhs,e)) e.etype e.epos in
-					if Common.defined ctx.com Define.As3 then begin
+					if is_as3 then begin
 						let echeck = mk (TBinop(OpEq,lhs,(mk (TConst TNull) lhs.etype e.epos))) ctx.com.basic.tbool e.epos in
 						mk (TIf(echeck,eassign,None)) eassign.etype e.epos
 					end else
 						eassign;
 			) inits in
 			let el = if !need_this then (mk (TVar((v, Some ethis))) ethis.etype ethis.epos) :: el else el in
-			match cf_ctor.cf_expr with
-			| Some { eexpr = TFunction f } ->
-				let bl = match f.tf_expr with {eexpr = TBlock b } -> b | x -> [x] in
-				let ce = mk (TFunction {f with tf_expr = mk (TBlock (el @ bl)) ctx.com.basic.tvoid c.cl_pos }) cf_ctor.cf_type cf_ctor.cf_pos in
-				c.cl_constructor <- Some {cf_ctor with cf_expr = Some ce }
-			| _ ->
-				assert false
+			match c.cl_constructor with
+			| None ->
+				let ct = TFun([],ctx.com.basic.tvoid) in
+				let ce = mk (TFunction {
+					tf_args = [];
+					tf_type = ctx.com.basic.tvoid;
+					tf_expr = mk (TBlock el) ctx.com.basic.tvoid c.cl_pos;
+				}) ct c.cl_pos in
+				let ctor = mk_field "new" ct c.cl_pos in
+				ctor.cf_kind <- Method MethNormal;
+				c.cl_constructor <- Some { ctor with cf_expr = Some ce };
+			| Some cf ->
+				match cf.cf_expr with
+				| Some { eexpr = TFunction f } ->
+					let bl = match f.tf_expr with {eexpr = TBlock b } -> b | x -> [x] in
+					let ce = mk (TFunction {f with tf_expr = mk (TBlock (el @ bl)) ctx.com.basic.tvoid c.cl_pos }) cf.cf_type cf.cf_pos in
+					c.cl_constructor <- Some {cf with cf_expr = Some ce }
+				| _ ->
+					assert false
 	in
 	match t with
 	| TClassDecl c ->
@@ -1108,10 +1118,17 @@ let post_process_end() =
 	incr pp_counter
 
 let run com tctx main =
-	if com.display = DMUsage then
-		Codegen.detect_usage com;
+	begin match com.display with
+		| DMUsage | DMPosition ->
+			Codegen.detect_usage com;
+		| _ ->
+			()
+	end;
+	if not (Common.defined com Define.NoDeprecationWarnings) then
+		Codegen.DeprecationCheck.run com;
 	(* PASS 1: general expression filters *)
  	let filters = [
+ 		Codegen.UnificationCallback.run (check_unification com);
 		Codegen.Abstract.handle_abstract_casts tctx;
 		blockify_ast;
 		(match com.platform with
@@ -1149,12 +1166,22 @@ let run com tctx main =
 	) com.types;
 	(* update cache dependencies before DCE is run *)
 	Codegen.update_cache_dependencies com;
+	(* check @:remove metadata before DCE so it is ignored there (issue #2923) *)
+	List.iter (check_remove_metadata tctx) com.types;
 	(* DCE *)
 	let dce_mode = (try Common.defined_value com Define.Dce with _ -> "no") in
 	if not (Common.defined com Define.As3 || dce_mode = "no" || Common.defined com Define.DocGen) then Dce.run com main (dce_mode = "full" && not (Common.defined com Define.Interp));
 	(* always filter empty abstract implementation classes (issue #1885) *)
 	List.iter (fun mt -> match mt with
-		| TClassDecl({cl_kind = KAbstractImpl _} as c) when c.cl_ordered_statics = [] && c.cl_ordered_fields = [] && not (Meta.has Meta.Used c.cl_meta) -> c.cl_extern <- true
+		| TClassDecl({cl_kind = KAbstractImpl _} as c) when c.cl_ordered_statics = [] && c.cl_ordered_fields = [] && not (Meta.has Meta.Used c.cl_meta) ->
+			c.cl_extern <- true
+		| TClassDecl({cl_kind = KAbstractImpl a} as c) when Meta.has Meta.Enum a.a_meta ->
+			let is_runtime_field cf =
+				not (Meta.has Meta.Enum cf.cf_meta)
+			in
+			(* also filter abstract implementation classes that have only @:enum fields (issue #2858) *)
+			if not (Meta.has Meta.Used c.cl_meta || Common.defined com Define.As3) || not (List.exists is_runtime_field c.cl_ordered_statics) then
+				c.cl_extern <- true
 		| _ -> ()
 	) com.types;
 	(* PASS 3: type filters *)
@@ -1164,7 +1191,6 @@ let run com tctx main =
 		add_rtti;
 		(match com.platform with | Java | Cs -> (fun _ _ -> ()) | _ -> add_field_inits);
 		add_meta_field;
-		check_remove_metadata;
 		check_void_field;
 	] in
 	List.iter (fun t -> List.iter (fun f -> f tctx t) type_filters) com.types

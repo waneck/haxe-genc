@@ -204,7 +204,7 @@ class Test #if swf_mark implements mt.Protect #end {
 	}
 
 	static function resetTimer() {
-		#if (neko || php || cpp || java || cs)
+		#if (neko || php || cpp || java || cs || python)
 		#else
 		if( timer != null ) timer.stop();
 		timer = new haxe.Timer(10000);
@@ -257,6 +257,7 @@ class Test #if swf_mark implements mt.Protect #end {
 			new TestEReg(),
 			new TestXML(),
 			new TestMisc(),
+			new TestJson(),
 			new TestResource(),
 			new TestInt64(),
 			new TestReflect(),
@@ -276,6 +277,9 @@ class Test #if swf_mark implements mt.Protect #end {
 			#if java
 			new TestJava(),
 			#end
+			#if python
+			new TestPython(),
+			#end
 			#if php
 			new TestPhp(),
 			#end
@@ -285,9 +289,9 @@ class Test #if swf_mark implements mt.Protect #end {
 			#if ((dce == "full") && !interp && !as3)
 			new TestDCE(),
 			#end
-			#if ( (java || neko) && !macro && !interp)
-			new TestThreads(),
-			#end
+			// #if ( (java || neko) && !macro && !interp)
+			// new TestThreads(),
+			// #end
 			//new TestUnspecified(),
 			//new TestRemoting(),
 		];
