@@ -2177,7 +2177,7 @@ and type_unop ctx op flag e p =
 					| [] -> raise Not_found
 					| (op2,flag2,cf) :: opl when op == op2 && flag == flag2 ->
 						let m = mk_mono() in
-						let tcf = apply_params c.cl_types pl (monomorphs cf.cf_params cf.cf_type) in
+						let tcf = apply_params a.a_types pl (monomorphs cf.cf_params cf.cf_type) in
 						if Meta.has Meta.Impl cf.cf_meta then begin
 							if type_iseq (tfun [apply_params a.a_types pl a.a_this] m) tcf then cf,tcf,m else loop opl
 						end else
@@ -2187,8 +2187,6 @@ and type_unop ctx op flag e p =
 				let cf,t,r = try loop a.a_unops with Not_found -> error "Invalid operation" p in
 				(match cf.cf_expr with
 				| None ->
-					let e = make {e with etype = apply_params a.a_types pl a.a_this} in
-					(* unify ctx r e.etype p; *) (* TODO: I'm not sure why this was here (related to #2295) *)
 					{e with etype = r}
 				| Some _ ->
 					let et = type_module_type ctx (TClassDecl c) None p in
