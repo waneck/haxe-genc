@@ -477,8 +477,13 @@ module Simplifier = struct
 				| _ -> raise Exit
 			in
 			try
-				loop e;
-				true
+				begin match follow e.etype with
+					| TAbstract({a_path=(["c"],"ConstSizeArray")},_) ->
+						true
+					| _ ->
+						loop e;
+						true
+				end;
 			with Exit ->
 				false
 		in
