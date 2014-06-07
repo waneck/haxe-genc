@@ -74,7 +74,7 @@ enum ValueType {
 	public static function createEmptyInstance<T>( cl : Class<T> ) : T untyped {
 		var t:c.TypeReference<Dynamic> = cast cl;
 		if (t.allocator == null) {
-			throw t.name + " has no constructor.";
+			return null;
 		}
 		return t.allocator();
 	}

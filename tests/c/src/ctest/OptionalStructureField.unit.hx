@@ -1,7 +1,7 @@
 function takeTypedef(t:MyTypedef) {
 		return t.maybeGiven;
 	}
-	
+
 function giveTypedef():MyTypedef {
 	return { given: "foo" };
 }
@@ -22,7 +22,7 @@ td.maybeGiven == null;
 
 var a:Array<MyTypedef> = [ {given: "foo" }];
 a[0].given == "foo";
-//a[0].maybeGiven == null;
+a[0].maybeGiven == null;
 
 var o:{f:MyTypedef} = { f: { given: "foo" }};
 o.f.given == "foo";

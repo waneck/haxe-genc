@@ -34,12 +34,12 @@ class UnitBuilder {
 	static var equals = macro Main.equals;
 	static var equalsNot = macro Main.equalsNot;
 	static var equalsFloat = macro Main.equalsFloat;
-	
+
 	static public macro function build(basePath:String):Array<Field> {
 		var ret = Context.getBuildFields();
 		var calls = [];
 		var numFiles = 0;
-			
+
 		function readDir(path) {
 			var dir = sys.FileSystem.readDirectory(path);
 			path = path.endsWith("\\") || path.endsWith("/") ? path : path + "/";
@@ -78,7 +78,7 @@ class UnitBuilder {
 		ret.push(m);
 		return ret;
 	}
-	
+
 	#if macro
 	static function collapseToOrExpr(el:Array<Expr>) {
 		return switch(el) {
@@ -89,7 +89,7 @@ class UnitBuilder {
 			macro @:pos(e.pos) $e || ${collapseToOrExpr(el)};
 		}
 	}
-	
+
 	static function mkEq(e1, e2, p) {
 		function isFloat(e) {
 			try return switch(Context.typeof(e)) {
@@ -114,7 +114,7 @@ class UnitBuilder {
 			pos: p
 		}
 	}
-	
+
 	static public function read(path:String) {
 		var p = Context.makePosition( { min:0, max:0, file:path } );
 		var file = sys.io.File.getContent(path);
@@ -142,6 +142,8 @@ class UnitBuilder {
 						macro $b{el2};
 				case macro $e1 == $e2:
 					mkEq(e1, e2, e.pos);
+				case macro $e1 != $e2:
+					macro @:pos(e.pos) $equalsNot($e1, $e2);
 				case { expr: EBinop(OpGt | OpGte | OpLt | OpLte, _, _)}:
 					macro @:pos(e.pos) $isTrue($e);
 				case macro throw $e:
