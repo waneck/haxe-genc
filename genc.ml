@@ -1487,7 +1487,12 @@ let parse_include com s p =
 		([],s),DForward
 
 let add_dependency ctx dept path =
-	if path <> ctx.type_path then ctx.dependencies <- PMap.add path dept ctx.dependencies
+	if path <> ctx.type_path then try 
+        let dt = PMap.find path ctx.dependencies in ( match (dt,dept) with
+        | DForward,DFull  -> ctx.dependencies <- PMap.add path DFull ctx.dependencies 
+        | _,_ -> () )
+        with Not_found ->
+            ctx.dependencies <- PMap.add path dept ctx.dependencies
 
 let check_include_meta ctx meta =
 	try
