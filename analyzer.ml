@@ -116,6 +116,13 @@ module Simplifier = struct
 				begin match follow e.etype with
 					| TAbstract({a_path=(["c"],"ConstSizeArray")},_) ->
 						true
+					| TInst({cl_path = [],"Array"},[t]) ->
+						begin match follow t with
+							| TAbstract({a_path=["c"],"VarArg"},_) ->
+								true
+							| _ ->
+								false
+						end
 					| _ ->
 						loop e;
 						true
@@ -128,8 +135,6 @@ module Simplifier = struct
 			| TBlock el ->
 				{e with eexpr = TBlock (block loop el)}
 			| TCall({eexpr = TLocal v},_) when Meta.has Meta.Unbound v.v_meta ->
-				e
-			| TCall({eexpr = TField(_,FStatic(c,_))},_) when c.cl_extern ->
 				e
 			| TCall(e1,el) ->
 				let e1 = loop e1 in
