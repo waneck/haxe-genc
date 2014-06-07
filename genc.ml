@@ -1882,16 +1882,19 @@ module GC = struct
 		| { eexpr = TArrayDecl(el) } -> ()
 		| { eexpr = TObjectDecl(nvs) } -> ()
 		| { eexpr = TCall({eexpr=TField(_,FEnum(et,ef))},el); etype = t } -> ()
+		| _ -> ()
 	
 	(* assignments - for write barrier etc. *)
 	let assignments ctx te = match te with 
 		|  { eexpr = TBinop(OpAssign,{eexpr=TField(te1,(FInstance(_,cf)|FStatic(_,cf)|FAnon(cf)))},te2) } -> ()
 		|  { eexpr = TBinop(OpAssign,{eexpr=TArray(te1,teidx)},te2) } -> ()
+		| _ -> ()
 		
 	(* calls - add tpinfo here *)
 	let calls ctx te = match te with
 		|  { eexpr = TCall({eexpr=TField(te1,fa)},el) } -> ()
 		|  { eexpr = TCall(te1,el) } -> ()
+		| _ -> ()
 	
 	let get_types te = 
 		let types : Type.t list ref = ref [] in
@@ -1909,6 +1912,7 @@ module GC = struct
 				| None -> loop xs acc )
 			| _ -> acc)
 		in loop ( c.cl_ordered_fields @ c.cl_ordered_statics ) []
+	
 	
 	let get_anons c = 
 	List.map 
@@ -2183,7 +2187,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 					{cf_name = "ofPointerCopyNT"}))},
 					[{eexpr = TConst (TString s)}]) -> s
 				| _ ->
-				let _ = print_endline (s_expr (Type.s_type (print_context())) e1 ) in
+				let _ = print_endline (s_expr (Type.s_type (print_context())) e ) in
 				assert false
 			in
 			spr ctx code;
