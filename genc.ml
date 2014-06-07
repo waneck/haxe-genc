@@ -878,19 +878,21 @@ module StringHandler = struct
 		| _ -> false
 
 	let filter gen e =
+		(* if e.epos.pfile = "src/Main.hx" then print_endline (s_expr_pretty "" (s_type (print_context())) e); *)
 		match e.eexpr with
 		(* always wrap String literal *)
 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"String"},{cf_name = "raw"}))},[{eexpr = TConst(TString s)} as e]) ->
 			e
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
 			Wrap.wrap_string gen.gcon.hxc (mk (TConst (TString s)) e.etype e.epos)
-		| TCall({eexpr = TField(_,FStatic({cl_path=[],"Std"},{cf_name = "string"}))},[e1]) ->
+		(* TODO: why was this here? Breaks Std.string("literal") *)
+(* 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"Std"},{cf_name = "string"}))},[e1]) ->
 			begin match follow e1.etype with
 				| TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) ->
 					Wrap.wrap_string gen.gcon.hxc e1
 				| _ ->
 					e
-			end
+			end *)
 		| TBinop((OpEq | OpNotEq) as op,e1,e2) when is_string e1.etype ->
 			Expr.mk_binop op
 				(Expr.mk_static_call_2 gen.gcon.hxc.c_string "equals" [gen.map e1; gen.map e2] e1.epos)
