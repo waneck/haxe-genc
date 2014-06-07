@@ -31,13 +31,13 @@ class Math {
 
 	static public var NEGATIVE_INFINITY(get, null):Float;
 	static function get_NEGATIVE_INFINITY() return #if C99 -CMath.INFINITY #else CMath.log(0)#end;
-		
+
 	static public var POSITIVE_INFINITY(get,null):Float;
-	static public function get_POSITIVE_INFINITY() return #if C99 return CMath.INFINITY #else return -CMath.log(0)#end;
-	
+	static public function get_POSITIVE_INFINITY() return #if C99 CMath.INFINITY #else -CMath.log(0)#end;
+
 	static public var NaN(get, null):Float;
 	static public function get_NaN() return #if C99 CMath.NAN #else CMath.sqrt(-1)#end;
-	
+
 	static public inline function abs(v:Float):Float {
 		return v < 0 ? -v : v;
 	}

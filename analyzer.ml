@@ -47,6 +47,8 @@ module Simplifier = struct
 				| TBinop(OpAssignOp op,({eexpr = TLocal _} as e1),e2) ->
 					push e;
 					mk_assign e1
+				| TParenthesis e1 ->
+					loop e1 (* this is weird *)
 				| _ ->
 					mk_assign e
 			in
@@ -207,6 +209,9 @@ module Simplifier = struct
 			| TUnop((Neg | NegBits | Not) as op,flag,e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TUnop(op,flag,e1)}
+			| TReturn (Some e1) ->
+				let e1 = bind e1 in
+				{e with eexpr = TReturn (Some e1)}
 			| _ ->
 				Type.map_expr loop e
 		and bind e =
