@@ -114,11 +114,18 @@ module Simplifier = struct
 			in
 			try
 				begin match follow e.etype with
-					| TAbstract({a_path=(["c"],"ConstSizeArray")},_) ->
+					| TAbstract({a_path=(["c"],("ConstSizeArray" | "Struct"))},_) ->
 						true
 					| TInst({cl_path = [],"Array"},[t]) ->
 						begin match follow t with
 							| TAbstract({a_path=["c"],"VarArg"},_) ->
+								true
+							| _ ->
+								false
+						end
+					| TAbstract({a_path = ["c"],"ConstPointer"},[t]) ->
+						begin match follow t with
+							| TAbstract({a_path=["c"],"Char"},_) ->
 								true
 							| _ ->
 								false
