@@ -156,6 +156,125 @@ let alloc_temp_func con =
 	let name = mk_runtime_prefix ("func_" ^ (string_of_int id)) in
 	name
 
+
+module Tid = struct
+
+	let print_context() = ref []
+	
+	let is_closed a = !(a.a_status) <> Opened
+	
+	let rec s_type ctx t =
+		match t with
+		| TMono r ->
+			(match !r with
+			| None -> Printf.sprintf "Unknown<%d>" (try List.assq t (!ctx) with Not_found -> let n = List.length !ctx in ctx := (t,n) :: !ctx; n)
+			| Some t -> s_type ctx t)
+		| TEnum (e,tl) ->
+			Ast.s_type_path e.e_path ^ s_type_params ctx tl
+		| TInst (c,tl) ->
+			Ast.s_type_path c.cl_path ^ s_type_params ctx tl
+		| TType (t,tl) ->
+			Ast.s_type_path t.t_path ^ s_type_params ctx tl
+		| TAbstract (a,tl) ->
+			Ast.s_type_path a.a_path ^ s_type_params ctx tl
+		| TFun ([],t) ->
+			"Void -> " ^ s_fun ctx t false
+		| TFun (l,t) ->
+			String.concat " -> " (List.map (fun (s,b,t) ->
+				(if b then "?" else "") ^ (if s = "" then "" else s ^ " : ") ^ s_fun ctx t true
+			) l) ^ " -> " ^ s_fun ctx t false
+		| TAnon a ->
+		let ordfl = sort_anon_fields (pmap_to_list a.a_fields) in
+		let fl = List.fold_left (fun acc f -> 
+            ((if Meta.has Meta.Optional f.cf_meta then " ?" else " ") ^ f.cf_name ^ " : " ^ s_type ctx f.cf_type) :: acc) [] ordfl in
+			"{" ^ (if not (is_closed a) then "+" else "") ^  String.concat "," fl ^ " }"
+		| TDynamic t2 ->
+			"Dynamic" ^ s_type_params ctx (if t == t2 then [] else [t2])
+		| TLazy f ->
+			s_type ctx (!f())
+
+	and s_fun ctx t void =
+		match t with
+		| TFun _ ->
+			"(" ^ s_type ctx t ^ ")"
+		| TAbstract ({ a_path = ([],"Void") },[]) when void ->
+			"(" ^ s_type ctx t ^ ")"
+		| TMono r ->
+			(match !r with
+			| None -> s_type ctx t
+			| Some t -> s_fun ctx t void)
+		| TLazy f ->
+			s_fun ctx (!f()) void
+		| _ ->
+			s_type ctx t
+
+	and s_type_params ctx = function
+		| [] -> ""
+		| l -> "<" ^ String.concat ", " (List.map (s_type ctx) l) ^ ">"
+		
+	let id t = s_type (print_context()) t
+	
+	(*let fid e = function | *)
+	
+end
+
+module TDB = struct 
+	
+	let tdb_anons    : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_enums    : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_classes  : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_defs     : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_funcs    : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_abstracts: (string, t) PMap.t ref = ref PMap.empty
+	let tdb_tparms   : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_types    : (string, t) PMap.t ref = ref PMap.empty
+
+	let rec add t = 
+		let tid = (Tid.id t) in
+		if PMap.exists tid !tdb_types then () else begin
+		tdb_types := PMap.add tid t !tdb_types;
+			match t with 
+			| TAnon ta -> 
+				tdb_anons     := PMap.add tid t !tdb_anons;
+				PMap.fold (fun cf _ -> add cf.cf_type; ()) ta.a_fields ()
+			| TInst (tc,tp) -> 
+				tdb_classes   := PMap.add tid t !tdb_classes;
+				add_params tp;
+				add_cfl tc.cl_ordered_fields;
+				add_cfl tc.cl_ordered_statics
+			| TEnum (te,tp) -> 
+				tdb_enums     := PMap.add tid t !tdb_enums;
+				add_params tp;
+				PMap.fold (fun ef _ -> add ef.ef_type; ()) te.e_constrs ()
+			| TFun (args,ret) -> 
+				tdb_funcs     := PMap.add tid t !tdb_funcs;
+				List.iter (fun (_,_,t) -> add t ) args;
+				add ret
+			| TType (td,tp) ->
+				tdb_defs      := PMap.add tid t !tdb_defs;
+				add_params tp;
+				add td.t_type
+			| TAbstract (ta,tp) -> 
+				tdb_abstracts := PMap.add tid t !tdb_abstracts;
+				add_params tp;
+				add ta.a_this
+			| TMono oref -> (match !oref with 
+				| Some t ->  add t
+				| _ -> ())
+			| TLazy f ->
+				add (!f ())
+			| _ ->
+				Printf.printf "OTHER: %s \n" tid
+		end
+	and add_params tps = List.iter add tps
+	and add_cfl cfl = List.iter (fun cf -> add cf.cf_type) cfl
+	(*let anons = *)
+	
+	let p_classes () = 
+		PMap.foldi (fun k _ _ -> Printf.printf "class %s \n" k) !tdb_classes ()
+	
+end
+	
 module Expr = struct
 
 	let t_path t = match follow t with
@@ -1750,6 +1869,103 @@ module VTableHandler = struct
 end
 
 
+module GC = struct
+	
+	(* instantiations - anything that allocates memory. *)
+	let instantiations ctx te = match te with 
+		| { eexpr = TField(_,FStatic(ct,cf)); etype = TFun(_,_) } -> ()
+		| { eexpr = TField(_,FStatic(ct,cf)) } -> ()
+		| { eexpr = TFunction(tf) } -> ()
+		| { eexpr = TConst(TString s) } -> ()
+		| { eexpr = TBinop(OpAdd,te1,te2) } when StringHandler.is_string te.etype -> ()
+		| { eexpr = TNew(c,params,args) } -> ()
+		| { eexpr = TArrayDecl(el) } -> ()
+		| { eexpr = TObjectDecl(nvs) } -> ()
+		| { eexpr = TCall({eexpr=TField(_,FEnum(et,ef))},el); etype = t } -> ()
+	
+	(* assignments - for write barrier etc. *)
+	let assignments ctx te = match te with 
+		|  { eexpr = TBinop(OpAssign,{eexpr=TField(te1,(FInstance(_,cf)|FStatic(_,cf)|FAnon(cf)))},te2) } -> ()
+		|  { eexpr = TBinop(OpAssign,{eexpr=TArray(te1,teidx)},te2) } -> ()
+		
+	(* calls - add tpinfo here *)
+	let calls ctx te = match te with
+		|  { eexpr = TCall({eexpr=TField(te1,fa)},el) } -> ()
+		|  { eexpr = TCall(te1,el) } -> ()
+	
+	let get_types te = 
+		let types : Type.t list ref = ref [] in
+		let rec loop te = 
+			types := (te.etype :: !types);
+			Type.iter loop te
+		in 
+		(loop te);
+		!types
+	
+	let get_field_expressions c = 
+		let rec loop xs acc = (match xs with 
+			x :: xs -> (match x.cf_expr with
+				| Some te -> loop xs (te :: acc)
+				| None -> loop xs acc )
+			| _ -> acc)
+		in loop ( c.cl_ordered_fields @ c.cl_ordered_statics ) []
+	
+	let get_anons c = 
+	List.map 
+	(fun f -> (match f.cf_expr with 
+	  | Some te ->
+		List.filter (fun t -> match t with TAnon(_) -> true | _ -> false ) (get_types te)
+	  | _ -> [])
+	)( c.cl_ordered_fields @ c.cl_ordered_statics )
+	
+	let get_class_fields c =
+		let rec loop c = (match c.cl_super with 
+				| Some (sc,stp) -> loop sc @ c.cl_ordered_fields
+				| _ -> c.cl_ordered_fields)
+		in loop c
+	
+	let pm_length m = PMap.fold (fun _ n -> n+1) m 0
+	
+(*	let type_info t = match t with 
+		| TInst ()
+		| TEnum ()
+		| TAbstract ()
+		| TAnon ()
+		| TType ()*)
+	
+	let type_decl_info t = match t with 
+	| TClassDecl    tc -> 
+		List.iter (fun t -> TDB.add t) (List.flatten (List.map get_types (get_field_expressions tc)));
+		List.iter (fun t -> TDB.add t) (List.map ( fun f -> f.cf_type) (get_class_fields tc));
+		(match tc.cl_types with 
+		| [] -> TDB.add (TInst (tc,[]))
+		| _ -> ());
+		Printf.printf "\n anons: %d" (pm_length !TDB.tdb_anons);
+		Printf.printf "\n classes: %d" (pm_length !TDB.tdb_classes);
+		Printf.printf "\n abs: %d" (pm_length !TDB.tdb_abstracts);
+		Printf.printf "\n enums: %d" (pm_length !TDB.tdb_enums);
+		Printf.printf "\n tdefs: %d" (pm_length !TDB.tdb_defs);
+		Printf.printf "\n funcs: %d" (pm_length !TDB.tdb_funcs);
+		Printf.printf "\n all: %d" (pm_length !TDB.tdb_types);
+		Printf.printf "\nclass %s fields: %s" 
+			  (s_type_path tc.cl_path) 
+			  (String.concat ", " (List.map (fun f -> f.cf_name) (get_class_fields tc) ));
+		      let anons = get_anons tc in Printf.printf "   %d anons\n" (List.length anons)
+
+	| TEnumDecl te -> 
+		(match te.e_types with 
+		| [] -> TDB.add (TEnum (te,[]))
+		| _ -> ())
+	| TTypeDecl td -> 
+		TDB.add td.t_type
+	| TAbstractDecl ta -> 
+		TDB.add ta.a_this
+	let collect_info con =
+		List.iter type_decl_info con.com.types;
+		TDB.p_classes ()
+	
+end
+
 (* Helper *)
 
 let rec is_value_type t =
@@ -2958,6 +3174,7 @@ let initialize_constructor con c cf =
 		()
 
 let generate_types con types =
+	(*GC.collect_info con;*)
 	List.iter (fun mt -> match mt with
 		| TClassDecl c -> initialize_class con c
 		| _ -> ()
