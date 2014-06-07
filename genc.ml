@@ -208,6 +208,10 @@ module Expr = struct
 	let mk_string com s p =
 		mk (TConst (TString s)) com.basic.tstring p
 
+	let mk_c_macro_call con name el p =
+		let e_args = mk (TArrayDecl el) (con.com.basic.tarray t_dynamic) p in
+		mk_static_call_2 con.hxc.c_lib "callCMacro" [mk_string con.com name p;e_args] p
+
 	let debug ctx e =
 		Printf.sprintf "%s: %s" ctx.fctx.field.cf_name (s_expr (s_type (print_context())) e)
 
@@ -1965,6 +1969,16 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 				assert false
 			in
 			spr ctx code;
+		| "callCMacro" ->
+			begin match e1.eexpr,el with
+				| TConst (TString name),el ->
+					spr ctx name;
+					spr ctx "(";
+					concat ctx "," (generate_expr ctx true) el;
+					spr ctx ")"
+				| _ ->
+					assert false
+			end
 		| _ ->
 			ctx.con.com.error ("Unknown Lib function: " ^ cf.cf_name) e.epos
 		end
