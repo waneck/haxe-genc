@@ -555,7 +555,7 @@ module Simplifier = struct
 			| TVar(v,Some e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TVar(v,Some e1)}
-			| TUnop(op,flag,e1) ->
+			| TUnop((Neg | NegBits | Not) as op,flag,e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TUnop(op,flag,e1)}
 			| _ ->
