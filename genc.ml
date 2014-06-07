@@ -67,6 +67,7 @@ type context = {
 	mutable type_parameters : (path, texpr) PMap.t;
 	mutable init_modules : path list;
 	mutable generated_types : type_context list;
+	mutable generated_closure_macros : (int,bool) PMap.t;
 }
 
 and type_context = {
@@ -252,6 +253,14 @@ module Expr = struct
 
 	let add_meta m e =
 		mk (TMeta((m,[],e.epos),e)) e.etype e.epos
+
+	let append_global_code hxc s =
+		hxc.c_boot.cl_meta <- List.map (fun (m,el,p) -> match m,el with
+			| Meta.HeaderCode,[EConst (String s2),p] ->
+				Meta.HeaderCode,[EConst (String (s2 ^ s)),p],p
+			| _ ->
+				(m,el,p)
+		) hxc.c_boot.cl_meta
 
 end
 
@@ -1145,14 +1154,7 @@ module ClosureHandler = struct
 			let el = List.map gen.map el in
 			let e = if not !is_extern && is_closure_expr e1 then begin
 				let args,r = match follow e1.etype with TFun(args,r) -> args,r | _ -> assert false in
-				let mk_cast e = mk (TCast(e,None)) (gen.gcon.hxc.t_func_pointer e.etype) e.epos in
-				let efunc = mk (TField(e1,FDynamic "_func")) (TFun(args,r)) e.epos in
-				let efunc2 = {efunc with etype = TFun(("_ctx",false,t_dynamic) :: args,r)} in
-				let ethis = mk (TField(e1,FDynamic "_this")) t_dynamic e.epos in
-				let eif = Codegen.mk_parent (Expr.mk_binop OpNotEq ethis (mk (TConst TNull) (mk_mono()) e.epos) gen.gcom.basic.tbool e.epos) in
-				let ethen = mk (TCall(mk_cast efunc2,ethis :: el)) e.etype e.epos in
-				let eelse = mk (TCall(mk_cast efunc,el)) e.etype e.epos in
-				let e = mk (TIf(eif,ethen,Some eelse)) e.etype e.epos in
+				let e = Expr.mk_c_macro_call gen.gcon "HX_CLOSURE_CALL" (e1::el) e.epos in
 				Expr.mk_cast e r
 			end else
 				{e with eexpr = TCall(e1,el)}
@@ -1491,9 +1493,9 @@ let parse_include com s p =
 		([],s),DForward
 
 let add_dependency ctx dept path =
-	if path <> ctx.type_path then try 
+	if path <> ctx.type_path then try
 		let dt = PMap.find path ctx.dependencies in ( match (dt,dept) with
-		| DForward,DFull  -> ctx.dependencies <- PMap.add path DFull ctx.dependencies 
+		| DForward,DFull  -> ctx.dependencies <- PMap.add path DFull ctx.dependencies
 		| _,_ -> () )
 		with Not_found ->
 			ctx.dependencies <- PMap.add path dept ctx.dependencies
@@ -1972,6 +1974,24 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		| "callCMacro" ->
 			begin match e1.eexpr,el with
 				| TConst (TString name),el ->
+					let name = match name with
+						| "HX_CLOSURE_CALL" ->
+							add_dependency ctx DForward (["c"],"Closure");
+							let i = List.length el - 1 in
+							if not (PMap.mem i ctx.con.generated_closure_macros) then begin
+								let args = ExtList.List.init i (fun i -> "arg" ^ (string_of_int i)) in
+								let args = args in
+								let s_if = "(target)->_this != NULL" in
+								let s_then = Printf.sprintf "(target)->_func(%s)" (String.concat ", " ("(target)->_this" :: args)) in
+								let s_else = Printf.sprintf "(target)->_func(%s)" (String.concat ", " args) in
+								let s = Printf.sprintf "#define HX_CLOSURE_CALL%i(%s)\\\n\t(%s ? %s : %s)\n" i (String.concat ", " ("target" :: args)) s_if s_then s_else in
+								Expr.append_global_code ctx.con.hxc s;
+								ctx.con.generated_closure_macros <- PMap.add i true ctx.con.generated_closure_macros;
+							end;
+							Printf.sprintf "HX_CLOSURE_CALL%i" i
+						| _ ->
+							name
+					in
 					spr ctx name;
 					spr ctx "(";
 					concat ctx "," (generate_expr ctx true) el;
@@ -3073,6 +3093,7 @@ let generate com =
 		init_modules = [];
 		generated_types = [];
 		get_anon_signature = get_anon;
+		generated_closure_macros = PMap.empty;
 	} in
 
 	let types1,types2 = List.partition (fun mt -> match mt with
