@@ -21,11 +21,11 @@ a.pop() == "foo";
 
 var a = ArrayStruct.createWithSize(10);
 a._count == 10;
-for(i in -10...0)
-{
-	a.constArray[-i-1] = i;
-	a.constArray[-i-1] == i;
-}
+//for(i in -10...0)
+//{
+	//a.constArray[-i-1] = i;
+	//a.constArray[-i-1] == i;
+//}
 a._count == 10;
 
 var a1 = ["foo", "bar", "baz"];

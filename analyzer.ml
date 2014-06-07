@@ -477,7 +477,8 @@ module Simplifier = struct
 				| _ -> raise Exit
 			in
 			try
-				loop e; true
+				loop e;
+				true
 			with Exit ->
 				false
 		in
@@ -554,6 +555,9 @@ module Simplifier = struct
 			| TVar(v,Some e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TVar(v,Some e1)}
+			| TUnop(op,flag,e1) ->
+				let e1 = bind e1 in
+				{e with eexpr = TUnop(op,flag,e1)}
 			| _ ->
 				Type.map_expr loop e
 		and bind e =
