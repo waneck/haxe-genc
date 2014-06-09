@@ -160,9 +160,9 @@ let alloc_temp_func con =
 module Tid = struct
 
 	let print_context() = ref []
-	
+
 	let is_closed a = !(a.a_status) <> Opened
-	
+
 	let rec s_type ctx t =
 		match t with
 		| TMono r ->
@@ -185,8 +185,8 @@ module Tid = struct
 			) l) ^ " -> " ^ s_fun ctx t false
 		| TAnon a ->
 		let ordfl = sort_anon_fields (pmap_to_list a.a_fields) in
-		let fl = List.fold_left (fun acc f -> 
-            ((if Meta.has Meta.Optional f.cf_meta then " ?" else " ") ^ f.cf_name ^ " : " ^ s_type ctx f.cf_type) :: acc) [] ordfl in
+		let fl = List.fold_left (fun acc f ->
+			((if Meta.has Meta.Optional f.cf_meta then " ?" else " ") ^ f.cf_name ^ " : " ^ s_type ctx f.cf_type) :: acc) [] ordfl in
 			"{" ^ (if not (is_closed a) then "+" else "") ^  String.concat "," fl ^ " }"
 		| TDynamic t2 ->
 			"Dynamic" ^ s_type_params ctx (if t == t2 then [] else [t2])
@@ -211,15 +211,15 @@ module Tid = struct
 	and s_type_params ctx = function
 		| [] -> ""
 		| l -> "<" ^ String.concat ", " (List.map (s_type ctx) l) ^ ">"
-		
+
 	let id t = s_type (print_context()) t
-	
+
 	(*let fid e = function | *)
-	
+
 end
 
-module TDB = struct 
-	
+module TDB = struct
+
 	let tdb_anons    : (string, t) PMap.t ref = ref PMap.empty
 	let tdb_enums    : (string, t) PMap.t ref = ref PMap.empty
 	let tdb_classes  : (string, t) PMap.t ref = ref PMap.empty
@@ -229,24 +229,24 @@ module TDB = struct
 	let tdb_tparms   : (string, t) PMap.t ref = ref PMap.empty
 	let tdb_types    : (string, t) PMap.t ref = ref PMap.empty
 
-	let rec add t = 
+	let rec add t =
 		let tid = (Tid.id t) in
 		if PMap.exists tid !tdb_types then () else begin
 		tdb_types := PMap.add tid t !tdb_types;
-			match t with 
-			| TAnon ta -> 
+			match t with
+			| TAnon ta ->
 				tdb_anons     := PMap.add tid t !tdb_anons;
 				PMap.fold (fun cf _ -> add cf.cf_type; ()) ta.a_fields ()
-			| TInst (tc,tp) -> 
+			| TInst (tc,tp) ->
 				tdb_classes   := PMap.add tid t !tdb_classes;
 				add_params tp;
 				add_cfl tc.cl_ordered_fields;
 				add_cfl tc.cl_ordered_statics
-			| TEnum (te,tp) -> 
+			| TEnum (te,tp) ->
 				tdb_enums     := PMap.add tid t !tdb_enums;
 				add_params tp;
 				PMap.fold (fun ef _ -> add ef.ef_type; ()) te.e_constrs ()
-			| TFun (args,ret) -> 
+			| TFun (args,ret) ->
 				tdb_funcs     := PMap.add tid t !tdb_funcs;
 				List.iter (fun (_,_,t) -> add t ) args;
 				add ret
@@ -254,11 +254,11 @@ module TDB = struct
 				tdb_defs      := PMap.add tid t !tdb_defs;
 				add_params tp;
 				add td.t_type
-			| TAbstract (ta,tp) -> 
+			| TAbstract (ta,tp) ->
 				tdb_abstracts := PMap.add tid t !tdb_abstracts;
 				add_params tp;
 				add ta.a_this
-			| TMono oref -> (match !oref with 
+			| TMono oref -> (match !oref with
 				| Some t ->  add t
 				| _ -> ())
 			| TLazy f ->
@@ -269,12 +269,18 @@ module TDB = struct
 	and add_params tps = List.iter add tps
 	and add_cfl cfl = List.iter (fun cf -> add cf.cf_type) cfl
 	(*let anons = *)
-	
-	let p_classes () = 
+
+	let p_classes () =
 		PMap.foldi (fun k _ _ -> Printf.printf "class %s \n" k) !tdb_classes ()
-	
+
+	let iter f = PMap.fold (fun t _ -> f t; ()) !tdb_types ()
+
+	let map f =
+		let acc = PMap.fold (fun t acc -> (f t) :: acc) !tdb_types [] in
+		List.rev acc
+
 end
-	
+
 module Expr = struct
 
 	let t_path t = match follow t with
@@ -397,8 +403,8 @@ module Wrap = struct
 	let mk_box_field t =
 		Expr.mk_class_field box_field_name t true Ast.null_pos (Var {v_read = AccNormal;v_write=AccNormal}) []
 
- 	let mk_box_type t =
-	 	TAnon {
+	let mk_box_type t =
+		TAnon {
 			a_status = ref Closed;
 			a_fields = PMap.add box_field_name (mk_box_field t) PMap.empty
 		}
@@ -804,7 +810,7 @@ module DefaultValues = struct
 			else match el with
 				| e :: el ->
 					if has_this tf.tf_expr then
-						 e :: loop tf.tf_args el
+						e :: loop tf.tf_args el
 					else
 						loop tf.tf_args el
 				| [] ->
@@ -816,10 +822,10 @@ module DefaultValues = struct
 
 	let handle_call_site gen = function e ->
 		match e.eexpr with
- 		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
+		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
 			begin try gen.map (mk_known_call gen.gcon c cf true el)
 			with Exit -> e end
- 		| TCall({eexpr = TField(e1,FInstance(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
+		| TCall({eexpr = TField(e1,FInstance(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
 			begin try gen.map (mk_known_call gen.gcon c cf false (e1 :: el))
 			with Exit -> e end
 		| TNew(c,tl,el) ->
@@ -1137,7 +1143,7 @@ module SwitchHandler = struct
 				let fs = match List.fold_left (fun eacc ec -> Some (mk_if ec eacc)) def !el with Some e -> e | None -> assert false in
 				([eint],fs) :: acc
 			) length_map [] in
- 			let c_string = match gen.gcom.basic.tstring with TInst(c,_) -> c | _ -> assert false in
+			let c_string = match gen.gcom.basic.tstring with TInst(c,_) -> c | _ -> assert false in
 			let cf_length = PMap.find "length" c_string.cl_fields in
 			let ef = mk (TField(e1,FInstance(c_string,cf_length))) gen.gcom.basic.tint e.epos in
 			let e = mk (TSwitch(Codegen.mk_parent ef,cases,def)) t_dynamic e.epos in
@@ -1304,6 +1310,8 @@ module ArrayHandler = struct
 	| TAbstract ( {a_path = ["c"], "Pointer"}, _ ) -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))
 	(* FIXME: should we include ConstSizeArray here? *)
 	| _ -> "64",(fun e -> Expr.mk_cast e (hxc.t_int64 e.etype))
+
+
 
 	let rec mk_specialization_call c n suffix ethis el p =
 		let name = if suffix = "" then n else n ^ "_" ^ suffix in
@@ -1787,10 +1795,10 @@ module VTableHandler = struct
 						m
 				| None -> m )
 			| _ -> m ) { count   = PMap.empty;
-			             types   = PMap.empty;
-						 cids    = PMap.empty;
-						 vtables = PMap.empty;
-						 next    = 0} tps in
+						types   = PMap.empty;
+						cids    = PMap.empty;
+						vtables = PMap.empty;
+						next    = 0} tps in
 
 		(* let _ = Analyzer.run_analyzer tps in *)
 
@@ -1870,9 +1878,121 @@ end
 
 
 module GC = struct
-	
+
+	type field_info =
+		| FI_TParm  of int          (*bytes == alignment *)
+		| FI_Ref    of int          (*bytes == alignment *)
+		| FI_Val    of int          (*bytes == alignment *)
+		| FI_Struct of int * int    (*bytes *  alignment *)
+		| FI_CSArr  of field_info * int * int * int (* info * size * bytes * alignment *)
+		(*                                *)
+
+	let get_xs_types xs = List.map (fun f -> f.cf_type) xs
+	let get_xs_names xs = List.map (fun f -> f.cf_name) xs
+
+	let get_class_var_fields c =
+		let rec loop c = (match c.cl_super with
+				| Some (sc,stp) -> loop sc @ c.cl_ordered_fields
+				| _ -> c.cl_ordered_fields)
+		in List.filter (fun f-> match f.cf_kind with Var _ -> true | _ -> false ) (loop c)
+
+	let rec get_const_size_arr_size t = (match t with
+		| TAbstract({a_path = ["c"],"ConstSizeArray"},[t;const]) ->
+			let size = (match follow const with
+			| TInst({ cl_path=[],name },_) when String.length name > 1 && String.get name 0 = 'I' ->
+				String.sub name 1 (String.length name - 1)
+			| _ ->
+				"1")
+			in int_of_string size
+		| _ -> assert false)
+
+
+	and get_field_info hxc tp = (match tp with
+	| TAbstract ( { a_path =[], "Int" } ,_ )
+	| TAbstract ( { a_path =[], ("hx_int32" | "hx_uint32" | "hx_float32") } ,_ ) ->
+		FI_Val 4
+	| TAbstract ( { a_path =[], ("hx_int16" | "hx_uint16" | "hx_short" | "hx_ushort") } ,_ ) ->
+		FI_Val 2
+	| TAbstract ( { a_path =[], ("hx_int8" | "hx_uint8" | "hx_char" | "hx_uchar") } ,_ ) ->
+		FI_Val 1
+	| TAbstract ( { a_path =["c"], ("Int64" | "UInt64") } ,_ )
+	| TAbstract ( { a_path = ["c"], "Pointer"}, _ ) ->
+		FI_Val 8
+	| TAbstract({a_path=(["c"],("ConstSizeArray"))},[t;n]) ->
+		let arrsz = get_const_size_arr_size tp in
+		let finfo = get_field_info hxc t in
+		(match finfo with
+		| FI_Val v
+		| FI_TParm v (*I don't think this is valid*)
+		| FI_Ref v ->
+			FI_CSArr(finfo, arrsz, arrsz*v, v)
+		| FI_Struct (sz,algn) ->
+			FI_CSArr(finfo, arrsz, arrsz*sz, algn)
+		| FI_CSArr  (fi,sz,bytes,algn) ->
+			FI_CSArr(finfo, arrsz, arrsz*bytes, algn))
+
+	| TAbstract({a_path=(["c"],("Struct"))},[t]) -> (match t with
+		| TInst (tc,tp) ->
+			let size,algn = get_fields_size_algn hxc (get_class_var_fields tc) in
+			FI_Struct(size,algn)
+		| TAnon ({a_fields=cfields}) ->
+			let size,algn = get_fields_size_algn hxc (List.rev (pmap_to_list cfields)) in
+			FI_Struct(size,algn)
+		| _ -> assert false )
+	| TAbstract ( {a_this = a_this},_) when a_this == tp -> assert false;
+	| TAbstract (ta,tp) ->
+		get_field_info hxc (Codegen.Abstract.get_underlying_type ta tp)
+	| TInst ({cl_kind=KTypeParameter _},_) ->
+		FI_TParm 8
+	| TType (_,_) ->
+		get_field_info hxc (Type.follow tp)
+	| _ ->
+		FI_Ref 8 )
+
+	and struct_alignment l =
+		let next (cur_pos,max_algn,acc) (sz,algn) =
+			let         r = cur_pos mod algn in
+			let start_pos = if r = 0 then cur_pos else cur_pos + (algn-r) in
+			let next_pos  = start_pos + sz in
+			next_pos, (if max_algn >= algn then max_algn else algn) , start_pos :: acc
+		in
+		let end_pos,max_algn,offsets = List.fold_left next (0,1,[]) l in
+		let r    = end_pos mod max_algn in
+		let size =  end_pos + if r = 0 then 0 else (max_algn - r) in
+		size,max_algn, List.rev offsets
+
+	and field_info_to_size_algn f = match f with
+		| FI_Val v
+		| FI_TParm v
+		| FI_Ref v              -> v,v
+		| FI_CSArr(f,n,bytes,a) -> bytes,a
+		| FI_Struct(sz,algn)    -> sz,algn
+
+	and get_xs_types xs = List.map (fun f -> f.cf_type) xs
+
+	and get_fields_size_algn hxc cfields =
+		let fields                = List.map (get_field_info hxc) (get_xs_types cfields) in
+		let sz_algn_xs            = List.map field_info_to_size_algn fields in
+		let size,max_algn,offsets = struct_alignment sz_algn_xs in
+		size,max_algn
+
+	let s_field_info f = match f with
+		| FI_Ref v          ->  " ref"
+		| FI_TParm v        ->  " tp"
+		| FI_Val v          ->  " val("^ (string_of_int v) ^ ")"
+		| FI_Struct(s,a)    ->  " struct("^ (string_of_int s) ^ ")"
+		| FI_CSArr(f,n,b,a) ->  " csarr("^ (string_of_int b) ^ ")"
+
+	let get_info hxc xs = List.map (get_field_info hxc) xs
+
+	let get_alignment hxc xs =
+		let finfo_xs     = (get_info hxc xs) in
+		let sz_algn_xs   = List.map field_info_to_size_algn finfo_xs in
+		let size,max_algn,offsets = struct_alignment sz_algn_xs in
+		(finfo_xs,offsets,size)
+
 	(* instantiations - anything that allocates memory. *)
-	let instantiations ctx te = match te with 
+	let instantiations ctx te = match te with
 		| { eexpr = TField(_,FStatic(ct,cf)); etype = TFun(_,_) } -> ()
 		| { eexpr = TField(_,FStatic(ct,cf)) } -> ()
 		| { eexpr = TFunction(tf) } -> ()
@@ -1883,67 +2003,55 @@ module GC = struct
 		| { eexpr = TObjectDecl(nvs) } -> ()
 		| { eexpr = TCall({eexpr=TField(_,FEnum(et,ef))},el); etype = t } -> ()
 		| _ -> ()
-	
+
 	(* assignments - for write barrier etc. *)
-	let assignments ctx te = match te with 
+	let assignments ctx te = match te with
 		|  { eexpr = TBinop(OpAssign,{eexpr=TField(te1,(FInstance(_,cf)|FStatic(_,cf)|FAnon(cf)))},te2) } -> ()
 		|  { eexpr = TBinop(OpAssign,{eexpr=TArray(te1,teidx)},te2) } -> ()
 		| _ -> ()
-		
+
 	(* calls - add tpinfo here *)
 	let calls ctx te = match te with
 		|  { eexpr = TCall({eexpr=TField(te1,fa)},el) } -> ()
 		|  { eexpr = TCall(te1,el) } -> ()
 		| _ -> ()
-	
-	let get_types te = 
+
+	let get_types te =
 		let types : Type.t list ref = ref [] in
-		let rec loop te = 
+		let rec loop te =
 			types := (te.etype :: !types);
 			Type.iter loop te
-		in 
-		(loop te);
+		in (loop te);
 		!types
-	
-	let get_field_expressions c = 
-		let rec loop xs acc = (match xs with 
+
+	let get_field_expressions c =
+		let rec loop xs acc = (match xs with
 			x :: xs -> (match x.cf_expr with
 				| Some te -> loop xs (te :: acc)
 				| None -> loop xs acc )
 			| _ -> acc)
 		in loop ( c.cl_ordered_fields @ c.cl_ordered_statics ) []
-	
-	
-	let get_anons c = 
-	List.map 
-	(fun f -> (match f.cf_expr with 
-	  | Some te ->
-		List.filter (fun t -> match t with TAnon(_) -> true | _ -> false ) (get_types te)
-	  | _ -> [])
-	)( c.cl_ordered_fields @ c.cl_ordered_statics )
-	
+
 	let get_class_fields c =
-		let rec loop c = (match c.cl_super with 
+		let rec loop c = (match c.cl_super with
 				| Some (sc,stp) -> loop sc @ c.cl_ordered_fields
 				| _ -> c.cl_ordered_fields)
 		in loop c
-	
+
+	let make_instance = function
+		| TClassDecl c -> TInst (c,List.map snd c.cl_types)
+		| TEnumDecl e -> TEnum (e,List.map snd e.e_types)
+		| TTypeDecl t -> TType (t,List.map snd t.t_types)
+		| TAbstractDecl a -> TAbstract (a,List.map snd a.a_types)
+
 	let pm_length m = PMap.fold (fun _ n -> n+1) m 0
-	
-(*	let type_info t = match t with 
-		| TInst ()
-		| TEnum ()
-		| TAbstract ()
-		| TAnon ()
-		| TType ()*)
-	
-	let type_decl_info t = match t with 
-	| TClassDecl    tc -> 
+
+	let type_decl_info con t =
+	let _ = TDB.add (make_instance t) in match t with
+	| TClassDecl    tc ->
 		List.iter (fun t -> TDB.add t) (List.flatten (List.map get_types (get_field_expressions tc)));
 		List.iter (fun t -> TDB.add t) (List.map ( fun f -> f.cf_type) (get_class_fields tc));
-		(match tc.cl_types with 
-		| [] -> TDB.add (TInst (tc,[]))
-		| _ -> ());
+
 		Printf.printf "\n anons: %d" (pm_length !TDB.tdb_anons);
 		Printf.printf "\n classes: %d" (pm_length !TDB.tdb_classes);
 		Printf.printf "\n abs: %d" (pm_length !TDB.tdb_abstracts);
@@ -1951,23 +2059,38 @@ module GC = struct
 		Printf.printf "\n tdefs: %d" (pm_length !TDB.tdb_defs);
 		Printf.printf "\n funcs: %d" (pm_length !TDB.tdb_funcs);
 		Printf.printf "\n all: %d" (pm_length !TDB.tdb_types);
-		Printf.printf "\nclass %s fields: %s" 
-			  (s_type_path tc.cl_path) 
-			  (String.concat ", " (List.map (fun f -> f.cf_name) (get_class_fields tc) ));
-		      let anons = get_anons tc in Printf.printf "   %d anons\n" (List.length anons)
-
-	| TEnumDecl te -> 
-		(match te.e_types with 
-		| [] -> TDB.add (TEnum (te,[]))
-		| _ -> ())
-	| TTypeDecl td -> 
+		Printf.printf "\nclass %s fields: %s"
+			(s_type_path tc.cl_path)
+			(String.concat ", " (List.map (fun f -> f.cf_name) (get_class_fields tc) ));
+			()
+	| TEnumDecl te -> ()
+	| TTypeDecl td ->
 		TDB.add td.t_type
-	| TAbstractDecl ta -> 
+	| TAbstractDecl ta ->
 		TDB.add ta.a_this
+
+	let p_alignment hxc =
+		let show t = match t with
+			| TInst(c,_) ->
+				let cfields = get_class_var_fields c in
+				let types = get_xs_types cfields in
+				let info,algn,size = get_alignment hxc types in
+				Printf.printf "class: %s\nsize: %d\nfields: %s\ninfo: %s\nalgn: %s\n\n"
+				(s_type_path c.cl_path)
+				size
+				(String.concat ", " (get_xs_names cfields))
+				(String.concat ", " (List.map s_field_info info))
+				(String.concat ", " (List.map string_of_int algn))
+			| _ -> ()
+		in
+		TDB.iter show
+
 	let collect_info con =
-		List.iter type_decl_info con.com.types;
-		TDB.p_classes ()
-	
+		List.iter (type_decl_info con) con.com.types;
+		p_alignment con.hxc;
+		()
+		(*TDB.p_classes ()*)
+
 end
 
 (* Helper *)
@@ -2739,7 +2862,7 @@ let generate_class ctx c =
 		DynArray.iter (fun cf ->
 		spr ctx (s_type_with_name ctx cf.cf_type (full_field_name c cf));
 		newline ctx
-    ) svars
+	) svars
 	end;
 
 	(* generate forward declarations of functions *)
