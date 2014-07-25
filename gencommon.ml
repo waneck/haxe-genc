@@ -3987,6 +3987,8 @@ struct
 
 			(try
 				List.iter2 (fun a o ->
+					let o = run_follow gen o in
+					let a = run_follow gen a in
 					unify a o
 					(* type_eq EqStrict a o *)
 				) applied original
@@ -5083,6 +5085,8 @@ struct
 			| TContinue -> right
 			| TParenthesis p | TMeta(_,p) ->
 				apply_assign assign_fun p
+			| TVar _ ->
+				right
 			| _ ->
 				match follow right.etype with
 					| TEnum( { e_path = ([], "Void") }, [] )
@@ -5959,6 +5963,7 @@ struct
 			match arglist, elist with
 			| [], [] -> true
 			| (_,_,t) :: arglist, et :: elist -> (try
+				let t = run_follow gen t in
 				unify et t;
 				check_arg arglist elist
 			with | Unify_error el ->
@@ -5972,7 +5977,11 @@ struct
 			let args, _ = get_fun t in
 			check_arg args etl
 		in
-		is_overload, List.find check_cf ctors, sup, ret_stl
+		match is_overload, ctors with
+			| false, [c] ->
+				false, c, sup, ret_stl
+			| _ ->
+				is_overload, List.find check_cf ctors, sup, ret_stl
 
 	(*
 
@@ -6169,19 +6178,34 @@ struct
 
 		let in_value = ref false in
 
+		let rec clean_cast e = match e.eexpr with
+		 | TCast(e,_) -> clean_cast e
+		 | TParenthesis(e) | TMeta(_,e) -> clean_cast e
+		 | _ -> e
+		in
+
 		let rec run ?(just_type = false) e =
 			let handle = if not just_type then handle else fun e t1 t2 -> { e with etype = gen.greal_type t2 } in
 			let was_in_value = !in_value in
 			in_value := true;
 			match e.eexpr with
-				| TConst ( TInt _ | TFloat _ | TBool _ ) ->
+				| TConst ( TInt _ | TFloat _ | TBool _ as const ) ->
 					(* take off any Null<> that it may have *)
-					{ e with etype = follow (run_follow gen e.etype) }
+					let t = follow (run_follow gen e.etype) in
+					(* do not allow constants typed as Single - need to cast them *)
+					let real_t = match const with
+						| TInt _ -> gen.gcon.basic.tint
+						| TFloat _ -> gen.gcon.basic.tfloat
+						| TBool _ -> gen.gcon.basic.tbool
+						| _ -> assert false
+					in
+					handle e t real_t
 				| TCast( { eexpr = TCall( { eexpr = TLocal { v_name = "__delegate__" } } as local, [del] ) } as e2, _) ->
 					{ e with eexpr = TCast({ e2 with eexpr = TCall(local, [Type.map_expr run del]) }, None) }
 
 				| TBinop ( (Ast.OpAssign | Ast.OpAssignOp _ as op), e1, e2 ) ->
-					{ e with eexpr = TBinop(op, run ~just_type:true e1, run e2) }
+					let e1 = run ~just_type:true e1 in
+					{ e with eexpr = TBinop(op, clean_cast e1, run e2) }
 				| TField(ef, f) ->
 					handle_type_parameter gen None e (run ef) ~clean_ef:ef ~overloads_cast_to_base:overloads_cast_to_base f [] calls_parameters_explicitly
 				| TArrayDecl el ->
@@ -10049,7 +10073,7 @@ struct
 												| Some o -> o
 											in
 											let e = { e with eexpr = TLocal v2; etype = basic.tnull e.etype } in
-											let const = mk_cast e.etype { e with eexpr = TConst(o); etype = v.v_type } in
+											let const = mk_cast e.etype { e with eexpr = TConst(o); etype = follow v.v_type } in
 											found := true;
 											{ e with eexpr = TIf({
 												eexpr = TBinop(Ast.OpEq, e, null e.etype e.epos);
@@ -10140,6 +10164,10 @@ struct
 									to_add := newcf :: !to_add;
 								| _ -> ()
 							);
+							cl.cl_fields <- PMap.remove cf.cf_name cl.cl_fields;
+							false
+						| Method MethDynamic ->
+							(* TODO OPTIMIZATION - add a `_dispatch` method to the interface which will call the dynamic function itself *)
 							cl.cl_fields <- PMap.remove cf.cf_name cl.cl_fields;
 							false
 						| _ -> true
@@ -10586,11 +10614,12 @@ struct
 								let old_args, old_ret = get_fun f.cf_type in
 								let args, ret = get_fun t in
 								let tf_args = List.map (fun (n,o,t) -> alloc_var n t, None) args in
+								let f3_mk_return = if is_void ret then (fun e -> e) else (fun e -> mk_return (mk_cast ret e)) in
 								f3.cf_expr <- Some {
 									eexpr = TFunction({
 										tf_args = tf_args;
 										tf_type = ret;
-										tf_expr = mk_block (mk_return (mk_cast ret {
+										tf_expr = mk_block (f3_mk_return {
 											eexpr = TCall(
 												{
 													eexpr = TField(
@@ -10602,7 +10631,7 @@ struct
 												List.map2 (fun (v,_) (_,_,t) -> mk_cast t (mk_local v p)) tf_args old_args);
 											etype = old_ret;
 											epos = p
-										}))
+										})
 									});
 									etype = t;
 									epos = p;

@@ -5,6 +5,14 @@ open Typecore
 
 (* PASS 1 begin *)
 
+let rec verify_ast e = match e.eexpr with
+	| TField(_) ->
+		()
+	| TTypeExpr(TClassDecl {cl_kind = KAbstractImpl _}) ->
+		error "Cannot use abstract as value" e.epos
+	| _ ->
+		Type.iter verify_ast e
+
 (*
 	Wraps implicit blocks in TIf, TFor, TWhile, TFunction and TTry with real ones
 *)
@@ -130,7 +138,17 @@ let handle_side_effects com gen_temp e =
 			let p = e.epos in
 			let e_break = mk TBreak t_dynamic p in
 			let e_not = mk (TUnop(Not,Prefix,Codegen.mk_parent e1)) e1.etype e1.epos in
-			let e_if = mk (TIf(e_not,e_break,None)) com.basic.tvoid p in
+			let e_if eo = mk (TIf(e_not,e_break,eo)) com.basic.tvoid p in
+			let rec map_continue e = match e.eexpr with
+				| TContinue ->
+					(e_if (Some e))
+				| TWhile _ | TFor _ ->
+					e
+				| _ ->
+					Type.map_expr map_continue e
+			in
+			let e2 = if flag = NormalWhile then e2 else map_continue e2 in
+			let e_if = e_if None in
 			let e_block = if flag = NormalWhile then Type.concat e_if e2 else Type.concat e2 e_if in
 			let e_true = mk (TConst (TBool true)) com.basic.tbool p in
 			let e = mk (TWhile(Codegen.mk_parent e_true,e_block,NormalWhile)) e.etype p in
@@ -228,6 +246,8 @@ let promote_complex_rhs ctx e =
 			{ e with eexpr = TMeta(m,loop f e1)}
 		| TReturn _ | TThrow _ ->
 			find e
+		| TContinue | TBreak ->
+			e
 		| TCast(e1,None) when ctx.config.pf_ignore_unsafe_cast ->
 			loop f e1
 		| _ ->
@@ -841,6 +861,8 @@ let rename_local_vars com e =
 		| TCast (e,Some t) ->
 			loop e;
 			check t;
+		| TConst TSuper ->
+			check_type e.etype
 		| _ ->
 			Type.iter loop e
 	in
@@ -1088,6 +1110,10 @@ let check_void_field ctx t = match t with
 (* PASS 3 end *)
 
 let run_expression_filters ctx filters t =
+	let run e =
+		verify_ast e;
+		List.fold_left (fun e f -> f e) e filters
+	in
 	match t with
 	| TClassDecl c when is_removable_class c -> ()
 	| TClassDecl c ->
@@ -1095,7 +1121,7 @@ let run_expression_filters ctx filters t =
 			match f.cf_expr with
 			| Some e when not (is_removable_field ctx f) ->
 				Codegen.Abstract.cast_stack := f :: !Codegen.Abstract.cast_stack;
-				f.cf_expr <- Some (List.fold_left (fun e f -> f e) e filters);
+				f.cf_expr <- Some (run e);
 				Codegen.Abstract.cast_stack := List.tl !Codegen.Abstract.cast_stack;
 			| _ -> ()
 		in
@@ -1107,7 +1133,7 @@ let run_expression_filters ctx filters t =
 		(match c.cl_init with
 		| None -> ()
 		| Some e ->
-			c.cl_init <- Some (List.fold_left (fun e f -> f e) e filters));
+			c.cl_init <- Some (run e));
 	| TEnumDecl _ -> ()
 	| TTypeDecl _ -> ()
 	| TAbstractDecl _ -> ()

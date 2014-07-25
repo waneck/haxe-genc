@@ -8,6 +8,10 @@ class InlineCtor {
 	}
 }
 
+@:enum abstract MyEnum(String) to String {
+	var A = "a";
+}
+
 class Test {
 	#if !static_analyzer
 
@@ -129,5 +133,12 @@ class Test {
 	static function testArrayInlineCancelExceeds() {
 		var a = [1, 2];
 		a[2];
+	}
+
+	@:js('
+		var s = "" + "a";
+	')
+	static function testAbstractOverStringBinop() {
+		var s = "" + A;
 	}
 }

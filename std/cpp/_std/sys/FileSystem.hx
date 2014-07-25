@@ -30,7 +30,7 @@ private enum FileKind {
 @:coreApi
 class FileSystem {
 
-	public static inline function exists( path : String ) : Bool {
+	public static function exists( path : String ) : Bool {
 		return sys_exists(haxe.io.Path.removeTrailingSlashes(path));
 	}
 
@@ -51,6 +51,11 @@ class FileSystem {
 
 	public static function fullPath( relPath : String ) : String {
 		return new String(file_full_path(relPath));
+	}
+
+	public static function absPath ( relPath : String ) : String {
+		if (haxe.io.Path.isAbsolute(relPath)) return relPath;
+		return haxe.io.Path.join([Sys.getCwd(), relPath]);
 	}
 
 	static function kind( path : String ) : FileKind {

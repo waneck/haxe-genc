@@ -208,7 +208,7 @@ let make_module ctx mpath file tdecls loadp =
 let parse_file com file p =
 	let ch = (try open_in_bin file with _ -> error ("Could not open " ^ file) p) in
 	let t = Common.timer "parsing" in
-	Lexer.init file;
+	Lexer.init file true;
 	incr stats.s_files_parsed;
 	let data = (try Parser.parse com (Lexing.from_channel ch) with e -> close_in ch; t(); raise e) in
 	close_in ch;
@@ -346,9 +346,13 @@ let rec load_instance ctx t p allow_no_params =
 		pt
 	with Not_found ->
 		let mt = load_type_def ctx p t in
-		let is_generic = match mt with TClassDecl {cl_kind = KGeneric} -> true | _ -> false in
+		let is_generic,is_generic_build = match mt with
+			| TClassDecl {cl_kind = KGeneric} -> true,false
+			| TClassDecl {cl_kind = KGenericBuild _} -> false,true
+			| _ -> false,false
+		in
 		let types , path , f = ctx.g.do_build_instance ctx mt p in
-		if allow_no_params && t.tparams = [] then begin
+		if allow_no_params && t.tparams = [] && not (match types with ["Rest",_] -> true | _ -> false) then begin
 			let pl = ref [] in
 			pl := List.map (fun (name,t) ->
 				match follow t with
@@ -365,7 +369,7 @@ let rec load_instance ctx t p allow_no_params =
 			| [TPType t] -> TDynamic (load_complex_type ctx p t)
 			| _ -> error "Too many parameters for Dynamic" p
 		else begin
-			if List.length types <> List.length t.tparams then error ("Invalid number of type parameters for " ^ s_type_path path) p;
+			(* if List.length types <> List.length t.tparams then error ("Invalid number of type parameters for " ^ s_type_path path) p; *)
 			let tparams = List.map (fun t ->
 				match t with
 				| TPExpr e ->
@@ -380,24 +384,39 @@ let rec load_instance ctx t p allow_no_params =
 					TInst (c,[])
 				| TPType t -> load_complex_type ctx p t
 			) t.tparams in
-			let params = List.map2 (fun t (name,t2) ->
-				let isconst_param = match t with TInst({ cl_kind = KTypeParameter _; cl_path = _,"Const" },_) -> true | _ -> false in
-				let isconst = (match t with TInst ({ cl_kind = KExpr _ },_) -> true | _ -> false) in
-				if (isconst || isconst_param) <> (name = "Const") && t != t_dynamic then error (if isconst then "Constant value unexpected here" else "Constant value excepted as type parameter") p;
-				(*if isconst <> (name = "Const") then error (if isconst then "Constant value unexpected here" else "Constant value excepted as type parameter " ^ name ^ " type:" ^ (s_type (print_context()) t)) p;*)
-				match follow t2 with
-				| TInst ({ cl_kind = KTypeParameter [] }, []) when not is_generic ->
-					t
-				| TInst (c,[]) ->
-					let r = exc_protect ctx (fun r ->
-						r := (fun() -> t);
-						delay ctx PCheckConstraint (fun() -> check_param_constraints ctx types t tparams c p);
-						t
-					) "constraint" in
-					delay ctx PForce (fun () -> ignore(!r()));
-					TLazy r
-				| _ -> assert false
-			) tparams types in
+			let rec loop tl1 tl2 is_rest = match tl1,tl2 with
+				| t :: tl1,(name,t2) :: tl2 ->
+                	let isconst_param = match t with TInst({ cl_kind = KTypeParameter _; cl_path = _,"Const" },_) -> true | _ -> false in
+                	let isconst = (match t with TInst ({ cl_kind = KExpr _ },_) -> true | _ -> false) in
+                	if (isconst || isconst_param) <> (name = "Const") && t != t_dynamic then error (if isconst then "Constant value unexpected here" else "Constant value excepted as type parameter") p;
+					let is_rest = is_rest || name = "Rest" && is_generic_build in
+					let t = match follow t2 with
+						| TInst ({ cl_kind = KTypeParameter [] }, []) when not is_generic ->
+							t
+						| TInst (c,[]) ->
+							let r = exc_protect ctx (fun r ->
+								r := (fun() -> t);
+								delay ctx PCheckConstraint (fun() -> check_param_constraints ctx types t tparams c p);
+								t
+							) "constraint" in
+							delay ctx PForce (fun () -> ignore(!r()));
+							TLazy r
+						| _ -> assert false
+					in
+					t :: loop tl1 tl2 is_rest
+				| [],[] ->
+					[]
+				| [],["Rest",_] when is_generic_build ->
+					[]
+				| [],_ ->
+					error ("Not enough type parameters for " ^ s_type_path path) p
+				| t :: tl,[] ->
+					if is_rest then
+						t :: loop tl [] true
+					else
+						error ("Too many parameters for " ^ s_type_path path) p
+			in
+			let params = loop tparams types false in
 			f params
 		end
 (*
@@ -411,6 +430,19 @@ and load_complex_type ctx p t =
 	| CTExtend (tl,l) ->
 		(match load_complex_type ctx p (CTAnonymous l) with
 		| TAnon a as ta ->
+			let is_redefined cf1 a2 =
+				try
+					let cf2 = PMap.find cf1.cf_name a2.a_fields in
+					let st = s_type (print_context()) in
+					if not (type_iseq cf1.cf_type cf2.cf_type) then begin
+						display_error ctx ("Cannot redefine field " ^ cf1.cf_name ^ " with different type") p;
+						display_error ctx ("First type was " ^ (st cf1.cf_type)) cf1.cf_pos;
+						error ("Second type was " ^ (st cf2.cf_type)) cf2.cf_pos
+					end else
+						true
+				with Not_found ->
+					false
+			in
 			let mk_extension t =
 				match follow t with
 				| TInst ({cl_kind = KTypeParameter _},_) ->
@@ -434,17 +466,15 @@ and load_complex_type ctx p t =
 				| TMono _ ->
 					error "Loop found in cascading signatures definitions. Please change order/import" p
 				| TAnon a2 ->
-					PMap.iter (fun f _ ->
-						if PMap.mem f a2.a_fields then error ("Cannot redefine field " ^ f) p;
-					) a.a_fields;
+					PMap.iter (fun _ cf -> ignore(is_redefined cf a2)) a.a_fields;
 					mk_anon (PMap.foldi PMap.add a.a_fields a2.a_fields)
 				| _ -> error "Can only extend classes and structures" p
 			in
 			let loop t = match follow t with
 				| TAnon a2 ->
 					PMap.iter (fun f cf ->
-						if PMap.mem f a.a_fields then error ("Cannot redefine field " ^ f) p;
-						a.a_fields <- PMap.add f cf a.a_fields
+						if not (is_redefined cf a) then
+							a.a_fields <- PMap.add f cf a.a_fields
 					) a2.a_fields
 				| _ ->
 					error "Multiple structural extension is only allowed for structures" p
@@ -1686,8 +1716,13 @@ let init_class ctx c p context_init herits fields =
 			let check_cast e =
 				(* insert cast to keep explicit field type (issue #1901) *)
 				if not (type_iseq e.etype cf.cf_type)
-				then mk (TCast(e,None)) cf.cf_type e.epos
-				else e
+				then begin match e.eexpr,follow cf.cf_type with
+					| TConst (TInt i),TAbstract({a_path=[],"Float"},_) ->
+						(* turn int constant to float constant if expected type is float *)
+						{e with eexpr = TConst (TFloat (Int32.to_string i))}
+					| _ ->
+						mk (TCast(e,None)) cf.cf_type e.epos
+				end else e
 			in
 			let r = exc_protect ctx (fun r ->
 				(* type constant init fields (issue #1956) *)
@@ -2601,6 +2636,7 @@ let type_module ctx m file tdecls p =
 		meta = [];
 		this_stack = [];
 		with_type_stack = [];
+		constructor_argument_stack = [];
 		pass = PBuildModule;
 		on_error = (fun ctx msg p -> ctx.com.error msg p);
 		macro_depth = ctx.macro_depth;

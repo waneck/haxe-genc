@@ -130,13 +130,6 @@ module Simplifier = struct
 							| _ ->
 								false
 						end
-					| TAbstract({a_path = ["c"],"ConstPointer"},[t]) ->
-						begin match follow t with
-							| TAbstract({a_path=["c"],"Char"},_) ->
-								true
-							| _ ->
-								false
-						end
 					| _ ->
 						loop e;
 						true

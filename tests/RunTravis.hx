@@ -262,6 +262,9 @@ class RunTravis {
 	static function getPhpDependencies() {
 		switch (systemName) {
 			case "Linux":
+				//let's install php 5.4 to avoid #3175
+				runCommand("sudo", ["add-apt-repository", "ppa:ondrej/php5-oldstable", "-y"], true);
+				runCommand("sudo", ["apt-get", "update"], true);
 				runCommand("sudo", ["apt-get", "install", "php5", "-y"], true);
 			case "Mac":
 				//pass
@@ -364,6 +367,7 @@ class RunTravis {
 
 	static function main():Void {
 		changeDirectory(unitDir);
+		Sys.putEnv("OCAMLRUNPARAM", "b");
 		switch (test) {
 			case Macro, null:
 				runCommand("haxe", ["compile-macro.hxml"]);
@@ -373,7 +377,7 @@ class RunTravis {
 
 				//generate documentation
 				haxelibInstallGit("Simn", "hxparse", "development", "src", true);
-				haxelibInstallGit("Simn", "hxtemplo", "master", "src", true);
+				haxelibInstallGit("Simn", "hxtemplo", true);
 				haxelibInstallGit("Simn", "hxargs", true);
 				haxelibInstallGit("dpeek", "haxe-markdown", "master", "src", true, "markdown");
 
@@ -382,19 +386,20 @@ class RunTravis {
 				haxelibInstallGit("HaxeFoundation", "hxcs", true);
 
 				haxelibInstallGit("dpeek", "dox", true);
-				changeDirectory(getHaxelibPath("dox") + "..");
+				changeDirectory(getHaxelibPath("dox"));
 				runCommand("haxe", ["run.hxml"]);
 				runCommand("haxe", ["gen.hxml"]);
 				haxelibRun(["dox", "-o", "bin/api.zip", "-i", "bin/xml"]);
 
 				//BYTECODE
-				if (Sys.getEnv("TRAVIS") == "true") {
-					changeDirectory(repoDir);
-					runCommand("make", ["BYTECODE=1"]);
-					runCommand("sudo", ["make", "install"]);
-					changeDirectory(unitDir);
-					runCommand("haxe", ["compile-macro.hxml"]);
-				}
+				// disabled until https://github.com/HaxeFoundation/haxe/issues/3184 is resolved
+				//if (Sys.getEnv("TRAVIS") == "true") {
+					//changeDirectory(repoDir);
+					//runCommand("make", ["BYTECODE=1"]);
+					//runCommand("sudo", ["make", "install"]);
+					//changeDirectory(unitDir);
+					//runCommand("haxe", ["compile-macro.hxml"]);
+				//}
 			case Neko:
 				runCommand("haxe", ["compile-neko.hxml"]);
 				runCommand("neko", ["unit.n"]);
@@ -432,8 +437,11 @@ class RunTravis {
 				runCommand("./Main-debug", ["foo", "12", "a b c\\\\"]);
 			case Js:
 				getJSDependencies();
-				runCommand("haxe", ["compile-js.hxml"]);
-				runCommand("node", ["-e", "var unit = require('./unit.js').unit; unit.Test.main(); process.exit(unit.Test.success ? 0 : 1);"]);
+
+				for (flatten in [true, false]) {
+					runCommand("haxe", ["compile-js.hxml"].concat(flatten ? ["-D", "js-flatten"] : []));
+					runCommand("node", ["-e", "var unit = require('./unit.js').unit; unit.Test.main(); process.exit(unit.Test.success ? 0 : 1);"]);
+				}
 
 				if (Sys.getEnv("TRAVIS_SECURE_ENV_VARS") == "true" && systemName == "Linux") {
 					//https://saucelabs.com/opensource/travis
@@ -472,9 +480,9 @@ class RunTravis {
 				setupFlashPlayerDebugger();
 
 				//setup flex sdk
-				runCommand("wget", ["http://mirror.cc.columbia.edu/pub/software/apache/flex/4.12.0/binaries/apache-flex-sdk-4.12.0-bin.tar.gz"], true);
-				runCommand("tar", ["-xf", "apache-flex-sdk-4.12.0-bin.tar.gz", "-C", Sys.getEnv("HOME")]);
-				var flexsdkPath = Sys.getEnv("HOME") + "/apache-flex-sdk-4.12.0-bin";
+				runCommand("wget", ["http://mirror.cc.columbia.edu/pub/software/apache/flex/4.12.1/binaries/apache-flex-sdk-4.12.1-bin.tar.gz"], true);
+				runCommand("tar", ["-xf", "apache-flex-sdk-4.12.1-bin.tar.gz", "-C", Sys.getEnv("HOME")]);
+				var flexsdkPath = Sys.getEnv("HOME") + "/apache-flex-sdk-4.12.1-bin";
 				Sys.putEnv("PATH", Sys.getEnv("PATH") + ":" + flexsdkPath + "/bin");
 				var playerglobalswcFolder = flexsdkPath + "/player";
 				FileSystem.createDirectory(playerglobalswcFolder + "/11.1");
@@ -512,8 +520,6 @@ class RunTravis {
 		haxelibInstallGit("Simn", "hxparse", "development", "src");
 		haxelibInstallGit("Simn", "hxtemplo");
 
-		changeDirectory(getHaxelibPath("hxtemplo"));
-
 		var buildArgs = [
 			"-cp", "src",
 			"-cp", "test",
@@ -522,7 +528,7 @@ class RunTravis {
 			"-dce", "full"
 		];
 
-		changeDirectory(getHaxelibPath("hxtemplo"));
+		changeDirectory(getHaxelibPath("hxtemplo") + "..");
 		runCommand("haxe", ["build.hxml"]);
 	}
 

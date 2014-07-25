@@ -89,12 +89,12 @@ type type_class =
 	| KDyn
 	| KOther
 	| KParam of t
-	| KAbstract of tabstract
+	| KAbstract of tabstract * t list
 
 let rec classify t =
 	match follow t with
 	| TInst ({ cl_path = ([],"String") },[]) -> KString
-	| TAbstract({a_impl = Some _} as a,_) -> KAbstract a
+	| TAbstract({a_impl = Some _} as a,tl) -> KAbstract (a,tl)
 	| TAbstract ({ a_path = [],"Int" },[]) -> KInt
 	| TAbstract ({ a_path = [],"Float" },[]) -> KFloat
 	| TAbstract (a,[]) when List.exists (fun (t,_) -> match classify t with KInt | KFloat -> true | _ -> false) a.a_to -> KParam t
@@ -339,7 +339,7 @@ let parse_string ctx s p inlined =
 		Lexer.restore old;
 		Parser.display_error := old_de
 	in
-	Lexer.init p.pfile;
+	Lexer.init p.pfile (ExtString.String.ends_with p.pfile ".hx");
 	Parser.display_error := (fun e p -> raise (Parser.Error (e,p)));
 	if not inlined then Parser.resume_display := null_pos;
 	let _, decls = try
@@ -1324,6 +1324,10 @@ and type_field ?(resume=false) ctx e i p mode =
 				let t = apply_params c.cl_types params t in
 				if (mode = MGet || mode = MCall) && PMap.mem "resolve" c.cl_fields then begin
 					let f = PMap.find "resolve" c.cl_fields in
+					begin match f.cf_kind with
+						| Method MethMacro -> display_error ctx "The macro accessor is not allowed for field resolve" f.cf_pos
+						| _ -> ()
+					end;
 					let texpect = tfun [ctx.t.tstring] t in
 					let tfield = apply_params c.cl_types params (monomorphs f.cf_params f.cf_type) in
 					(try Type.unify tfield texpect
@@ -1546,8 +1550,20 @@ let type_bind ctx (e : texpr) params p =
 	let t_inner = TFun(inner_fun_args missing_args, ret) in
 	let call = make_call ctx (vexpr loc) ordered_args ret p in
 	let e_ret = match follow ret with
-		| TAbstract ({a_path = [],"Void"},_) -> call
-		| _ -> mk (TReturn (Some call)) t_dynamic p;
+		| TAbstract ({a_path = [],"Void"},_) ->
+			call
+		| TMono _ ->
+			delay ctx PFinal (fun () ->
+				match follow ret with
+				| TAbstract ({a_path = [],"Void"},_) ->
+					display_error ctx "Could not bind this function because its Void return type was inferred too late" p;
+					error "Consider an explicit type hint" p
+				| _ ->
+					()
+			);
+			mk (TReturn (Some call)) t_dynamic p;
+		| _ ->
+			mk (TReturn (Some call)) t_dynamic p;
 	in
 	let func = mk (TFunction {
 		tf_args = List.map (fun (v,o) -> v, if o then Some TNull else None) missing_args;
@@ -1855,16 +1871,20 @@ let rec type_binop ctx op e1 e2 is_assign_op with_type p =
 	let tfloat = ctx.t.tfloat in
 	let tstring = ctx.t.tstring in
 	let to_string e =
-		match classify e.etype with
-		| KAbstract {a_impl = Some c} when PMap.mem "toString" c.cl_statics ->
-			call_to_string ctx c e
-		| KUnk | KDyn | KParam _ | KOther | KAbstract _ ->
-			let std = type_type ctx ([],"Std") e.epos in
-			let acc = acc_get ctx (type_field ctx std "string" e.epos MCall) e.epos in
-			ignore(follow acc.etype);
-			let acc = (match acc.eexpr with TField (e,FClosure (Some c,f)) -> { acc with eexpr = TField (e,FInstance (c,f)) } | _ -> acc) in
-			make_call ctx acc [e] ctx.t.tstring e.epos
-		| KInt | KFloat | KString -> e
+		let rec loop t = match classify t with
+			| KAbstract ({a_impl = Some c},_) when PMap.mem "toString" c.cl_statics ->
+				call_to_string ctx c e
+			| KInt | KFloat | KString -> e
+			| KUnk | KDyn | KParam _ | KOther ->
+				let std = type_type ctx ([],"Std") e.epos in
+				let acc = acc_get ctx (type_field ctx std "string" e.epos MCall) e.epos in
+				ignore(follow acc.etype);
+				let acc = (match acc.eexpr with TField (e,FClosure (Some c,f)) -> { acc with eexpr = TField (e,FInstance (c,f)) } | _ -> acc) in
+				make_call ctx acc [e] ctx.t.tstring e.epos
+			| KAbstract (a,tl) ->
+				loop (Codegen.Abstract.get_underlying_type a tl)
+		in
+		loop e.etype
 	in
 	let mk_op e1 e2 t =
 		if op = OpAdd && (classify t) = KString then
@@ -3147,7 +3167,10 @@ and type_expr ctx (e,p) (with_type:with_type) =
 				error "Constructor is not a function" p
 		in
 		let t = try
-			follow (Typeload.load_instance ctx t p true)
+			ctx.constructor_argument_stack <- el :: ctx.constructor_argument_stack;
+			let t = follow (Typeload.load_instance ctx t p true) in
+			ctx.constructor_argument_stack <- List.tl ctx.constructor_argument_stack;
+			t
 		with Codegen.Generic_Exception _ ->
 			(* Try to infer generic parameters from the argument list (issue #2044) *)
 			match Typeload.load_type_def ctx p t with
@@ -4025,8 +4048,6 @@ let make_macro_api ctx p =
 		Interp.on_generate = (fun f ->
 			Common.add_filter ctx.com (fun() ->
 				let t = macro_timer ctx "onGenerate" in
-				(* add standard types to current module so basic types can be resolved (issue #1904) *)
-				ctx.m.module_types <- ctx.m.module_types @ ctx.g.std.m_types;
 				f (List.map make_instance ctx.com.types);
 				t()
 			)
@@ -4134,6 +4155,13 @@ let make_macro_api ctx p =
 					"isKeyword", Interp.VFunction (Interp.Fun1 (fun v ->
 						Interp.VBool (Hashtbl.mem Genjs.kwds (Interp.dec_string v))
 					));
+					"hasFeature", Interp.VFunction (Interp.Fun1 (fun v ->
+						Interp.VBool (Common.has_feature ctx.com (Interp.dec_string v))
+					));
+					"addFeature", Interp.VFunction (Interp.Fun1 (fun v ->
+						Common.add_feature ctx.com (Interp.dec_string v);
+						Interp.VNull
+					));	
 					"quoteString", Interp.VFunction (Interp.Fun1 (fun v ->
 						Interp.enc_string ("\"" ^ Ast.s_escape (Interp.dec_string v) ^ "\"")
 					));
@@ -4184,6 +4212,11 @@ let make_macro_api ctx p =
 				| (WithType t | WithTypeResume t) :: _ -> Some t
 				| _ -> None
 		);
+		Interp.get_constructor_arguments = (fun() ->
+			match ctx.constructor_argument_stack with
+				| [] -> None
+				| el :: _ -> Some el
+		);
 		Interp.get_local_method = (fun() ->
 			ctx.curfield.cf_name;
 		);
@@ -4203,19 +4236,28 @@ let make_macro_api ctx p =
 		);
 		Interp.define_type = (fun v ->
 			let m, tdef, pos = (try Interp.decode_type_def v with Interp.Invalid_expr -> Interp.exc (Interp.VString "Invalid type definition")) in
-			let prev = (try Some (Hashtbl.find ctx.g.modules m) with Not_found -> None) in
-			let mnew = Typeload.type_module ctx m ctx.m.curmod.m_extra.m_file [tdef,pos] pos in
-			add_dependency mnew ctx.m.curmod;
-			(* if we defined a type in an existing module, let's move the types here *)
-			(match prev with
-			| None ->
-				mnew.m_extra.m_kind <- MFake;
-			| Some mold ->
-				Hashtbl.replace ctx.g.modules mnew.m_path mold;
-				mold.m_types <- mold.m_types @ mnew.m_types;
-				mnew.m_extra.m_kind <- MSub;
-				add_dependency mold mnew;
-			);
+			let add ctx =
+				let prev = (try Some (Hashtbl.find ctx.g.modules m) with Not_found -> None) in
+				let mnew = Typeload.type_module ctx m ctx.m.curmod.m_extra.m_file [tdef,pos] pos in
+				add_dependency mnew ctx.m.curmod;
+				(* if we defined a type in an existing module, let's move the types here *)
+				(match prev with
+				| None ->
+					mnew.m_extra.m_kind <- MFake;
+				| Some mold ->
+					Hashtbl.replace ctx.g.modules mnew.m_path mold;
+					mold.m_types <- mold.m_types @ mnew.m_types;
+					mnew.m_extra.m_kind <- MSub;
+					add_dependency mold mnew;
+				);
+			in
+			add ctx;
+			(* if we are adding a class which has a macro field, we also have to add it to the macro context (issue #1497) *)
+			if not ctx.in_macro then match tdef,ctx.g.macros with
+			| EClass c,Some (_,mctx) when List.exists (fun cff -> (Meta.has Meta.Macro cff.cff_meta || List.mem AMacro cff.cff_access)) c.d_data ->
+				add mctx
+			| _ ->
+				()
 		);
 		Interp.define_module = (fun m types ->
 			let types = List.map (fun v ->
@@ -4402,7 +4444,14 @@ let type_macro ctx mode cpath f (el:Ast.expr list) p =
 	| MMacroType ->
 		let cttype = { tpackage = ["haxe";"macro"]; tname = "Type"; tparams = []; tsub = None } in
 		let ttype = Typeload.load_instance mctx cttype p false in
-		unify mctx mret ttype mpos
+		try
+			unify_raise mctx mret ttype mpos;
+			(* TODO: enable this again in the future *)
+			(* ctx.com.warning "Returning Type from @:genericBuild macros is deprecated, consider returning ComplexType instead" p; *)
+		with Error (Unify _,_) ->
+			let cttype = { tpackage = ["haxe";"macro"]; tname = "Expr"; tparams = []; tsub = Some ("ComplexType") } in
+			let ttype = Typeload.load_instance mctx cttype p false in
+			unify_raise mctx mret ttype mpos;
 	);
 	(*
 		if the function's last argument is of Array<Expr>, split the argument list and use [] for unify_call_params
@@ -4498,7 +4547,15 @@ let type_macro ctx mode cpath f (el:Ast.expr list) p =
 					) in
 					(EVars ["fields",Some (CTAnonymous fields),None],p)
 				| MMacroType ->
-					ctx.ret <- Interp.decode_type v;
+					let t = if v = Interp.VNull then
+						mk_mono()
+					else try
+						let ct = Interp.decode_ctype v in
+						Typeload.load_complex_type ctx p ct;
+					with Interp.Invalid_expr ->
+						Interp.decode_type v
+					in
+					ctx.ret <- t;
 					(EBlock [],p)
 				)
 			with Interp.Invalid_expr ->
@@ -4540,8 +4597,12 @@ let call_macro ctx path meth args p =
 
 let call_init_macro ctx e =
 	let p = { pfile = "--macro"; pmin = 0; pmax = 0 } in
-	let api = make_macro_api ctx p in
-	let e = api.Interp.parse_string e p false in
+	let e = try
+		parse_expr_string ctx e p false
+	with err ->
+		display_error ctx ("Could not parse `" ^ e ^ "`") p;
+		raise err
+	in
 	match fst e with
 	| ECall (e,args) ->
 		let rec loop e =
@@ -4596,6 +4657,7 @@ let rec create com =
 		meta = [];
 		this_stack = [];
 		with_type_stack = [];
+		constructor_argument_stack = [];
 		pass = PBuildModule;
 		macro_depth = 0;
 		untyped = false;
@@ -4619,6 +4681,8 @@ let rec create com =
 	with
 		Error (Module_not_found ([],"StdTypes"),_) -> error "Standard library not found" null_pos
 	);
+	(* We always want core types to be available so we add them as default imports (issue #1904 and #3131). *)
+	ctx.m.module_types <- ctx.g.std.m_types;
 	List.iter (fun t ->
 		match t with
 		| TAbstractDecl a ->
