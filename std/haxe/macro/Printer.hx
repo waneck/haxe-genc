@@ -115,7 +115,7 @@ class Printer {
 
 	public function printMetadata(meta:MetadataEntry) return
 		'@${meta.name}'
-		+ (meta.params.length > 0 ? '(${printExprs(meta.params,", ")})' : "");
+		+ ((meta.params != null && meta.params.length > 0) ? '(${printExprs(meta.params,", ")})' : "");
 
 	public function printAccess(access:Access) return switch(access) {
 		case AStatic: "static";
@@ -270,7 +270,9 @@ class Printer {
 						var fstr = printField(f);
 						tabs + fstr + switch(f.kind) {
 							case FVar(_, _), FProp(_, _, _, _): ";";
-							case FFun(func) if (func.expr == null): ";";
+							case FFun({expr:null}): ";";
+							case FFun({expr:{expr:EBlock(_)}}): "";
+							case FFun(_): ";";
 							case _: "";
 						};
 					}].join("\n")

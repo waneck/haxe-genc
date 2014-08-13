@@ -1147,7 +1147,7 @@ let stack_block ctx c m e =
 	exact same type for overriden/implemented function as the original one
 *)
 
-let rec find_field c f =
+let rec find_field com c f =
 	try
 		(match c.cl_super with
 		| None ->
@@ -1155,14 +1155,16 @@ let rec find_field c f =
 		| Some ( {cl_path = (["cpp"],"FastIterator")}, _ ) ->
 			raise Not_found (* This is a strongly typed 'extern' and the usual rules don't apply *)
 		| Some (c,_) ->
-			find_field c f)
+			find_field com c f)
 	with Not_found -> try
+		if com.platform = Cpp then (* Cpp uses delegation for interfaces *)
+			raise Not_found;
 		let rec loop = function
 			| [] ->
 				raise Not_found
 			| (c,_) :: l ->
 				try
-					find_field c f
+					find_field com c f
 				with
 					Not_found -> loop l
 		in
@@ -1173,7 +1175,7 @@ let rec find_field c f =
 		f
 
 let fix_override com c f fd =
-	let f2 = (try Some (find_field c f) with Not_found -> None) in
+	let f2 = (try Some (find_field com c f) with Not_found -> None) in
 	match f2,fd with
 		| Some (f2), Some(fd) ->
 			let targs, tret = (match follow f2.cf_type with TFun (args,ret) -> args, ret | _ -> assert false) in
@@ -1230,7 +1232,7 @@ let fix_overrides com t =
 		if c.cl_interface then
 			c.cl_ordered_fields <- List.filter (fun f ->
 				try
-					if find_field c f == f then raise Not_found;
+					if find_field com c f == f then raise Not_found;
 					c.cl_fields <- PMap.remove f.cf_name c.cl_fields;
 					false;
 				with Not_found ->
@@ -1256,7 +1258,7 @@ let fix_abstract_inheritance com t =
 	match t with
 	| TClassDecl c when c.cl_interface ->
 		c.cl_ordered_fields <- List.filter (fun f ->
-			let b = try (find_field c f) == f
+			let b = try (find_field com c f) == f
 			with Not_found -> false in
 			if not b then c.cl_fields <- PMap.remove f.cf_name c.cl_fields;
 			b;
@@ -1588,7 +1590,7 @@ struct
 			List.iter (function
 				| (elist,TFun(args,ret)) -> (try
 					rated := ( (elist,TFun(args,ret)), mk_rate [] elist args ) :: !rated
-					with | Not_found ->  ())
+					with | Not_found -> ())
 				| _ -> assert false
 			) compatible;
 

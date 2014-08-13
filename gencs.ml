@@ -411,9 +411,9 @@ struct
 				| TField(ef, FInstance({ cl_path = [], "String" }, { cf_name = "length" })) ->
 					{ e with eexpr = TField(run ef, FDynamic "Length") }
 				| TField(ef, FInstance({ cl_path = [], "String" }, { cf_name = "toLowerCase" })) ->
-					{ e with eexpr = TField(run ef, FDynamic "ToLower") }
+					{ e with eexpr = TField(run ef, FDynamic "ToLowerInvariant") }
 				| TField(ef, FInstance({ cl_path = [], "String" }, { cf_name = "toUpperCase" })) ->
-					{ e with eexpr = TField(run ef, FDynamic "ToUpper") }
+					{ e with eexpr = TField(run ef, FDynamic "ToUpperInvariant") }
 
 				| TCall( { eexpr = TField(_, FStatic({ cl_path = [], "String" }, { cf_name = "fromCharCode" })) }, [cc] ) ->
 					{ e with eexpr = TNew(get_cl_from_t basic.tstring, [], [mk_cast tchar (run cc); mk_int gen 1 cc.epos]) }
@@ -1198,7 +1198,8 @@ let configure gen =
 					write w "("; expr_s w e; write w ")"
 				| TMeta (_,e) ->
 						expr_s w e
-				| TArrayDecl el ->
+				| TArrayDecl el
+				| TCall ({ eexpr = TLocal { v_name = "__array__" } }, el) ->
 					print w "new %s" (t_s e.etype);
 					write w "{";
 					ignore (List.fold_left (fun acc e ->
@@ -2055,7 +2056,7 @@ let configure gen =
 
 		let rec loop meta =
 			match meta with
-				| [] ->  ()
+				| [] -> ()
 				| (Meta.ClassCode, [Ast.EConst (Ast.String contents),_],_) :: tl ->
 					write w contents
 				| _ :: tl -> loop tl
@@ -2206,6 +2207,7 @@ let configure gen =
 	Hashtbl.add gen.gspecial_vars "__sizeof__" true;
 
 	Hashtbl.add gen.gspecial_vars "__delegate__" true;
+	Hashtbl.add gen.gspecial_vars "__array__" true;
 
 	Hashtbl.add gen.gsupported_conversions (["haxe"; "lang"], "Null") (fun t1 t2 -> true);
 	let last_needs_box = gen.gneeds_box in
@@ -2925,7 +2927,17 @@ let convert_ilenum ctx p ilcls =
 	List.iter (fun f -> match f.fname with
 		| "value__" -> ()
 		| _ ->
-			data := { ec_name = f.fname; ec_doc = None; ec_meta = []; ec_args = []; ec_pos = p; ec_params = []; ec_type = None; } :: !data;
+			let meta = match f.fconstant with
+				| Some IChar i
+				| Some IByte i
+				| Some IShort i ->
+					[Meta.CsNative, [EConst (Int (string_of_int i) ), p], p ]
+				| Some IInt i ->
+					[Meta.CsNative, [EConst (Int (Int32.to_string i) ), p], p ]
+				| _ ->
+					[]
+			in
+			data := { ec_name = f.fname; ec_doc = None; ec_meta = meta; ec_args = []; ec_pos = p; ec_params = []; ec_type = None; } :: !data;
 	) ilcls.cfields;
 	let _, c = netpath_to_hx ctx.nstd ilcls.cpath in
 	EEnum {
