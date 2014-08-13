@@ -1022,6 +1022,7 @@ module StringHandler = struct
 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"String"},{cf_name = "raw"}))},[{eexpr = TConst(TString s)} as e]) ->
 			e
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
+			let s = Ast.s_escape s in
 			Wrap.wrap_string gen.gcon.hxc (mk (TConst (TString s)) e.etype e.epos)
 		(* TODO: why was this here? Breaks Std.string("literal") *)
 (* 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"Std"},{cf_name = "string"}))},[e1]) ->
