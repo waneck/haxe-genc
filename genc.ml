@@ -393,7 +393,7 @@ module Wrap = struct
 
 	(* string wrapping *)
 	let wrap_string hxc e =
-		Expr.mk_static_call_2 hxc.c_string "ofPointerCopyNT" [e] e.epos
+		Expr.mk_static_call_2 hxc.c_string "HX_STR" [e] e.epos
 
 	(* basic type wrapping *)
 
@@ -889,7 +889,7 @@ module TypeChecker = struct
 			) fields in
 			{ e with eexpr = TObjectDecl fl; etype = ta}
 		(* literal String assigned to const char* = pass through *)
-		| TCall({eexpr = TField(_,FStatic({cl_path = [],"String"}, {cf_name = "ofPointerCopyNT"}))},[{eexpr = TConst (TString _)} as e]),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TAbstract({a_path=["c"],"VarArg"},_)) ->
+		| TCall({eexpr = TField(_,FStatic({cl_path = [],"String"}, {cf_name = "HX_STR"}))},[{eexpr = TConst (TString _)} as e]),(TAbstract({a_path = ["c"],"ConstPointer"},[TAbstract({a_path=[],"hx_char"},_)]) | TAbstract({a_path=["c"],"VarArg"},_)) ->
 			e
 		(* String assigned to const char* or VarArg = unwrap *)
 		| _,(TAbstract({a_path=["c"],"VarArg"},_)) when (match follow e.etype with TInst({cl_path = [],"String"},_) -> true | _ -> false) ->
@@ -2307,7 +2307,7 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 				| TConst (TString s) -> s
 				| TCast ({eexpr = TConst (TString s) },None) -> s
 				| TCall({eexpr = TField(_,FStatic({cl_path = [],"String"},
-					{cf_name = "ofPointerCopyNT"}))},
+					{cf_name = "HX_STR"}))},
 					[{eexpr = TConst (TString s)}]) -> s
 				| _ ->
 				let _ = print_endline (s_expr (Type.s_type (print_context())) e ) in
