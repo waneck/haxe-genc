@@ -355,8 +355,8 @@ module Expr = struct
 			cf_overloads = [];
 		}
 
-	let mk_binop op e1 e2 et p =
-		{ eexpr=TBinop(op,e1,e2); etype=et; epos=p }
+	let mk_binop op e1 e2 t p =
+		{ eexpr=TBinop(op,e1,e2); etype=t; epos=p }
 
 	let mk_obj_decl fields p =
 		let fields = List.sort compare fields in
@@ -1346,12 +1346,28 @@ module ArrayHandler = struct
 			end with Not_found ->
 				Expr.mk_cast (Type.map_expr gen.map e) e.etype
 			end
-		| TBinop( (Ast.OpAssign | Ast.OpAssignOp _ ), {eexpr = TArray(e1,e2)}, ev) ->
+		| TBinop( Ast.OpAssign, {eexpr = TArray(e1,e2)}, ev) ->
 			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
 					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [gen.map e2; cast (gen.map ev)] e.epos
+				| _ ->
+					raise Not_found
+			end with Not_found ->
+				Type.map_expr gen.map e
+			end
+		| TBinop( Ast.OpAssignOp op, {eexpr = TArray(e1,e2)}, ev) ->
+			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
+			begin try begin match follow e1.etype with
+				| TInst(c,[tp]) ->
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
+					let e1 = gen.map e1 in
+					let e2 = gen.map e2 in
+					let e_get = Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(e1,[tp])) [e2] e.epos) tp in
+					let ev = gen.map ev in
+					let e_op = Expr.mk_binop op e_get ev e.etype e.epos in
+					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [e2; cast (e_op)] e.epos
 				| _ ->
 					raise Not_found
 			end with Not_found ->
