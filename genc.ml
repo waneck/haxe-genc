@@ -1024,7 +1024,7 @@ module StringHandler = struct
 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"String"},{cf_name = "raw"}))},[{eexpr = TConst(TString s)} as e]) ->
 			e
 		| (TConst (TString s) | TNew({cl_path=[],"String"},[],[{eexpr = TConst(TString s)}])) ->
-			let s = Ast.s_escape s in
+			(* let s = Ast.s_escape s in *)
 			Wrap.wrap_string gen.gcon.hxc (mk (TConst (TString s)) e.etype e.epos)
 		(* TODO: why was this here? Breaks Std.string("literal") *)
 (* 		| TCall({eexpr = TField(_,FStatic({cl_path=[],"Std"},{cf_name = "string"}))},[e1]) ->
@@ -1844,8 +1844,10 @@ module VTableHandler = struct
 			let e_vtsize = (Expr.mk_int con.com vt_size null_pos) in
 			(* sizeof(vtable_t) + vt_size * sizeof(void ( * )())  *)
 			(* 2.2 allocate vtable struct (after 2.1 because we have the vtable size now) *)
+			let e_lhs = (mk_ccode "sizeof(c_VTable)") in
+			let e_lhs = Expr.mk_cast e_lhs t_int in
 			let e_allocsize  =
-				Expr.mk_binop OpAdd (mk_ccode "sizeof(c_VTable)") (
+				Expr.mk_binop OpAdd e_lhs (
 					Expr.mk_binop OpMult e_vtsize (sizeof t_vtfp) t_int null_pos
 				) t_int null_pos in
 			let e_alloc = Expr.mk_static_call_2 cstdlib "malloc" [e_allocsize] null_pos in
