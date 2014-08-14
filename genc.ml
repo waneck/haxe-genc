@@ -1347,7 +1347,6 @@ module ArrayHandler = struct
 				Expr.mk_cast (Type.map_expr gen.map e) e.etype
 			end
 		| TBinop( Ast.OpAssign, {eexpr = TArray(e1,e2)}, ev) ->
-			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
@@ -1358,7 +1357,6 @@ module ArrayHandler = struct
 				Type.map_expr gen.map e
 			end
 		| TBinop( Ast.OpAssignOp op, {eexpr = TArray(e1,e2)}, ev) ->
-			(* if op <> Ast.OpAssign then assert false; FIXME: this should be handled in an earlier stage (gencommon, anyone?) *)
 			begin try begin match follow e1.etype with
 				| TInst(c,[tp]) ->
 					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
@@ -1368,6 +1366,31 @@ module ArrayHandler = struct
 					let ev = gen.map ev in
 					let e_op = Expr.mk_binop op e_get ev e.etype e.epos in
 					mk_specialization_call c "__set" suffix (Some(e1,[tp])) [e2; cast (e_op)] e.epos
+				| _ ->
+					raise Not_found
+			end with Not_found ->
+				Type.map_expr gen.map e
+			end
+		(* CRUDE! *)
+		| TUnop((Increment | Decrement as op),flag,{eexpr = TArray(e1,e2)}) ->
+			begin try begin match follow e1.etype with
+				| TInst(c,[tp]) ->
+					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
+					let e1 = gen.map e1 in
+					let e2 = gen.map e2 in
+					let e_get = Expr.mk_cast (mk_specialization_call c "__get" suffix (Some(e1,[tp])) [e2] e.epos) tp in
+					let v_temp = gen.declare_temp e_get.etype None in
+					let e_temp = Expr.mk_local v_temp e_get.epos in
+					let e_assign = Expr.mk_binop OpAssign e_temp e_get e_get.etype e_get.epos in
+					let e_one = Codegen.type_constant gen.gcom (Int "1") e_get.epos in
+					let e_op = Expr.mk_binop (if op = Increment then OpAdd else OpSub) e_temp e_one e.etype e.epos in
+					let e_set = mk_specialization_call c "__set" suffix (Some(e1,[tp])) [e2; cast (e_op)] e.epos in
+					let el = if flag = Prefix then
+						[e_assign;e_set]
+					else
+						[e_assign;e_set;e_temp]
+					in
+					Expr.mk_block gen.gcom e_set.epos el
 				| _ ->
 					raise Not_found
 			end with Not_found ->
