@@ -143,9 +143,10 @@ module Simplifier = struct
 				{e with eexpr = TBlock (block loop el)}
 			| TCall({eexpr = TLocal v},_) when Meta.has Meta.Unbound v.v_meta ->
 				e
-			| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, _ :: {eexpr = TObjectDecl _} :: _) ->
+			| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))} as e1, ea1 :: [{eexpr = TObjectDecl _} as ea2]) ->
 				(* TODO: obvious hack *)
-				e
+				let ea1 = bind ea1 in
+				{e with eexpr = TCall(e1,ea1 :: [ea2])}
 			| TCall(e1,el) ->
 				let e1 = loop e1 in
 				{e with eexpr = TCall(e1,ordered_list el)}
