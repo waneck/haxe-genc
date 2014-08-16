@@ -141,4 +141,6 @@ class Test {
 	static function testAbstractOverStringBinop() {
 		var s = "" + A;
 	}
+
+	#end
 }
