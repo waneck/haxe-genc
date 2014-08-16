@@ -2,14 +2,14 @@ open Ast
 open Type
 open Common
 
-	let assigns_to_trace = ref false
+let assigns_to_trace = ref false
 
-	let rec run e =
-		match e.eexpr with
-		| TBinop(OpAssign, {eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"}, {cf_name = "trace"}))}, _) ->
-			assigns_to_trace := true
-		| _ ->
-			Type.iter run e
+let rec run e =
+	match e.eexpr with
+	| TBinop(OpAssign, {eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"}, {cf_name = "trace"}))}, _) ->
+		assigns_to_trace := true
+	| _ ->
+		Type.iter run e
 
 let s_expr = s_expr (s_type (print_context()))
 let debug e = if e.epos.pfile = "src/Main.hx" then print_endline (s_expr e)
