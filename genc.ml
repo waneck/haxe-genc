@@ -759,6 +759,7 @@ module DefaultValues = struct
 				| TAbstract({a_path=[],"hx_int64"},_) -> "lld"
 				| TAbstract({a_path=[],"hx_uint64"},_) -> "llu"
 				| TAbstract({a_path=[],("hx_char"|"hx_uchar")},_) -> "c"
+				| TAbstract({a_path=[],"Bool"},_) -> "d"
 				| TInst({cl_path=[],"String"},_) -> "s"
 				| _ ->
 					gen.gcom.warning "This will probably not work as expected" e.epos;
