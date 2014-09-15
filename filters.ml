@@ -198,7 +198,7 @@ let explode_expressions com gen_temp e =
 			Type.map_expr loop e
 	and no_statement e =
 		let rec loop2 e = match e.eexpr with
-			| TSwitch _ | TPatMatch _ | TBlock _ | TIf _ | TFunction _ ->
+			| TSwitch _ | TBlock _ | TIf _ | TFunction _ ->
 				declare_temp e.etype (Some (loop e)) e.epos
 			| TReturn _ | TBreak | TContinue | TThrow _ | TCast (_,Some _) ->
 				e
@@ -266,6 +266,8 @@ let promote_complex_rhs ctx e =
 						r := (mk (TVar (v,Some (find e))) ctx.basic.tvoid e.epos) :: !r
 					| None -> r := (mk (TVar (v,None)) ctx.basic.tvoid e.epos) :: !r
 				end
+			| TReturn (Some e1) when (match follow e1.etype with TAbstract({a_path=[],"Void"},_) -> true | _ -> false) ->
+				r := ({e with eexpr = TReturn None}) :: e1 :: !r
 			| _ -> r := (find e) :: !r
 		) el;
 		List.rev !r
@@ -413,26 +415,6 @@ let check_local_vars_init e =
 			| Some e ->
 				loop vars e;
 				join vars cvars)
-		| TPatMatch dt ->
-			let cvars = ref [] in
-			let rec fdt dt = match dt with
-				| DTExpr e ->
-					let old = !vars in
-					loop vars e;
-					restore vars old [];
-					cvars := !vars :: !cvars
-				| DTSwitch(e,cl,dto) ->
-					loop vars e;
-					List.iter (fun (_,dt) -> fdt dt) cl;
-					(match dto with None -> () | Some dt -> fdt dt)
-				| DTGuard(e,dt1,dt2) ->
-					fdt dt1;
-					(match dt2 with None -> () | Some dt -> fdt dt)
-				| DTBind(_,dt) -> fdt dt
-				| DTGoto _ -> ()
-			in
-			Array.iter fdt dt.dt_dt_lookup;
-			join vars !cvars
 		(* mark all reachable vars as initialized, since we don't exit the block  *)
 		| TBreak | TContinue | TReturn None ->
 			vars := PMap.map (fun _ -> true) !vars
@@ -506,33 +488,6 @@ let rec local_usage f e =
 				local_usage f e;
 			))
 		) catchs;
-	| TPatMatch dt ->
-		List.iter (fun (v,eo) ->
-			f (Declare v);
-			match eo with None -> () | Some e -> local_usage f e
-		) dt.dt_var_init;
-		let rec fdt dt = match dt with
-			| DTBind(bl,dt) ->
-				List.iter (fun ((v,_),e) ->
-					f (Declare v);
-					local_usage f e
-				) bl;
-				fdt dt
-			| DTExpr e -> local_usage f e
-			| DTGuard(e,dt1,dt2) ->
-				local_usage f e;
-				fdt dt1;
-				(match dt2 with None -> () | Some dt -> fdt dt)
-			| DTSwitch(e,cl,dto) ->
-				local_usage f e;
-				List.iter (fun (e,dt) ->
-					local_usage f e;
-					fdt dt
-				) cl;
-				(match dto with None -> () | Some dt -> fdt dt)
-			| DTGoto _ -> ()
-		in
-		Array.iter fdt dt.dt_dt_lookup
 	| _ ->
 		iter (local_usage f) e
 
@@ -575,27 +530,6 @@ let captured_vars com e =
 					v, e
 			) catchs in
 			mk (TTry (wrap used expr,catchs)) e.etype e.epos
-		(* TODO: find out this does *)
-(* 		| TMatch (expr,enum,cases,def) ->
-			let cases = List.map (fun (il,vars,e) ->
-				let pos = e.epos in
-				let e = ref (wrap used e) in
-				let vars = match vars with
-					| None -> None
-					| Some l ->
-						Some (List.map (fun v ->
-							match v with
-							| Some v when PMap.mem v.v_id used ->
-								let vtmp = mk_var v used in
-								e := concat (mk_init v vtmp pos) !e;
-								Some vtmp
-							| _ -> v
-						) l)
-				in
-				il, vars, !e
-			) cases in
-			let def = match def with None -> None | Some e -> Some (wrap used e) in
-			mk (TMatch (wrap used expr,enum,cases,def)) e.etype e.epos *)
 		| TFunction f ->
 			(*
 				list variables that are marked as used, but also used in that
@@ -754,7 +688,7 @@ let rename_local_vars com e =
 			| TAbstract ({a_path = [],"Void"},_) -> error "Arguments and variables of type Void are not allowed" p
 			| _ -> ());
 		(* chop escape char for all local variables generated *)
-		if String.unsafe_get v.v_name 0 = String.unsafe_get gen_local_prefix 0 then v.v_name <- "_g" ^ String.sub v.v_name 1 (String.length v.v_name - 1);
+		if is_gen_local v then v.v_name <- "_g" ^ String.sub v.v_name 1 (String.length v.v_name - 1);
 		let look_vars = (if not cfg.pf_captured_scope && v.v_capture then !all_vars else !vars) in
 		(try
 			let v2 = PMap.find v.v_name look_vars in
@@ -826,33 +760,6 @@ let rename_local_vars com e =
 				loop e;
 				old()
 			) catchs;
-		| TPatMatch dt ->
-			let rec fdt dt = match dt with
-				| DTSwitch(e,cl,dto) ->
-					loop e;
-					List.iter (fun (_,dt) ->
-						let old = save() in
-						fdt dt;
-						old();
-					) cl;
-					(match dto with None -> () | Some dt ->
-						let old = save() in
-						fdt dt;
-						old())
-				| DTBind(bl,dt) ->
-					List.iter (fun ((v,p),e) ->
-						declare v e.epos
-					) bl;
-					fdt dt
-				| DTExpr e -> loop e;
-				| DTGuard(e,dt1,dt2) ->
-					loop e;
-					fdt dt1;
-					(match dt2 with None -> () | Some dt -> fdt dt)
-				| DTGoto _ ->
-					()
-			in
-			Array.iter fdt dt.dt_dt_lookup
 		| TTypeExpr t ->
 			check t
 		| TNew (c,_,_) ->
@@ -973,6 +880,10 @@ let apply_native_paths ctx t =
 		| _ ->
 			error "String expected" mp
 	in
+	let get_real_name meta name =
+		let name',p = get_native_name meta in
+		(Meta.RealPath,[Ast.EConst (Ast.String (name)), p], p), name'
+	in
 	let get_real_path meta path =
 		let name,p = get_native_name meta in
 		(Meta.RealPath,[Ast.EConst (Ast.String (s_type_path path)), p], p), parse_path name
@@ -982,8 +893,10 @@ let apply_native_paths ctx t =
 		| TClassDecl c ->
 			let did_change = ref false in
 			let field cf = try
-				let name,_ = get_native_name cf.cf_meta in
+				let meta,name = get_real_name cf.cf_meta cf.cf_name in
 				cf.cf_name <- name;
+				cf.cf_meta <- meta :: cf.cf_meta;
+				List.iter (fun cf -> cf.cf_name <- name) cf.cf_overloads;
 				did_change := true
 			with Not_found ->
 				()
@@ -1033,7 +946,7 @@ let add_rtti ctx t =
 let add_field_inits ctx t =
 	let is_as3 = Common.defined ctx.com Define.As3 && not ctx.in_macro in
 	let apply c =
-		let ethis = mk (TConst TThis) (TInst (c,List.map snd c.cl_types)) c.cl_pos in
+		let ethis = mk (TConst TThis) (TInst (c,List.map snd c.cl_params)) c.cl_pos in
 		(* TODO: we have to find a variable name which is not used in any of the functions *)
 		let v = alloc_var "_g" ethis.etype in
 		let need_this = ref false in
@@ -1071,7 +984,7 @@ let add_field_inits ctx t =
 				match cf.cf_expr with
 				| None -> assert false
 				| Some e ->
-					let lhs = mk (TField(ethis,FInstance (c,cf))) cf.cf_type e.epos in
+					let lhs = mk (TField(ethis,FInstance (c,List.map snd c.cl_params,cf))) cf.cf_type e.epos in
 					cf.cf_expr <- None;
 					let eassign = mk (TBinop(OpAssign,lhs,e)) e.etype e.epos in
 					if is_as3 then begin
@@ -1151,9 +1064,9 @@ let run_expression_filters ctx filters t =
 		let process_field f =
 			match f.cf_expr with
 			| Some e when not (is_removable_field ctx f) ->
-				Codegen.Abstract.cast_stack := f :: !Codegen.Abstract.cast_stack;
+				Codegen.AbstractCast.cast_stack := f :: !Codegen.AbstractCast.cast_stack;
 				f.cf_expr <- Some (run e);
-				Codegen.Abstract.cast_stack := List.tl !Codegen.Abstract.cast_stack;
+				Codegen.AbstractCast.cast_stack := List.tl !Codegen.AbstractCast.cast_stack;
 			| _ -> ()
 		in
 		List.iter process_field c.cl_ordered_fields;
@@ -1193,7 +1106,7 @@ let run com tctx main =
 	(* PASS 1: general expression filters *)
  	let filters = [
  		Codegen.UnificationCallback.run (check_unification com);
-		Codegen.Abstract.handle_abstract_casts tctx;
+		Codegen.AbstractCast.handle_abstract_casts tctx;
 		blockify_ast;
 		(if Common.defined com Define.As3 then (fun e -> e) else Analyzer.run_ssa com);
 		(* if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else *)
@@ -1210,7 +1123,7 @@ let run com tctx main =
 	let filters = [
 		(* promote_complex_rhs com; *)
 		if com.config.pf_add_final_return then add_final_return else (fun e -> e);
-		rename_local_vars com; (* TODO: it shouldn't be necessary to have this here if promote_complex_rhs can generate proper variable names *)
+		rename_local_vars com;
 	] in
 	List.iter (fun t ->
 		remove_generic_base tctx t;

@@ -244,7 +244,7 @@ let write_mappings ctx =
 	output_string channel "{\n";
 	output_string channel "\"version\":3,\n";
 	output_string channel ("\"file\":\"" ^ (String.concat "\\\\" (ExtString.String.nsplit basefile "\\")) ^ "\",\n");
-	output_string channel ("\"sourceRoot\":\"file://\",\n");
+	output_string channel ("\"sourceRoot\":\"file:///\",\n");
 	output_string channel ("\"sources\":[" ^
 		(String.concat "," (List.map (fun s -> "\"" ^ to_url s ^ "\"") sources)) ^
 		"],\n");
@@ -306,7 +306,7 @@ let rec has_return e =
 let rec iter_switch_break in_switch e =
 	match e.eexpr with
 	| TFunction _ | TWhile _ | TFor _ -> ()
-	| TSwitch _ | TPatMatch _ when not in_switch -> iter_switch_break true e
+	| TSwitch _ when not in_switch -> iter_switch_break true e
 	| TBreak when in_switch -> raise Exit
 	| _ -> iter (iter_switch_break in_switch) e
 
@@ -402,6 +402,8 @@ let rec gen_call ctx e el in_value =
 		spr ctx (this ctx)
 	| TLocal { v_name = "__js__" }, [{ eexpr = TConst (TString code) }] ->
 		spr ctx (String.concat "\n" (ExtString.String.nsplit code "\r\n"))
+	| TLocal { v_name = "__js__" }, { eexpr = TConst (TString code); epos = p } :: tl ->
+		Codegen.interpolate_code ctx.com code tl (spr ctx) (gen_expr ctx) p
 	| TLocal { v_name = "__instanceof__" },  [o;t] ->
 		spr ctx "(";
 		gen_value ctx o;
@@ -492,6 +494,12 @@ and gen_expr ctx e =
 		print ctx "$iterator(";
 		gen_value ctx x;
 		print ctx ")";
+	| TField (x,FClosure (Some {cl_path=[],"Array"}, {cf_name="push"})) ->
+		(* see https://github.com/HaxeFoundation/haxe/issues/1997 *)
+		add_feature ctx "use.$arrayPushClosure";
+		print ctx "$arrayPushClosure(";
+		gen_value ctx x;
+		print ctx ")"
 	| TField (x,FClosure (_,f)) ->
 		add_feature ctx "use.$bind";
 		(match x.eexpr with
@@ -698,7 +706,6 @@ and gen_expr ctx e =
 		bend();
 		newline ctx;
 		spr ctx "}";
-	| TPatMatch dt -> assert false
 	| TSwitch (e,cases,def) ->
 		spr ctx "switch";
 		gen_value ctx e;
@@ -867,7 +874,6 @@ and gen_value ctx e =
 			match def with None -> None | Some e -> Some (assign e)
 		)) e.etype e.epos);
 		v()
-	| TPatMatch dt -> assert false
 	| TTry (b,catchs) ->
 		let v = value() in
 		let block e = mk (TBlock [e]) e.etype e.epos in
@@ -1134,7 +1140,10 @@ let generate_type ctx = function
 		(* Special case, want to add Math.__name__ only when required, handle here since Math is extern *)
 		let p = s_path ctx c.cl_path in
 		if p = "Math" then generate_class___name__ ctx c;
-		if not c.cl_extern then
+		(* Another special case for Std because we do not want to generate it if it's empty. *)
+		if p = "Std" && c.cl_ordered_statics = [] then
+			()
+		else if not c.cl_extern then
 			generate_class ctx c
 		else if Meta.has Meta.JsRequire c.cl_meta then
 			generate_require ctx c
@@ -1308,6 +1317,12 @@ let generate com =
 		newline ctx;
 		print ctx "function $bind(o,m) { if( m == null ) return null; if( m.__id__ == null ) m.__id__ = $fid++; var f; if( o.hx__closures__ == null ) o.hx__closures__ = {}; else f = o.hx__closures__[m.__id__]; if( f == null ) { f = function(){ return f.method.apply(f.scope, arguments); }; f.scope = o; f.method = m; o.hx__closures__[m.__id__] = f; } return f; }";
 		newline ctx;
+	end;
+	if has_feature ctx "use.$arrayPushClosure" then begin
+		print ctx "function $arrayPushClosure(a) {";
+		print ctx " return function(x) { a.push(x); }; ";
+		print ctx "}";
+		newline ctx
 	end;
 	List.iter (gen_block_element ~after:true ctx) (List.rev ctx.inits);
 	List.iter (generate_static ctx) (List.rev ctx.statics);

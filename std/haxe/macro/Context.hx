@@ -225,7 +225,19 @@ class Context {
 		var d = load("defined_value", 1)(untyped key.__s);
 		return d == null ? null : new String(d);
 	}
-
+	
+	/**
+		Returns a map of all compiler directives that have been set.
+		
+		Compiler directives are set using the `-D` command line parameter, or
+		by calling `haxe.macro.Compiler.define`.
+		
+		Modifying the returned map has no effect on the compiler.
+	 */
+	public static function getDefines() : haxe.ds.StringMap<String> {
+		return load("get_defines", 0)();
+	}
+	
 	/**
 		Resolves a type identified by `name`.
 
@@ -434,8 +446,10 @@ class Context {
 	/**
 		Defines a new module with several `TypeDefinition` `types`.
 	**/
-	public static function defineModule( modulePath : String, types : Array<TypeDefinition> ) : Void {
-		load("define_module", 2)(untyped modulePath.__s,untyped types.__neko());
+	public static function defineModule( modulePath : String, types : Array<TypeDefinition>, ?imports: Array<ImportExpr>, ?usings : Array<TypePath> ) : Void {
+		if (imports == null) imports = [];
+		if (usings == null) usings = [];
+		load("define_module", 4)(untyped modulePath.__s, untyped types.__neko(), untyped imports.__neko(), untyped usings.__neko());
 	}
 
 	/**

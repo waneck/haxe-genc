@@ -47,8 +47,8 @@ type context = {
 
 let is_var_field f =
 	match f with
-	| FStatic (_,f) | FInstance (_,f) ->
-		(match f.cf_kind with Var _ -> true | _ -> false)
+	| FStatic (_,f) | FInstance (_,_,f) ->
+		(match f.cf_kind with Var _ | Method MethDynamic -> true | _ -> false)
 	| _ ->
 		false
 
@@ -235,7 +235,7 @@ let rec type_str ctx t p =
 	| TEnum _ | TInst _ when List.memq t ctx.local_types ->
 		"*"
 	| TAbstract ({ a_impl = Some _ } as a,pl) ->
-		type_str ctx (Codegen.Abstract.get_underlying_type a pl) p
+		type_str ctx (Abstract.get_underlying_type a pl) p
 	| TAbstract (a,_) ->
 		(match a.a_path with
 		| [], "Void" -> "void"
@@ -291,14 +291,14 @@ let rec type_str ctx t p =
 				| TEnum ({ e_path = [],"Bool" },_) -> "*"
 				| _ -> type_str ctx t p)
 			| _ -> assert false);
-		| _ -> type_str ctx (apply_params t.t_types args t.t_type) p)
+		| _ -> type_str ctx (apply_params t.t_params args t.t_type) p)
 	| TLazy f ->
 		type_str ctx ((!f)()) p
 
 let rec iter_switch_break in_switch e =
 	match e.eexpr with
 	| TFunction _ | TWhile _ | TFor _ -> ()
-	| TSwitch _ | TPatMatch _ when not in_switch -> iter_switch_break true e
+	| TSwitch _ when not in_switch -> iter_switch_break true e
 	| TBreak when in_switch -> raise Exit
 	| _ -> iter (iter_switch_break in_switch) e
 
@@ -505,6 +505,12 @@ let rec gen_call ctx e el r =
 				print ctx ")";
 			| _ -> assert false)
 		| _ -> assert false)
+	| TField(e1, (FAnon {cf_name = s} | FDynamic s)),[ef] when s = "map" || s = "filter" ->
+		spr ctx (s_path ctx true (["flash";],"Boot") e.epos);
+		gen_field_access ctx t_dynamic (s ^ "Dynamic");
+		spr ctx "(";
+		concat ctx "," (gen_value ctx) [e1;ef];
+		spr ctx ")"
 	| TField (ee,f), args when is_var_field f ->
 		spr ctx "(";
 		gen_value ctx e;
@@ -587,13 +593,18 @@ and gen_expr ctx e =
 		gen_field_access ctx e1.etype s;
 		print ctx " %s " (Ast.s_binop op);
 		gen_value_op ctx e2; *)
+	(* assignments to variable or dynamic methods fields on interfaces are generated as class["field"] = value *)
+	| TBinop (op,{eexpr = TField (ei, FInstance({cl_interface = true},_,{cf_kind = (Method MethDynamic | Var _); cf_name = s}))},e2) ->
+		gen_value ctx ei;
+		print ctx "[\"%s\"]" s;
+		print ctx " %s " (Ast.s_binop op);
+		gen_value_op ctx e2;
 	| TBinop (op,e1,e2) ->
 		gen_value_op ctx e1;
 		print ctx " %s " (Ast.s_binop op);
 		gen_value_op ctx e2;
-	(* variable fields on interfaces are generated as (class["field"] as class) *)
-	| TField ({etype = TInst({cl_interface = true} as c,_)} as ei,FInstance (_,{ cf_name = s }))
-		when (try (match (PMap.find s c.cl_fields).cf_kind with Var _ -> true | _ -> false) with Not_found -> false) ->
+	(* variable fields and dynamic methods on interfaces are generated as (class["field"] as class) *)
+	| TField (ei, FInstance({cl_interface = true},_,{cf_kind = (Method MethDynamic | Var _); cf_name = s})) ->
 		spr ctx "(";
 		gen_value ctx ei;
 		print ctx "[\"%s\"]" s;
@@ -746,7 +757,6 @@ and gen_expr ctx e =
 			print ctx "catch( %s : %s )" (s_ident v.v_name) (type_str ctx v.v_type e.epos);
 			gen_expr ctx e;
 		) catchs;
-	| TPatMatch dt -> assert false
 	| TSwitch (e,cases,def) ->
 		spr ctx "switch";
 		gen_value ctx (parent e);
@@ -920,7 +930,6 @@ and gen_value ctx e =
 			match def with None -> None | Some e -> Some (assign e)
 		)) e.etype e.epos);
 		v()
-	| TPatMatch dt -> assert false
 	| TTry (b,catchs) ->
 		let v = value true in
 		gen_expr ctx (mk (TTry (block (assign b),
@@ -986,7 +995,7 @@ let generate_field ctx static f =
 		let is_getset = (match f.cf_kind with Var { v_read = AccCall } | Var { v_write = AccCall } -> true | _ -> false) in
 		if ctx.curclass.cl_interface then
 			match follow f.cf_type with
-			| TFun (args,r) ->
+			| TFun (args,r) when (match f.cf_kind with Method MethDynamic | Var _ -> false | _ -> true) ->
 				let rec loop = function
 					| [] -> f.cf_name
 					| (Ast.Meta.Getter,[Ast.EConst (Ast.String name),_],_) :: _ -> "get " ^ name
@@ -1069,7 +1078,7 @@ let generate_class ctx c =
 	ctx.curclass <- c;
 	define_getset ctx true c;
 	define_getset ctx false c;
-	ctx.local_types <- List.map snd c.cl_types;
+	ctx.local_types <- List.map snd c.cl_params;
 	let pack = open_block ctx in
 	print ctx "\tpublic %s%s%s %s " (final c.cl_meta) (match c.cl_dynamic with None -> "" | Some _ -> if c.cl_interface then "" else "dynamic ") (if c.cl_interface then "interface" else "class") (snd c.cl_path);
 	(match c.cl_super with
@@ -1130,7 +1139,7 @@ let generate_main ctx inits =
 	newline ctx
 
 let generate_enum ctx e =
-	ctx.local_types <- List.map snd e.e_types;
+	ctx.local_types <- List.map snd e.e_params;
 	let pack = open_block ctx in
 	let ename = snd e.e_path in
 	print ctx "\tpublic final class %s extends enum {" ename;

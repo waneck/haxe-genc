@@ -162,7 +162,7 @@ and mark_t dce p t =
 			List.iter (mark_t dce p) pl
 		| TAbstract(a,pl) when Meta.has Meta.MultiType a.a_meta ->
 			begin try
-				mark_t dce p (snd (Codegen.Abstract.find_multitype_specialization dce.com a pl p))
+				mark_t dce p (snd (Codegen.AbstractCast.find_multitype_specialization dce.com a pl p))
 			with Typecore.Error _ ->
 				()
 			end
@@ -170,7 +170,7 @@ and mark_t dce p t =
 			mark_abstract dce a;
 			List.iter (mark_t dce p) pl;
 			if not (Meta.has Meta.CoreType a.a_meta) then
-				mark_t dce p (Codegen.Abstract.get_underlying_type a pl)
+				mark_t dce p (Abstract.get_underlying_type a pl)
 		| TLazy _ | TDynamic _ | TAnon _ | TType _ | TMono _ -> ()
 		end;
 		dce.t_stack <- List.tl dce.t_stack
@@ -221,13 +221,13 @@ let rec to_string dce t = match t with
 	| TType(tt,tl) ->
 		if not (List.exists (fun t2 -> Type.fast_eq t t2) dce.ts_stack) then begin
 			dce.ts_stack <- t :: dce.ts_stack;
-			to_string dce (apply_params tt.t_types tl tt.t_type)
+			to_string dce (apply_params tt.t_params tl tt.t_type)
 		end
 	| TAbstract({a_impl = Some c} as a,tl) ->
 		if Meta.has Meta.CoreType a.a_meta then
 			field dce c "toString" false
 		else
-			to_string dce (Codegen.Abstract.get_underlying_type a tl)
+			to_string dce (Abstract.get_underlying_type a tl)
 	| TMono r ->
 		(match !r with
 		| Some t -> to_string dce t
@@ -352,7 +352,7 @@ and expr dce e =
 			| FStatic(c,cf) ->
 				mark_class dce c;
 				mark_field dce c cf true;
-			| FInstance(c,cf) ->
+			| FInstance(c,_,cf) ->
 				mark_class dce c;
 				mark_field dce c cf false;
 			| _ ->
@@ -415,7 +415,16 @@ let run com main full =
 			begin match c.cl_constructor with
 				| Some cf -> loop false cf
 				| None -> ()
-			end
+			end;
+			begin match c.cl_init with
+				| Some e when keep_class || Meta.has Meta.KeepInit c.cl_meta ->
+					(* create a fake field to deal with our internal logic (issue #3286) *)
+					let cf = mk_field "__init__" e.etype e.epos in
+					cf.cf_expr <- Some e;
+					loop true cf
+				| _ ->
+					()
+			end;
 		| TEnumDecl en when keep_whole_enum dce en ->
 			mark_enum dce en
 		| _ ->

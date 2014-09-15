@@ -78,7 +78,7 @@ let rec follow_param t =
 		| Some t -> follow_param t
 		| _ -> t)
 	| TType ({ t_path = [],"Null" } as t,tl) ->
-		follow_param (apply_params t.t_types tl t.t_type)
+		follow_param (apply_params t.t_params tl t.t_type)
 	| _ ->
 		t
 
@@ -157,7 +157,16 @@ and gen_field att f =
 		| Some ({eexpr = TFunction tf}) -> Some tf
 		| _ -> None
 	in
-	node f.cf_name (if f.cf_public then ("public","1") :: att else att) (gen_type ~tfunc:tfunc f.cf_type :: gen_meta f.cf_meta @ gen_doc_opt f.cf_doc @ overloads)
+	let field_name cf =
+		try
+			begin match Meta.get Meta.RealPath cf.cf_meta with
+				| _,[EConst (String (s)),_],_ -> s
+				| _ -> raise Not_found
+			end;
+		with Not_found ->
+			cf.cf_name
+	in
+	node (field_name f) (if f.cf_public then ("public","1") :: att else att) (gen_type ~tfunc:tfunc f.cf_type :: gen_meta f.cf_meta @ gen_doc_opt f.cf_doc @ overloads)
 
 let gen_constr e =
 	let doc = gen_doc_opt e.ef_doc in
@@ -218,25 +227,26 @@ let rec gen_type_decl com pos t =
 			| None -> []
 			| Some t -> [node "haxe_dynamic" [] [gen_type t]]
 		) in
-		node "class" (gen_type_params pos c.cl_private (tpath t) c.cl_types c.cl_pos m @ ext @ interf) (tree @ stats @ fields @ constr @ doc @ meta @ dynamic)
+		node "class" (gen_type_params pos c.cl_private (tpath t) c.cl_params c.cl_pos m @ ext @ interf) (tree @ stats @ fields @ constr @ doc @ meta @ dynamic)
 	| TEnumDecl e ->
 		let doc = gen_doc_opt e.e_doc in
 		let meta = gen_meta e.e_meta in
-		node "enum" (gen_type_params pos e.e_private (tpath t) e.e_types e.e_pos m) (gen_ordered_constr e  @ doc @ meta)
+		node "enum" (gen_type_params pos e.e_private (tpath t) e.e_params e.e_pos m) (gen_ordered_constr e  @ doc @ meta)
 	| TTypeDecl t ->
 		let doc = gen_doc_opt t.t_doc in
 		let meta = gen_meta t.t_meta in
 		let tt = gen_type t.t_type in
-		node "typedef" (gen_type_params pos t.t_private t.t_path t.t_types t.t_pos m) (tt :: doc @ meta)
+		node "typedef" (gen_type_params pos t.t_private t.t_path t.t_params t.t_pos m) (tt :: doc @ meta)
 	| TAbstractDecl a ->
 		let doc = gen_doc_opt a.a_doc in
 		let meta = gen_meta a.a_meta in
-		let mk_cast (t,cfo) = node "icast" (match cfo with None -> [] | Some cf -> ["field",cf.cf_name]) [gen_type t] in
-		let sub = (match a.a_from with [] -> [] | l -> [node "from" [] (List.map mk_cast l)]) in
-		let super = (match a.a_to with [] -> [] | l -> [node "to" [] (List.map mk_cast l)]) in
+		let mk_cast t = node "icast" [] [gen_type t] in
+		let mk_field_cast (t,cf) = node "icast" ["field",cf.cf_name] [gen_type t] in
+		let sub = (match a.a_from,a.a_from_field with [],[] -> [] | l1,l2 -> [node "from" [] ((List.map mk_cast l1) @ (List.map mk_field_cast l2))]) in
+		let super = (match a.a_to,a.a_to_field with [],[] -> [] | l1,l2 -> [node "to" [] ((List.map mk_cast l1) @ (List.map mk_field_cast l2))]) in
 		let impl = (match a.a_impl with None -> [] | Some c -> [node "impl" [] [gen_type_decl com pos (TClassDecl c)]]) in
 		let this = [node "this" [] [gen_type a.a_this]] in
-		node "abstract" (gen_type_params pos a.a_private (tpath t) a.a_types a.a_pos m) (sub @ this @ super @ doc @ meta @ impl)
+		node "abstract" (gen_type_params pos a.a_private (tpath t) a.a_params a.a_pos m) (sub @ this @ super @ doc @ meta @ impl)
 
 let att_str att =
 	String.concat "" (List.map (fun (a,v) -> Printf.sprintf " %s=\"%s\"" a v) att)
@@ -455,7 +465,7 @@ let generate_type com t =
 	(match t with
 	| TClassDecl c ->
 		print_meta c.cl_meta;
-		p "extern %s %s" (if c.cl_interface then "interface" else "class") (stype (TInst (c,List.map snd c.cl_types)));
+		p "extern %s %s" (if c.cl_interface then "interface" else "class") (stype (TInst (c,List.map snd c.cl_params)));
 		let ext = (match c.cl_super with
 		| None -> []
 		| Some (c,pl) -> [" extends " ^ stype (TInst (c,pl))]
@@ -496,7 +506,7 @@ let generate_type com t =
 		p "}\n";
 	| TEnumDecl e ->
 		print_meta e.e_meta;
-		p "extern enum %s {\n" (stype (TEnum(e,List.map snd e.e_types)));
+		p "extern enum %s {\n" (stype (TEnum(e,List.map snd e.e_params)));
 		let sort l =
 			let a = Array.of_list l in
 			Array.sort compare a;
@@ -513,12 +523,12 @@ let generate_type com t =
 		p "}\n"
 	| TTypeDecl t ->
 		print_meta t.t_meta;
-		p "typedef %s = " (stype (TType (t,List.map snd t.t_types)));
+		p "typedef %s = " (stype (TType (t,List.map snd t.t_params)));
 		p "%s" (stype t.t_type);
 		p "\n";
 	| TAbstractDecl a ->
 		print_meta a.a_meta;
-		p "abstract %s {}" (stype (TAbstract (a,List.map snd a.a_types)));
+		p "abstract %s {}" (stype (TAbstract (a,List.map snd a.a_params)));
 	);
 	IO.close_out ch
 

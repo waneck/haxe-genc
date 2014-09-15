@@ -410,7 +410,7 @@ module Transformer = struct
 			) length_map [] in
 			let c_string = match !t_string with TInst(c,_) -> c | _ -> assert false in
 			let cf_length = PMap.find "length" c_string.cl_fields in
-			let ef = mk (TField(e1,FInstance(c_string,cf_length))) !t_int e1.epos in
+			let ef = mk (TField(e1,FInstance(c_string,[],cf_length))) !t_int e1.epos in
 			let res_var = alloc_var (ae.a_next_id()) ef.etype in
 			let res_local = {ef with eexpr = TLocal res_var} in
 			let var_expr = {ef with eexpr = TVar(res_var,Some ef)} in
@@ -911,12 +911,10 @@ module Transformer = struct
 			let e = trans is_value [] e in
 			let r = { a_expr with eexpr = TMeta(m, e.a_expr); etype = e.a_expr.etype } in
 			lift_expr ~blocks:e.a_blocks r
-		| ( _, TPatMatch _ ) -> assert false
 		| ( _, TLocal _ ) -> lift_expr a_expr
 
 		| ( _, TConst _ ) -> lift_expr a_expr
 		| ( _, TTypeExpr _ ) -> lift_expr a_expr
-		| ( _, TEnumParameter _ ) -> lift_expr a_expr
 		| ( _, TUnop _ ) -> assert false
 		| ( true, TWhile(econd, ebody, DoWhile) ) ->
 			let new_expr = trans false [] a_expr in
@@ -977,15 +975,15 @@ module Printer = struct
 		)
 
 	let is_underlying_string t = match follow t with
-		| TAbstract(a,tl) -> (is_type1 "" "String")(Codegen.Abstract.get_underlying_type a tl)
+		| TAbstract(a,tl) -> (is_type1 "" "String")(Abstract.get_underlying_type a tl)
 		| _ -> false
 	let is_underlying_array t = match follow t with
-		| TAbstract(a,tl) -> (is_type1 "" "list")(Codegen.Abstract.get_underlying_type a tl)
+		| TAbstract(a,tl) -> (is_type1 "" "list")(Abstract.get_underlying_type a tl)
 		| _ -> false
 
 	let rec is_anon_or_dynamic t = match follow t with
 		| TAbstract(a,tl) ->
-			is_anon_or_dynamic (Codegen.Abstract.get_underlying_type a tl)
+			is_anon_or_dynamic (Abstract.get_underlying_type a tl)
 		| TAnon _ | TDynamic _ -> true
 		| _ -> false
 
@@ -1309,7 +1307,7 @@ module Printer = struct
 				Printf.sprintf "(%s if %s else %s)" (print_expr pctx eif) (print_expr pctx econd) (print_expr pctx eelse)
 			| TMeta(_,e1) ->
 				print_expr pctx e1
-			| TPatMatch _ | TSwitch _ | TCast(_, Some _) | TFor _ | TUnop(_,Postfix,_) ->
+			| TSwitch _ | TCast(_, Some _) | TFor _ | TUnop(_,Postfix,_) ->
 				assert false
 
 	and print_if_else pctx econd eif eelse as_elif =
@@ -1334,7 +1332,7 @@ module Printer = struct
 		in
 		let name = field_name fa in
 		let is_extern = (match fa with
-		| FInstance(c,_) -> c.cl_extern
+		| FInstance(c,_,_) -> c.cl_extern
 		| FStatic(c,_) -> c.cl_extern
 		| _ -> false)
 		in
@@ -1348,9 +1346,9 @@ module Printer = struct
 		in
 		match fa with
 			(* we need to get rid of these cases in the transformer, how is this handled in js *)
-			| FInstance(c,{cf_name = "length" | "get_length"}) when (is_type "" "list")(TClassDecl c) ->
+			| FInstance(c,_,{cf_name = "length" | "get_length"}) when (is_type "" "list")(TClassDecl c) ->
 				Printf.sprintf "python_lib_Builtin.len(%s)" (print_expr pctx e1)
-			| FInstance(c,{cf_name = "length"}) when (is_type "" "String")(TClassDecl c) ->
+			| FInstance(c,_,{cf_name = "length"}) when (is_type "" "String")(TClassDecl c) ->
 				Printf.sprintf "python_lib_Builtin.len(%s)" (print_expr pctx e1)
 			| FStatic(c,{cf_name = "fromCharCode"}) when (is_type "" "String")(TClassDecl c) ->
 				Printf.sprintf "HxString.fromCharCode"
@@ -1776,9 +1774,9 @@ module Generator = struct
 		let py_metas = filter_py_metas cf.cf_meta in
 		begin match member_inits,cf.cf_expr with
 			| _,Some ({eexpr = TFunction f} as ef) ->
-				let ethis = mk (TConst TThis) (TInst(c,List.map snd c.cl_types)) cf.cf_pos in
+				let ethis = mk (TConst TThis) (TInst(c,List.map snd c.cl_params)) cf.cf_pos in
 				let member_data = List.map (fun cf ->
-					let ef = mk (TField(ethis,FInstance(c, cf))) cf.cf_type cf.cf_pos in
+					let ef = mk (TField(ethis,FInstance(c,[],cf))) cf.cf_type cf.cf_pos in (* TODO *)
 					mk (TBinop(OpAssign,ef,null ef.etype ef.epos)) ef.etype ef.epos
 				) member_inits in
 				let e = {f.tf_expr with eexpr = TBlock (member_data @ [f.tf_expr])} in

@@ -133,7 +133,7 @@ and type_string_suff suffix haxe_type =
 			(match params with
 			| [t] -> "Array<" ^ (type_string (follow t) ) ^ " >"
 			| _ -> assert false)
-		| _ ->  type_string_suff suffix (apply_params type_def.t_types params type_def.t_type)
+		| _ ->  type_string_suff suffix (apply_params type_def.t_params params type_def.t_type)
 		)
 	| TFun (args,haxe_type) -> "Dynamic"
 	| TAnon anon -> "Dynamic"
@@ -208,7 +208,7 @@ let rec is_string_type t =
 	   (match !(a.a_status) with
 	   | Statics ({cl_path = ([], "String")}) -> true
 	   | _ -> false)
-	| TAbstract (a,pl) -> is_string_type (Codegen.Abstract.get_underlying_type a pl)
+	| TAbstract (a,pl) -> is_string_type (Abstract.get_underlying_type a pl)
 	| _ -> false
 
 let is_string_expr e = is_string_type e.etype
@@ -1311,7 +1311,6 @@ and gen_expr ctx e =
 				| TThrow _
 				| TWhile _
 				| TFor _
-				| TPatMatch _
 				| TTry _
 				| TBreak
 				| TBlock _ ->
@@ -1325,7 +1324,6 @@ and gen_expr ctx e =
 					| TThrow _
 					| TWhile _
 					| TFor _
-					| TPatMatch _
 					| TTry _
 					| TBlock _ -> ()
 					| _ ->
@@ -1456,7 +1454,7 @@ and gen_expr ctx e =
 			);
 		| TField (e1,s) ->
 			spr ctx (Ast.s_unop op);
-			gen_field_access ctx true e1 (field_name s)
+			gen_tfield ctx e e1 (field_name s)
 		| _ ->
 			spr ctx (Ast.s_unop op);
 			gen_value ctx e)
@@ -1592,7 +1590,6 @@ and gen_expr ctx e =
 		bend();
 		newline ctx;
 		spr ctx "}"
-	| TPatMatch dt -> assert false
 	| TSwitch (e,cases,def) ->
 		let old_loop = ctx.in_loop in
 		ctx.in_loop <- false;
@@ -1783,7 +1780,6 @@ and gen_value ctx e =
 	| TThrow _
 	| TSwitch _
 	| TFor _
-	| TPatMatch _
 	| TIf _
 	| TTry _ ->
 		inline_block ctx e
@@ -1995,7 +1991,7 @@ let generate_inline_method ctx c m =
 let generate_class ctx c =
 	let requires_constructor = ref true in
 	ctx.curclass <- c;
-	ctx.local_types <- List.map snd c.cl_types;
+	ctx.local_types <- List.map snd c.cl_params;
 
 	print ctx "%s %s " (if c.cl_interface then "interface" else "class") (s_path ctx c.cl_path c.cl_extern c.cl_pos);
 	(match c.cl_super with
@@ -2138,7 +2134,7 @@ let generate_main ctx c =
 		newline ctx
 
 let generate_enum ctx e =
-	ctx.local_types <- List.map snd e.e_types;
+	ctx.local_types <- List.map snd e.e_params;
 	let pack = open_block ctx in
 	let ename = s_path ctx e.e_path e.e_extern e.e_pos in
 

@@ -39,6 +39,7 @@ class Exceptions {
 	}
 }
 
+@:classCode("public static final long serialVersionUID = 5956463319488556322L;")
 @:nativeGen @:keep @:native("haxe.lang.HaxeException") private class HaxeException extends RuntimeException
 {
 	private var obj:Dynamic;
@@ -60,6 +61,13 @@ class Exceptions {
 	{
 		return obj;
 	}
+
+#if !debug
+	@:overload override public function fillInStackTrace():Throwable
+	{
+		return this;
+	}
+#end
 
 	@:overload override public function toString():String
 	{

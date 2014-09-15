@@ -117,7 +117,7 @@ type extern_api = {
 	get_build_fields : unit -> value;
 	get_pattern_locals : Ast.expr -> Type.t -> (string,Type.tvar * Ast.pos) PMap.t;
 	define_type : value -> unit;
-	define_module : string -> value list -> unit;
+	define_module : string -> value list -> ((string * Ast.pos) list * Ast.import_mode) list -> Ast.type_path list -> unit;
 	module_dependency : string -> string -> bool -> unit;
 	current_module : unit -> module_def;
 	delayed_macro : int -> (unit -> (unit -> value));
@@ -204,6 +204,8 @@ let enc_string_ref = ref (fun s -> assert false)
 let make_ast_ref = ref (fun _ -> assert false)
 let make_complex_type_ref = ref (fun _ -> assert false)
 let encode_tvar_ref = ref (fun _ -> assert false)
+let decode_path_ref = ref (fun _ -> assert false)
+let decode_import_ref = ref (fun _ -> assert false)
 let get_ctx() = (!get_ctx_ref)()
 let enc_array (l:value list) : value = (!enc_array_ref) l
 let dec_array (l:value) : value list = (!dec_array_ref) l
@@ -220,6 +222,8 @@ let make_ast (e:texpr) : Ast.expr = (!make_ast_ref) e
 let enc_string (s:string) : value = (!enc_string_ref) s
 let make_complex_type (t:Type.t) : Ast.complex_type = (!make_complex_type_ref) t
 let encode_tvar (v:tvar) : value = (!encode_tvar_ref) v
+let decode_path (v:value) : Ast.type_path = (!decode_path_ref) v
+let decode_import (v:value) : ((string * Ast.pos) list * Ast.import_mode) = (!decode_import_ref) v
 
 let to_int f = Int32.of_float (mod_float f 2147483648.0)
 let need_32_bits i = Int32.compare (Int32.logand (Int32.add i 0x40000000l) 0x80000000l) Int32.zero <> 0
@@ -2133,6 +2137,12 @@ let macro_lib =
 			| VString s -> (try VString (Common.raw_defined_value (ccom()) s) with Not_found -> VNull)
 			| _ -> error();
 		);
+		"get_defines", Fun0 (fun() ->
+			let defines = (ccom()).defines in
+			let h = Hashtbl.create 0 in
+			PMap.iter (fun n v -> Hashtbl.replace h (VString n) (VString v)) defines;
+			enc_hash h
+		);
 		"get_type", Fun1 (fun s ->
 			match s with
 			| VString s ->
@@ -2474,7 +2484,7 @@ let macro_lib =
 				| TAbstract _ | TEnum _ | TInst _ | TFun _ | TAnon _ | TDynamic _ ->
 					t
 				| TType (t,tl) ->
-					apply_params t.t_types tl t.t_type
+					apply_params t.t_params tl t.t_type
 				| TLazy f ->
 					(!f)()
 			in
@@ -2487,10 +2497,10 @@ let macro_lib =
 			(get_ctx()).curapi.define_type v;
 			VNull
 		);
-		"define_module", Fun2 (fun p v ->
-			match p, v with
-			| VString path, VArray vl ->
-				(get_ctx()).curapi.define_module path (Array.to_list vl);
+		"define_module", Fun4 (fun p v i u ->
+			match p, v, i, u with
+			| VString path, VArray vl, VArray ui, VArray ul ->
+				(get_ctx()).curapi.define_module path (Array.to_list vl) (List.map decode_import (Array.to_list ui)) (List.map decode_path (Array.to_list ul));
 				VNull
 			| _ ->
 				error()
@@ -3998,6 +4008,15 @@ let decode_unop op =
 	| 4, [] -> NegBits
 	| _ -> raise Invalid_expr
 
+let decode_import_mode t =
+	match decode_enum t with
+	| 0, [] -> INormal
+	| 1, [alias] -> IAsName (dec_string alias)
+	| 2, [] -> IAll
+	| _ -> raise Invalid_expr
+
+let decode_import t = (List.map (fun o -> ((dec_string (field o "name")), (decode_pos (field o "pos")))) (dec_array (field t "path")), decode_import_mode (field t "mode"))
+
 let rec decode_path t =
 	{
 		tpackage = List.map dec_string (dec_array (field t "pack"));
@@ -4246,7 +4265,7 @@ let rec encode_mtype t fields =
 		"isPrivate", VBool i.mt_private;
 		"meta", encode_meta i.mt_meta (fun m -> i.mt_meta <- m);
 		"doc", null enc_string i.mt_doc;
-		"params", encode_type_params i.mt_types;
+		"params", encode_type_params i.mt_params;
 	] @ fields)
 
 and encode_type_params tl =
@@ -4266,8 +4285,8 @@ and encode_tabstract a =
 		"impl", (match a.a_impl with None -> VNull | Some c -> encode_clref c);
 		"binops", enc_array (List.map (fun (op,cf) -> enc_obj [ "op",encode_binop op; "field",encode_cfield cf]) a.a_ops);
 		"unops", enc_array (List.map (fun (op,postfix,cf) -> enc_obj [ "op",encode_unop op; "isPostfix",VBool (match postfix with Postfix -> true | Prefix -> false); "field",encode_cfield cf]) a.a_unops);
-		"from", enc_array (List.map (fun (t,cfo) -> enc_obj [ "t",encode_type t; "field",match cfo with None -> VNull | Some cf -> encode_cfield cf]) a.a_from);
-		"to", enc_array (List.map (fun (t,cfo) -> enc_obj [ "t",encode_type t; "field",match cfo with None -> VNull | Some cf -> encode_cfield cf]) a.a_to);
+		"from", enc_array ((List.map (fun t -> enc_obj [ "t",encode_type t; "field",VNull]) a.a_from) @ (List.map (fun (t,cf) -> enc_obj [ "t",encode_type t; "field",encode_cfield cf]) a.a_from_field));
+		"to", enc_array ((List.map (fun t -> enc_obj [ "t",encode_type t; "field",VNull]) a.a_to) @ (List.map (fun (t,cf) -> enc_obj [ "t",encode_type t; "field",encode_cfield cf]) a.a_to_field));
 		"array", enc_array (List.map encode_cfield a.a_array);
 	]
 
@@ -4526,7 +4545,7 @@ and encode_tfunc func =
 
 and encode_field_access fa =
 	let tag,pl = match fa with
-		| FInstance(c,cf) -> 0,[encode_clref c;encode_cfref cf]
+		| FInstance(c,_,cf) -> 0,[encode_clref c;encode_cfref cf] (* TODO: breaking change, kind of *)
 		| FStatic(c,cf) -> 1,[encode_clref c;encode_cfref cf]
 		| FAnon(cf) -> 2,[encode_cfref cf]
 		| FDynamic(s) -> 3,[enc_string s]
@@ -4565,9 +4584,7 @@ and encode_texpr e =
 				enc_array (List.map (fun (el,e) -> enc_obj ["values",encode_texpr_list el;"expr",loop e]) cases);
 				vopt encode_texpr edef
 				]
-			| TPatMatch _ ->
-				assert false
-			| TTry(e1,catches) -> 20,[
+			| TTry(e1,catches) -> 19,[
 				loop e1;
 				enc_array (List.map (fun (v,e) ->
 					enc_obj [
@@ -4575,13 +4592,13 @@ and encode_texpr e =
 						"expr",loop e
 					]) catches
 				)]
-			| TReturn e1 -> 21,[vopt encode_texpr e1]
-			| TBreak -> 22,[]
-			| TContinue -> 23,[]
-			| TThrow e1 -> 24,[loop e1]
-			| TCast(e1,mt) -> 25,[loop e1;match mt with None -> VNull | Some mt -> encode_module_type mt]
-			| TMeta(m,e1) -> 26,[encode_meta_entry m;loop e1]
-			| TEnumParameter(e1,ef,i) -> 27,[loop e1;encode_efield ef;VInt i]
+			| TReturn e1 -> 20,[vopt encode_texpr e1]
+			| TBreak -> 21,[]
+			| TContinue -> 22,[]
+			| TThrow e1 -> 23,[loop e1]
+			| TCast(e1,mt) -> 24,[loop e1;match mt with None -> VNull | Some mt -> encode_module_type mt]
+			| TMeta(m,e1) -> 25,[encode_meta_entry m;loop e1]
+			| TEnumParameter(e1,ef,i) -> 26,[loop e1;encode_efield ef;VInt i]
 		in
 		enc_obj [
 			"pos", encode_pos e.epos;
@@ -4676,7 +4693,9 @@ let decode_efield v =
 
 let decode_field_access v =
 	match decode_enum v with
-	| 0, [c;cf] -> FInstance(decode_ref c,decode_ref cf)
+	| 0, [c;cf] ->
+		let c = decode_ref c in
+		FInstance(c,List.map snd c.cl_params,decode_ref cf) (* TODO: breaking change? *)
 	| 1, [c;cf] -> FStatic(decode_ref c,decode_ref cf)
 	| 2, [cf] -> FAnon(decode_ref cf)
 	| 3, [s] -> FDynamic(dec_string s)
@@ -4960,7 +4979,6 @@ let rec make_ast e =
 		) cases in
 		let def = match eopt def with None -> None | Some (EBlock [],_) -> Some None | e -> Some e in
 		ESwitch (make_ast e,cases,def)
-	| TPatMatch _
 	| TEnumParameter _ ->
 		(* these are considered complex, so the AST is handled in TMeta(Meta.Ast) *)
 		assert false
@@ -4997,3 +5015,5 @@ enc_hash_ref := enc_hash;
 encode_texpr_ref := encode_texpr;
 decode_texpr_ref := decode_texpr;
 encode_tvar_ref := encode_tvar;
+decode_path_ref := decode_path;
+decode_import_ref := decode_import;

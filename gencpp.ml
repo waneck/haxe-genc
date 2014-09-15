@@ -30,11 +30,7 @@ let unsupported p = error "This expression cannot be generated to Cpp" p
    Generators do not care about non-core-type abstracts, so let us follow them
    away by default.
 *)
-let rec follow t = match Type.follow t with
-   | TAbstract(a,tl) when not (Meta.has Meta.CoreType a.a_meta) ->
-      follow (Codegen.Abstract.get_underlying_type a tl)
-   | t ->
-      t
+let follow = Abstract.follow_with_abstracts
 
 (*
    Code for generating source files.
@@ -344,7 +340,7 @@ let has_meta_key meta key =
 
 let get_field_access_meta field_access key =
 match field_access with
-   | FInstance(_,class_field)
+   | FInstance(_,_,class_field)
    | FStatic(_,class_field) -> get_meta_string class_field.cf_meta key
    | _ -> ""
 ;;
@@ -487,7 +483,7 @@ let is_addressOf_call func =
 let is_lvalue var =
    match (remove_parens var).eexpr with
    | TLocal _ -> true
-   | TField (_,FStatic(_,field) ) | TField (_,FInstance(_,field) ) -> is_var_field field
+   | TField (_,FStatic(_,field) ) | TField (_,FInstance(_,_,field) ) -> is_var_field field
    | _ -> false
 ;;
 
@@ -613,20 +609,20 @@ and type_string_suff suffix haxe_type =
          | [t] -> "const " ^ (type_string (follow t) ) ^ " *"
          | _ -> assert false)
       | ["cpp"] , "Function" -> "::cpp::Function< " ^ (cpp_function_signature_params params) ^ " >"
-      | _ ->  type_string_suff suffix (apply_params type_def.t_types params type_def.t_type)
+      | _ ->  type_string_suff suffix (apply_params type_def.t_params params type_def.t_type)
       )
    | TFun (args,haxe_type) -> "Dynamic" ^ suffix
    | TAnon a -> "Dynamic"
       (*
       (match !(a.a_status) with
-      | Statics c -> type_string_suff suffix (TInst (c,List.map snd c.cl_types))
-      | EnumStatics e -> type_string_suff suffix (TEnum (e,List.map snd e.e_types))
+      | Statics c -> type_string_suff suffix (TInst (c,List.map snd c.cl_params))
+      | EnumStatics e -> type_string_suff suffix (TEnum (e,List.map snd e.e_params))
       | _ -> "Dynamic"  ^ suffix )
       *)
    | TDynamic haxe_type -> "Dynamic" ^ suffix
    | TLazy func -> type_string_suff suffix ((!func)())
    | TAbstract (abs,pl) when abs.a_impl <> None ->
-      type_string_suff suffix (Codegen.Abstract.get_underlying_type abs pl)
+      type_string_suff suffix (Abstract.get_underlying_type abs pl)
    | TAbstract (abs,pl) ->
       "::" ^ (join_class_path_remap abs.a_path "::") ^ suffix
    )
@@ -1033,7 +1029,6 @@ let rec iter_retval f retval e =
       f true e;
       List.iter (fun (_,_,e) -> f false e) cases;
       (match def with None -> () | Some e -> f false e) *)
-   | TPatMatch dt -> assert false
    | TTry (e,catches) ->
       f retval e;
       List.iter (fun (_,e) -> f false e) catches
@@ -1520,7 +1515,6 @@ and find_local_functions_and_return_blocks_ctx ctx retval expression =
          if (retval) then begin
             define_local_return_block_ctx ctx expression (next_anon_function_name ctx) true;
          end  (* else we are done *)
-      | TPatMatch (_)
       | TTry (_, _)
       | TSwitch (_, _, _) when retval ->
             define_local_return_block_ctx ctx expression (next_anon_function_name ctx) true;
@@ -1544,7 +1538,6 @@ and find_local_functions_and_return_blocks_ctx ctx retval expression =
       | TArray (obj,_) when (is_null obj) -> ( )
       | TIf ( _ , _ , _ ) when retval -> (* ? operator style *)
          iter_retval find_local_functions_and_return_blocks retval expression
-      | TPatMatch (_)
       | TSwitch (_, _, _) when retval -> ( )
       (* | TMatch ( cond , _, _, _) *)
       | TWhile ( cond , _, _ )
@@ -1761,7 +1754,7 @@ and gen_expression ctx retval expression =
          | real_type -> gen_array_cast cast_name real_type call
          )
       | TAbstract (abs,pl) when abs.a_impl <> None ->
-         check_array_element_cast (Codegen.Abstract.get_underlying_type abs pl) cast_name call
+         check_array_element_cast (Abstract.get_underlying_type abs pl) cast_name call
       | _ -> ()
    in
    let rec check_array_cast array_type =
@@ -1774,7 +1767,7 @@ and gen_expression ctx retval expression =
          else
             gen_array_cast ".StaticCast" (type_string array_type) "()"
       | TAbstract (abs,pl) when abs.a_impl <> None ->
-         check_array_cast (Codegen.Abstract.get_underlying_type abs pl)
+         check_array_cast (Abstract.get_underlying_type abs pl)
       | _ -> ()
    in
 
@@ -1827,7 +1820,7 @@ and gen_expression ctx retval expression =
                   check_array_element_cast field_object.etype "Fast" "";
 
                already_dynamic := (match field with
-                  | FInstance(_,var) when is_var_field var -> true
+                  | FInstance(_,_,var) when is_var_field var -> true
                   | _ -> false);
             end;
          end;
@@ -1855,37 +1848,7 @@ and gen_expression ctx retval expression =
       ( match arg_list with
       | [{ eexpr = TConst (TString code) }] -> output code;
       | ({ eexpr = TConst (TString code) } as ecode) :: tl ->
-        let exprs = Array.of_list tl in
-        let i = ref 0 in
-        let err msg =
-          let pos = { ecode.epos with pmin = ecode.epos.pmin + !i } in
-          ctx.ctx_common.error msg pos
-        in
-        let regex = Str.regexp "[{}]" in
-        let rec loop m = match m with
-          | [] -> ()
-          | Str.Text txt :: tl ->
-            i := !i + String.length txt;
-            output txt;
-            loop tl
-          | Str.Delim a :: Str.Delim b :: tl when a = b ->
-            i := !i + 2;
-            output a;
-            loop tl
-          | Str.Delim "{" :: Str.Text n :: Str.Delim "}" :: tl ->
-            (try
-              let expr = Array.get exprs (int_of_string n) in
-              gen_expression ctx true expr;
-              i := !i + 2 + String.length n;
-              loop tl
-            with | Failure "int_of_string" ->
-              err ("Index expected. Got " ^ n)
-            | Invalid_argument _ ->
-              err ("Out-of-bounds __cpp__ special parameter: " ^ n))
-          | Str.Delim x :: _ ->
-            err ("Unexpected " ^ x)
-        in
-        loop (Str.full_split regex code)
+         Codegen.interpolate_code ctx.ctx_common code tl output (gen_expression ctx true) ecode.epos
       | _ -> error "__cpp__'s first argument must be a string" func.epos;
       )
    | TCall (func, arg_list) when tcall_expand_args->
@@ -1940,7 +1903,7 @@ and gen_expression ctx retval expression =
       in
       let expr_type = type_string expression.etype in
       let rec is_fixed_override e = (not (is_scalar expr_type)) && match e.eexpr with
-      | TField(obj,FInstance(_,field) ) ->
+      | TField(obj,FInstance(_,_,field) ) ->
          let cpp_type = member_type ctx obj field.cf_name in
          (not (is_scalar cpp_type)) && (
             let fixed = (cpp_type<>"?") && (expr_type<>"Dynamic") && (cpp_type<>"Dynamic") &&
@@ -1954,7 +1917,7 @@ and gen_expression ctx retval expression =
       | _ -> false
       in
       let check_extern_pointer_cast e = match (remove_parens e).eexpr with
-      | TField (_,FInstance(class_def,_) )
+      | TField (_,FInstance(class_def,_,_) )
       | TField (_,FStatic(class_def,_) )
          when class_def.cl_extern ->
          (try
@@ -2261,10 +2224,8 @@ and gen_expression ctx retval expression =
 
    (* These have already been defined in find_local_return_blocks ... *)
    | TTry (_,_)
-   | TSwitch (_,_,_)
-   | TPatMatch (_) when (retval && (not return_from_internal_node) )->
+   | TSwitch (_,_,_) when (retval && (not return_from_internal_node) ) ->
       gen_local_block_call()
-   | TPatMatch dt -> assert false
    | TSwitch (condition,cases,optional_default)  ->
       let switch_on_int_constants = (only_int_cases cases) && (not (contains_break expression)) in
       if (switch_on_int_constants) then begin
@@ -2715,7 +2676,7 @@ let find_referenced_types ctx obj super_deps constructor_deps header_only for_de
          visited := List.tl !visited;
       end
    in
-   let rec visit_types expression =
+   let rec visit_params expression =
       begin
       let rec visit_expression = fun expression ->
          (* Expand out TTypeExpr (ie, the name of a class, as used for static access etc ... *)
@@ -2770,7 +2731,7 @@ let find_referenced_types ctx obj super_deps constructor_deps header_only for_de
       visit_type field.cf_type;
       if (not header_only) then
          (match field.cf_expr with
-         | Some expression -> visit_types expression | _ -> ());
+         | Some expression -> visit_params expression | _ -> ());
    in
    let visit_class class_def =
       let fields = List.append class_def.cl_ordered_fields class_def.cl_ordered_statics in
@@ -2793,7 +2754,7 @@ let find_referenced_types ctx obj super_deps constructor_deps header_only for_de
          ) enum_def.e_constrs;
       if (not header_only) then begin
          let meta = Codegen.build_metadata ctx (TEnumDecl enum_def) in
-         match meta with Some expr -> visit_types expr | _ -> ();
+         match meta with Some expr -> visit_params expr | _ -> ();
       end;
    in
    let inc_cmp i1 i2 =
@@ -2803,7 +2764,7 @@ let find_referenced_types ctx obj super_deps constructor_deps header_only for_de
    (* Body of main function *)
    (match obj with
    | TClassDecl class_def -> visit_class class_def;
-      (match class_def.cl_init with Some expression -> visit_types expression | _ -> ())
+      (match class_def.cl_init with Some expression -> visit_params expression | _ -> ())
    | TEnumDecl enum_def -> visit_enum enum_def
    | TTypeDecl _ | TAbstractDecl _ -> (* These are expanded *) ());
 
@@ -3420,6 +3381,12 @@ let generate_class_files common_ctx member_types super_deps constructor_deps cla
                "return operator " ^ interface_name ^ "_obj *();\n");
             ) implemented;
          output_cpp ("\treturn super::__ToInterface(inType);\n}\n\n");
+
+
+         List.iter (fun interface_name ->
+            output_cpp (class_name ^ "::operator " ^ interface_name ^ "_obj *()\n\t" ^
+               "{ return new " ^ interface_name ^ "_delegate_< " ^ class_name ^" >(this); }\n" );
+         ) implemented;
       end;
 
    end;
@@ -3953,13 +3920,13 @@ let generate_class_files common_ctx member_types super_deps constructor_deps cla
          output_h ("\t\tvoid __Visit(HX_VISIT_PARAMS);\n");
       end;
 
-      List.iter (fun interface_name ->
-         output_h ("\t\tinline operator " ^ interface_name ^ "_obj *()\n\t\t\t" ^
-               "{ return new " ^ interface_name ^ "_delegate_< " ^ class_name ^" >(this); }\n" );
-      ) implemented;
-
-      if ( (List.length implemented) > 0 ) then
+      if ( (List.length implemented) > 0 ) then begin
          output_h "\t\thx::Object *__ToInterface(const hx::type_info &inType);\n";
+
+         List.iter (fun interface_name ->
+            output_h ("\t\toperator " ^ interface_name ^ "_obj *();\n")
+         ) implemented;
+      end;
 
       if (has_init_field class_def) then
          output_h "\t\tstatic void __init__();\n\n";
@@ -4180,7 +4147,7 @@ let rec s_type t =
    | TInst (c,tl) -> Ast.s_type_path c.cl_path ^ s_type_params tl
    | TType (t,tl) -> Ast.s_type_path t.t_path ^ s_type_params tl
    | TAbstract (abs,pl) when abs.a_impl <> None ->
-      s_type (Codegen.Abstract.get_underlying_type abs pl);
+      s_type (Abstract.get_underlying_type abs pl);
    | TAbstract (a,tl) -> Ast.s_type_path a.a_path ^ s_type_params tl
    | TFun ([],t) -> "Void -> " ^ s_fun t false
    | TFun (l,t) ->
@@ -4280,7 +4247,7 @@ let gen_extern_class common_ctx class_def file_info =
    let c = class_def in
    output ( "package " ^ (String.concat "." (fst path)) ^ ";\n" );
    output ( "@:include extern " ^ (if c.cl_private then "private " else "") ^ (if c.cl_interface then "interface" else "class")
-            ^ " " ^ (snd path) ^ (params c.cl_types) );
+            ^ " " ^ (snd path) ^ (params c.cl_params) );
    (match c.cl_super with None -> () | Some (c,pl) -> output (" extends " ^  (s_type (TInst (c,pl)))));
    List.iter (fun (c,pl) -> output ( " implements " ^ (s_type (TInst (c,pl))))) (real_interfaces c.cl_implements);
    (match c.cl_dynamic with None -> () | Some t -> output (" implements Dynamic< " ^ (s_type t) ^ " >"));
@@ -4308,7 +4275,7 @@ let gen_extern_enum common_ctx enum_def file_info =
    let params = function [] -> "" | l ->  "< " ^ (String.concat "," (List.map (fun (n,t) -> n) l) ^ " >")  in
    output ( "package " ^ (String.concat "." (fst path)) ^ ";\n" );
    output ( "@:include extern " ^ (if enum_def.e_private then "private " else "")
-            ^ " enum " ^ (snd path) ^ (params enum_def.e_types) );
+            ^ " enum " ^ (snd path) ^ (params enum_def.e_params) );
    output " {\n";
    let sorted_items = List.sort (fun f1 f2 -> (f1.ef_index - f2.ef_index ) ) (pmap_values enum_def.e_constrs) in
    List.iter (fun constructor ->
@@ -4384,7 +4351,7 @@ let rec script_type_string haxe_type =
          | _ -> "Array.Object"
          )
      | TAbstract (abs,pl) when abs.a_impl <> None ->
-         script_type_string  (Codegen.Abstract.get_underlying_type abs pl);
+         script_type_string  (Abstract.get_underlying_type abs pl);
      | _ ->
          type_string_suff "" haxe_type
 ;;
@@ -4493,7 +4460,7 @@ class script_writer common_ctx ctx filename =
             | _ -> ArrayObject
             )
       | TAbstract (abs,pl) when abs.a_impl <> None ->
-            this#get_array_type  (Codegen.Abstract.get_underlying_type abs pl);
+            this#get_array_type  (Abstract.get_underlying_type abs pl);
       | _ -> ArrayNone;
 
    method pushReturn inType =
@@ -4653,13 +4620,13 @@ class script_writer common_ctx ctx filename =
          | TField (obj,FStatic (class_def,field) ) when is_real_function field ->
                   this#write ("CALLSTATIC " ^ (this#instText class_def) ^ " " ^ (this#stringText field.cf_name) ^
                      argN ^ "\n");
-         | TField (obj,FInstance (_,field) ) when (is_this obj) && (is_real_function field) ->
+         | TField (obj,FInstance (_,_,field) ) when (is_this obj) && (is_real_function field) ->
                   this#write ("CALLTHIS " ^ (this#typeText obj.etype) ^ " " ^ (this#stringText field.cf_name) ^
                      argN ^ "\n");
-         | TField (obj,FInstance (_,field) ) when is_super obj ->
+         | TField (obj,FInstance (_,_,field) ) when is_super obj ->
                   this#write ("CALLSUPER " ^ (this#typeText obj.etype) ^ " " ^ (this#stringText field.cf_name) ^
                      argN ^ "\n");
-         | TField (obj,FInstance (_,field) ) when is_real_function field ->
+         | TField (obj,FInstance (_,_,field) ) when is_real_function field ->
                   this#write ("CALLMEMBER " ^ (this#typeText obj.etype) ^ " " ^ (this#stringText field.cf_name) ^
                      argN ^ "\n");
                   this#gen_expression obj;
@@ -4708,8 +4675,8 @@ class script_writer common_ctx ctx filename =
       | FDynamic name -> this#write ("FNAME " ^ typeText ^ " " ^ (this#stringText name) ^ "\n");
             this#gen_expression obj;
       | FStatic (class_def,field) -> this#write ("FSTATIC " ^ (this#instText class_def) ^ " " ^ (this#stringText field.cf_name) );
-      | FInstance (_,field) when is_this obj -> this#write ("FTHISINST " ^ typeText ^ " " ^ (this#stringText field.cf_name) );
-      | FInstance (_,field) -> this#write ("FLINK " ^ typeText ^ " " ^ (this#stringText field.cf_name) ^ "\n");
+      | FInstance (_,_,field) when is_this obj -> this#write ("FTHISINST " ^ typeText ^ " " ^ (this#stringText field.cf_name) );
+      | FInstance (_,_,field) -> this#write ("FLINK " ^ typeText ^ " " ^ (this#stringText field.cf_name) ^ "\n");
             this#gen_expression obj;
 
       | FClosure (_,field) when is_this obj -> this#write ("FTHISNAME " ^typeText ^ " " ^  (this#stringText field.cf_name) ^ "\n")
@@ -4826,7 +4793,6 @@ class script_writer common_ctx ctx filename =
    | TCast (cast,Some _) -> this#checkCast expression.etype cast true true;
    | TParenthesis _ -> error "Unexpected parens" expression.epos
    | TMeta(_,_) -> error "Unexpected meta" expression.epos
-   | TPatMatch _ ->  error "Unexpected pattern match" expression.epos
    );
    this#end_expr;
 end;;

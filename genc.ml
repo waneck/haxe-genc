@@ -119,9 +119,9 @@ let rec follow t =
 	| TLazy f ->
 		follow (!f())
 	| TType (t,tl) ->
-		follow (apply_params t.t_types tl t.t_type)
+		follow (apply_params t.t_params tl t.t_type)
 	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
-		follow (Codegen.Abstract.get_underlying_type a pl)
+		follow (Abstract.get_underlying_type a pl)
 	| _ -> t
 
 
@@ -828,11 +828,11 @@ module DefaultValues = struct
 		| TCall({eexpr = TField(_,FStatic(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
 			begin try gen.map (mk_known_call gen.gcon c cf true el)
 			with Exit -> e end
-		| TCall({eexpr = TField(e1,FInstance(c,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
+		| TCall({eexpr = TField(e1,FInstance(c,_,cf))},el) when Meta.has (Meta.Custom ":known") cf.cf_meta ->
 			begin try gen.map (mk_known_call gen.gcon c cf false (e1 :: el))
 			with Exit -> e end
 		| TNew(c,tl,el) ->
-			let _,cf = get_constructor (fun cf -> apply_params c.cl_types tl cf.cf_type) c in
+			let _,cf = get_constructor (fun cf -> apply_params c.cl_params tl cf.cf_type) c in
 			if Meta.has (Meta.Custom ":known") cf.cf_meta then
 				begin try gen.map (mk_known_call gen.gcon c cf true el)
 				with Exit -> e end
@@ -958,7 +958,7 @@ module TypeChecker = struct
 				| _ -> Type.map_expr gen.map e
 			end
 		| TNew(c,tl,el) ->
-			let tcf,_ = get_constructor (fun cf -> apply_params c.cl_types tl cf.cf_type) c in
+			let tcf,_ = get_constructor (fun cf -> apply_params c.cl_params tl cf.cf_type) c in
 			begin match follow tcf with
 				| TFun(args,_) | TAbstract({a_path = ["c"],"FunctionPointer"},[TFun(args,_)]) ->
 					{e with eexpr = TNew(c,tl,check_call_params gen el args)}
@@ -1062,61 +1062,6 @@ end
 module SwitchHandler = struct
 	let filter gen e =
 		match e.eexpr with
-		| TPatMatch dt ->
-			assert false
-(* 			let fl = gen.gcon.num_labels in
-			gen.gcon.num_labels <- gen.gcon.num_labels + (Array.length dt.dt_dt_lookup) + 1;
-			let i_last = Array.length dt.dt_dt_lookup in
-			let mk_label_expr i = mk (TConst (TInt (Int32.of_int (i + fl)))) gen.gcom.basic.tint e.epos in
-			let mk_label_meta i =
-				let elabel = mk_label_expr i in
-				Expr.add_meta (Meta.Custom ":label") elabel
-			in
-			let mk_goto_meta i =
-				let elabel = mk_label_expr i in
-				Expr.add_meta (Meta.Custom ":goto") elabel
-			in
-			let check_var_name v =
-				if v.v_name.[0] = '`' then v.v_name <- "_" ^ (String.sub v.v_name 1 (String.length v.v_name - 1));
-			in
-			let rec mk_dt dt =
-				match dt with
-				| DTExpr e ->
-					let egoto = mk_goto_meta i_last in
-					Type.concat e egoto
-				| DTGuard(e1,dt,dto) ->
-					let ethen = mk_dt dt in
-					let eelse = match dto with None -> None | Some dt -> Some (mk_dt dt) in
-					mk (TIf(Codegen.mk_parent e1,ethen,eelse)) ethen.etype (punion e1.epos ethen.epos)
-				| DTBind(vl,dt) ->
-					let vl = List.map (fun ((v,_),e) ->
-						check_var_name v;
-						v,Some e
-					) vl in
-					let evars = mk (TVars vl) gen.gcom.basic.tvoid e.epos in
-					Type.concat evars (mk_dt dt)
-				| DTGoto i ->
-					mk_goto_meta i
-				| DTSwitch(e1,cl,dto) ->
-					let cl = List.map (fun (e,dt) -> [e],mk_dt dt) cl in
-					let edef = match dto with None -> None | Some dt -> Some (mk_dt dt) in
-					mk (TSwitch(e1,cl,edef)) t_dynamic e.epos
-			in
-			let el,i = Array.fold_left (fun (acc,i) dt ->
-				let elabel = mk_label_meta i in
-				let edt = mk_dt dt in
-				(Type.concat elabel edt) :: acc,i + 1
-			) ([],0) dt.dt_dt_lookup in
-			let e = gen.map (Expr.mk_block gen.gcom e.epos el) in
-			let e = Expr.add_meta (Meta.Custom ":patternMatching") e in
-			List.iter (fun (v,_) -> check_var_name v) dt.dt_var_init;
-			let einit = mk (TVars dt.dt_var_init) gen.gcom.basic.tvoid e.epos in
-			let elabel = mk_label_meta i in
-			let e1 = Type.concat einit (Type.concat e elabel) in
-			if dt.dt_first = i - 1 then
-				e1
-			else
-				Type.concat (mk_goto_meta dt.dt_first) e1 *)
 		| TSwitch(e1,cases,def) when StringHandler.is_string e1.etype ->
 			let length_map = Hashtbl.create 0 in
 			List.iter (fun (el,e) ->
@@ -1149,7 +1094,7 @@ module SwitchHandler = struct
 			) length_map [] in
 			let c_string = match gen.gcom.basic.tstring with TInst(c,_) -> c | _ -> assert false in
 			let cf_length = PMap.find "length" c_string.cl_fields in
-			let ef = mk (TField(e1,FInstance(c_string,cf_length))) gen.gcom.basic.tint e.epos in
+			let ef = mk (TField(e1,FInstance(c_string,[],cf_length))) gen.gcom.basic.tint e.epos in
 			let e = mk (TSwitch(Codegen.mk_parent ef,cases,def)) t_dynamic e.epos in
 			gen.map e
 		| _ ->
@@ -1248,7 +1193,7 @@ module ClosureHandler = struct
 		not (is_native_function_pointer e.etype) && match e.eexpr with
 			| TMeta(_,e1) | TParenthesis(e1) | TCast(e1,None) ->
 				is_closure_expr e1
-			| TField(_,(FStatic(_,cf) | FInstance(_,cf))) ->
+			| TField(_,(FStatic(_,cf) | FInstance(_,_,cf))) ->
 				begin match cf.cf_kind with
 					| Var _ -> true
 					| _ -> false
@@ -1326,7 +1271,7 @@ module ArrayHandler = struct
 				Expr.mk_static_call c cf el p
 			| Some (e,tl) ->
 				let cf = PMap.find name c.cl_fields in
-				let ef = mk (TField(e,FInstance(c,cf))) (apply_params c.cl_types tl cf.cf_type) p in
+				let ef = mk (TField(e,FInstance(c,List.map snd c.cl_params,cf))) (apply_params c.cl_params tl cf.cf_type) p in
 				mk (TCall(ef,el)) (match follow ef.etype with TFun(_,r) -> r | _ -> assert false) p
 		with Not_found when suffix <> "" ->
 			mk_specialization_call c n "" ethis el p
@@ -1397,7 +1342,7 @@ module ArrayHandler = struct
 			end with Not_found ->
 				Type.map_expr gen.map e
 			end
-		| TCall( ({eexpr = (TField (ethis,FInstance(c,({cf_name = cfname })))) }) ,el) ->
+		| TCall( ({eexpr = (TField (ethis,FInstance(c,_,({cf_name = cfname })))) }) ,el) ->
 			begin try begin match follow ethis.etype with
 				| TInst({cl_path = [],"Array"},[tp]) ->
 					let suffix,cast = get_type_size gen.gcon.hxc (follow tp) in
@@ -1859,7 +1804,7 @@ module VTableHandler = struct
 				Expr.mk_static_call_2 con.hxc.c_lib "cCode" [mk (TConst (TString s)) con.com.basic.tstring null_pos] null_pos in
 			let mk_field c ethis n p = try
 				let cf = (PMap.find n c.cl_fields) in
-				mk (TField (ethis,(FInstance (c,cf)))) cf.cf_type p
+				mk (TField (ethis,(FInstance (c,List.map snd c.cl_params,cf)))) cf.cf_type p
 			with Not_found -> assert false
 			in
 			c.cl_statics <- PMap.add fname cf_vt c.cl_statics;
@@ -1986,7 +1931,7 @@ module GC = struct
 		| _ -> assert false )
 	| TAbstract ( {a_this = a_this},_) when a_this == tp -> assert false;
 	| TAbstract (ta,tp) ->
-		get_field_info hxc (Codegen.Abstract.get_underlying_type ta tp)
+		get_field_info hxc (Abstract.get_underlying_type ta tp)
 	| TInst ({cl_kind=KTypeParameter _},_) ->
 		FI_TParm 8
 	| TType (_,_) ->
@@ -2051,7 +1996,7 @@ module GC = struct
 
 	(* assignments - for write barrier etc. *)
 	let assignments ctx te = match te with
-		|  { eexpr = TBinop(OpAssign,{eexpr=TField(te1,(FInstance(_,cf)|FStatic(_,cf)|FAnon(cf)))},te2) } -> ()
+		|  { eexpr = TBinop(OpAssign,{eexpr=TField(te1,(FInstance(_,_,cf)|FStatic(_,cf)|FAnon(cf)))},te2) } -> ()
 		|  { eexpr = TBinop(OpAssign,{eexpr=TArray(te1,teidx)},te2) } -> ()
 		| _ -> ()
 
@@ -2084,10 +2029,10 @@ module GC = struct
 		in loop c
 
 	let make_instance = function
-		| TClassDecl c -> TInst (c,List.map snd c.cl_types)
-		| TEnumDecl e -> TEnum (e,List.map snd e.e_types)
-		| TTypeDecl t -> TType (t,List.map snd t.t_types)
-		| TAbstractDecl a -> TAbstract (a,List.map snd a.a_types)
+		| TClassDecl c -> TInst (c,List.map snd c.cl_params)
+		| TEnumDecl e -> TEnum (e,List.map snd e.e_params)
+		| TTypeDecl t -> TType (t,List.map snd t.t_params)
+		| TAbstractDecl a -> TAbstract (a,List.map snd a.a_params)
 
 	let pm_length m = PMap.fold (fun _ n -> n+1) m 0
 
@@ -2152,7 +2097,7 @@ let rec is_value_type t =
 	| TLazy f ->
 		is_value_type (!f())
 	| TType (t,tl) ->
-		is_value_type (apply_params t.t_types tl t.t_type)
+		is_value_type (apply_params t.t_params tl t.t_type)
 	| TAbstract({a_path=[],"Class"},_) ->
 		false
 	| TAbstract({ a_impl = None }, _) ->
@@ -2167,7 +2112,7 @@ let rec is_value_type t =
 		else if Meta.has Meta.CoreType a.a_meta then
 			false
 		else
-			is_value_type (Codegen.Abstract.get_underlying_type a tl)
+			is_value_type (Abstract.get_underlying_type a tl)
 	| _ ->
 		false
 
@@ -2205,7 +2150,7 @@ let full_enum_field_name en ef = (path_to_name en.e_path) ^ "_" ^ ef.ef_name
 let get_typeref_name name =
 	Printf.sprintf "%s_%s" name (mk_runtime_prefix "typeref")
 
-let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_types)
+let monofy_class c = TInst(c,List.map (fun _ -> mk_mono()) c.cl_params)
 
 let keywords =
 	let h = Hashtbl.create 0 in
@@ -2411,9 +2356,9 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 		print ctx "%s(" name;
 		concat ctx "," (generate_expr ctx true) el;
 		spr ctx ")";
-	| TField({eexpr = TConst TSuper} as e1, FInstance(c,cf)),el ->
+	| TField({eexpr = TConst TSuper} as e1, FInstance(c,_,cf)),el ->
 		generate_expr ctx need_val (Expr.mk_static_call c cf (e1 :: el) e.epos)
-	| TField(e1,FInstance(c,cf)),el when not (ClosureHandler.is_native_function_pointer cf.cf_type) ->
+	| TField(e1,FInstance(c,_,cf)),el when not (ClosureHandler.is_native_function_pointer cf.cf_type) ->
 		add_class_dependency ctx c;
 		let _ = if not (Meta.has (Meta.Custom ":overridden") cf.cf_meta) then
 			spr ctx (full_field_name c cf)
@@ -2691,7 +2636,7 @@ and generate_expr ctx need_val e = match e.eexpr with
 			| _ ->
 				assert false
 		end
-	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ | TFunction _ | TPatMatch _ ->
+	| TArrayDecl _ | TTry _ | TFor _ | TThrow _ | TFunction _ ->
 		(* removed by filters *)
 		assert false
 
@@ -3188,7 +3133,7 @@ let initialize_class con c =
 				add_init (Codegen.binop OpAssign ef1 ef2 ef1.etype p);
 			end else begin
 				let ethis = mk (TConst TThis) (monofy_class c) p in
-				let ef1 = mk (TField(ethis,FInstance(c,cf))) cf.cf_type p in
+				let ef1 = mk (TField(ethis,FInstance(c,List.map snd c.cl_params,cf))) cf.cf_type p in
 				let ef2 = mk (TField(ethis,FStatic(c,cf2))) cf2.cf_type p in
 				let ef2 = Wrap.wrap_function con.hxc ethis ef2 in
 				add_member_init (Codegen.binop OpAssign ef1 ef2 ef1.etype p);
@@ -3291,7 +3236,7 @@ let initialize_constructor con c cf =
 		let e_this = Expr.mk_local v_this p in
 		let el_vt = try
 			let cf_vt = PMap.find (mk_runtime_prefix "vtable") c.cl_fields in
-			let e_vt = mk (TField(e_this,FInstance(c,cf_vt))) cf_vt.cf_type null_pos in
+			let e_vt = mk (TField(e_this,FInstance(c,List.map snd c.cl_params,cf_vt))) cf_vt.cf_type null_pos in
 			let easgn = Expr.mk_binop OpAssign e_vt (Expr.mk_static_field_2 c (mk_runtime_prefix "_vtable") null_pos ) cf_vt.cf_type null_pos in
 			[easgn]
 		with Not_found ->
