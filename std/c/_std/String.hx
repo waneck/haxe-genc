@@ -81,7 +81,7 @@ import c.CString.memcmp;
 			return -1;
 		}
 		var p_tmp0 = __a + startIndex; // TODO inlining produces garbage
-		var ret = memmem(p_tmp0,
+		var ret = memmem(cast p_tmp0,
 						length-startIndex,
 						str.__a,
 						str.length );
@@ -102,7 +102,7 @@ import c.CString.memcmp;
 		do {
 			var p_tmp = __a + pos;      // TODO inlining produces garbage
 			var char_at_pos = __a[pos]; // TODO inlining produces garbage
-			if (char_at_pos == first && (memcmp(p_tmp,str.__a,str.length) == 0)){
+			if (char_at_pos == first && (memcmp(p_tmp,cast str.__a,str.length) == 0)){
 				return pos;
 			} else {
 				--pos;
@@ -199,7 +199,7 @@ import c.CString.memcmp;
 			var first:Int = p1[0];
 			var pos:Int = 0;
 			while (pos < l0){
-				var pchr:Pointer<Char> = c.CString.memchr(p0+pos,first,l0-pos);
+				var pchr:Pointer<Char> = cast c.CString.memchr(p0+pos,first,l0-pos);
 				//untyped __c('printf("mm %d \\n",pos)');
 				if (pchr != new Pointer(0)){
 					pos = cast (pchr - p0).value();
