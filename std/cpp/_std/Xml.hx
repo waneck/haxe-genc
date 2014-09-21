@@ -43,7 +43,7 @@ enum XmlType {
 
 	private static var _parse = cpp.Lib.load("std","parse_xml",2);
 
-	public static function parse( str : String ) : Xml {
+	@:analyzer(no_ssa) public static function parse( str : String ) : Xml {
 		var x = new Xml();
 		x._children = new Array();
 		var parser = {
@@ -235,7 +235,7 @@ enum XmlType {
 	}
 
 
-	public function elements(): Iterator<Xml> {
+	@:analyzer(no_ssa) public function elements(): Iterator<Xml> {
 		if( _children == null )
 			throw "bad nodetype";
       var children = _children;
@@ -268,7 +268,7 @@ enum XmlType {
 		}
 	}
 
-	public function elementsNamed( name : String ) : Iterator<Xml> {
+	@:analyzer(no_ssa) public function elementsNamed( name : String ) : Iterator<Xml> {
 		if( _children == null )
 			throw "bad nodetype";
       var children = _children;

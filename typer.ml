@@ -3686,7 +3686,9 @@ and type_call ctx e el (with_type:with_type) p =
 				| _ ->
 					e
 			in
-			mk (TCall (mk (TLocal (alloc_var "`trace" t_dynamic)) t_dynamic p,[e;infos])) ctx.t.tvoid p
+			let v_trace = alloc_var "`trace" t_dynamic in
+			v_trace.v_meta <- [Meta.Unbound,[],p];
+			mk (TCall (mk (TLocal v_trace) t_dynamic p,[e;infos])) ctx.t.tvoid p
 		else
 			let me = Meta.ToString,[],pos e in
 			type_expr ctx (ECall ((EField ((EField ((EConst (Ident "haxe"),p),"Log"),p),"trace"),p),[(EMeta (me,e),pos e);infos]),p) NoValue
@@ -3723,7 +3725,9 @@ and type_call ctx e el (with_type:with_type) p =
 		let e = type_expr ctx e Value in
 		if Common.platform ctx.com Flash then
 			let t = tfun [e.etype] e.etype in
-			mk (TCall (mk (TLocal (alloc_var "__unprotect__" t)) t p,[e])) e.etype e.epos
+			let v_unprotect = alloc_var "__unprotect__" t in
+			v_unprotect.v_meta <- [Meta.Unbound,[],p];
+			mk (TCall (mk (TLocal v_unprotect) t p,[e])) e.etype e.epos
 		else
 			e
 	| (EConst (Ident "super"),sp) , el ->

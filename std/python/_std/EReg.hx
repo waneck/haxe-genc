@@ -159,7 +159,6 @@ class EReg {
 		} else {
 			this.match(s);
 			if (matchObj == null) {
-
 				return [s];
 			} else {
 				return [ s.substring(0, matchObj.start()), s.substr(matchObj.end()) ];

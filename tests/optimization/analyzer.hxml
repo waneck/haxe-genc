@@ -1,0 +1,4 @@
+-cp src
+-main TestAnalyzer
+-D static-analyzer
+--interp

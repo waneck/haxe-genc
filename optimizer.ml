@@ -96,7 +96,14 @@ let api_inline ctx c field params p =
 		| _ ->
 			None)
 	| ([],"Std"),"is",[o;t] | (["js"],"Boot"),"__instanceof",[o;t] when ctx.com.platform = Js ->
-		let mk_local ctx n t pos = mk (TLocal (try PMap.find n ctx.locals with _ -> add_local ctx n t)) t pos in
+		let mk_local ctx n t pos =
+			mk (TLocal (try
+				PMap.find n ctx.locals
+			with _ ->
+				let v = add_local ctx n t in
+				v.v_meta <- [Meta.Unbound,[],p];
+				v
+			)) t pos in
 
 		let tstring = ctx.com.basic.tstring in
 		let tbool = ctx.com.basic.tbool in
@@ -230,9 +237,11 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		try
 			Hashtbl.find locals v.v_id
 		with Not_found ->
+			let v' = alloc_var v.v_name v.v_type in
+			if Meta.has Meta.Unbound v.v_meta then v'.v_meta <- [Meta.Unbound,[],p];
 			let i = {
 				i_var = v;
-				i_subst = alloc_var v.v_name v.v_type;
+				i_subst = v';
 				i_captured = false;
 				i_write = false;
 				i_force_temp = false;
@@ -863,7 +872,7 @@ let sanitize_expr com e =
 	| _ ->
 		e
 
-let reduce_expr ctx e =
+let reduce_expr com e =
 	match e.eexpr with
 	| TSwitch (_,cases,_) ->
 		List.iter (fun (cl,_) ->
@@ -896,8 +905,8 @@ let reduce_expr ctx e =
 	| _ ->
 		e
 
-let rec sanitize ctx e =
-	sanitize_expr ctx.com (reduce_expr ctx (Type.map_expr (sanitize ctx) e))
+let rec sanitize com e =
+	sanitize_expr com (reduce_expr com (Type.map_expr (sanitize com) e))
 
 (* ---------------------------------------------------------------------- *)
 (* REDUCE *)
@@ -1040,6 +1049,20 @@ let optimize_binop e op e1 e2 =
 	| _ ->
 		e)
 
+let optimize_unop e op flag esub =
+	match op, esub.eexpr with
+		| Not, (TConst (TBool f) | TParenthesis({eexpr = TConst (TBool f)})) -> { e with eexpr = TConst (TBool (not f)) }
+		| Neg, TConst (TInt i) -> { e with eexpr = TConst (TInt (Int32.neg i)) }
+		| NegBits, TConst (TInt i) -> { e with eexpr = TConst (TInt (Int32.lognot i)) }
+		| Neg, TConst (TFloat f) ->
+			let v = 0. -. float_of_string f in
+			let vstr = float_repres v in
+			if float_of_string vstr = v then
+				{ e with eexpr = TConst (TFloat vstr) }
+			else
+				e
+		| _ -> e
+
 let rec reduce_loop ctx e =
 	let e = Type.map_expr (reduce_loop ctx) e in
 	sanitize_expr ctx.com (match e.eexpr with
@@ -1052,19 +1075,7 @@ let rec reduce_loop ctx e =
 	| TBinop (op,e1,e2) ->
 		optimize_binop e op e1 e2
 	| TUnop (op,flag,esub) ->
-		(match op, esub.eexpr with
-		| Not, TConst (TBool f) -> { e with eexpr = TConst (TBool (not f)) }
-		| Neg, TConst (TInt i) -> { e with eexpr = TConst (TInt (Int32.neg i)) }
-		| NegBits, TConst (TInt i) -> { e with eexpr = TConst (TInt (Int32.lognot i)) }
-		| Neg, TConst (TFloat f) ->
-			let v = 0. -. float_of_string f in
-			let vstr = float_repres v in
-			if float_of_string vstr = v then
-				{ e with eexpr = TConst (TFloat vstr) }
-			else
-				e
-		| _ -> e
-		)
+		optimize_unop e op flag esub
 	| TCall ({ eexpr = TField ({ eexpr = TTypeExpr (TClassDecl c) },field) },params) ->
 		(match api_inline ctx c (field_name field) params e.epos with
 		| None -> reduce_expr ctx e

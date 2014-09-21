@@ -10,7 +10,7 @@ class Test #if swf_mark implements mt.Protect #end {
 	public function new() {
 	}
 
-	function eq<T>( v : T, v2 : T, ?pos ) {
+	function eq<T>( v : T, v2 : T, ?pos:haxe.PosInfos ) {
 		count++;
 		if( v != v2 ) {
 			report(Std.string(v)+" should be "+Std.string(v2),pos);
@@ -259,7 +259,7 @@ class Test #if swf_mark implements mt.Protect #end {
 			new TestIO(),
 			new TestLocals(),
 			new TestEReg(),
-			new TestXML(),
+			//new TestXML(),
 			new TestMisc(),
 			new TestJson(),
 			new TestResource(),

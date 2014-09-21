@@ -22,11 +22,13 @@ class FileInput extends Input
 	}
 
 	public function seek( p : Int, pos : FileSeek ) : Void {
-		return impl.seek(p, pos);
+		impl.seek(p, pos);
 	}
+
 	public function tell() : Int {
 		return impl.tell();
 	}
+
 	public function eof() : Bool {
 		return impl.eof();
 	}
