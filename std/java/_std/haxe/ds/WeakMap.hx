@@ -66,6 +66,7 @@ import java.lang.ref.ReferenceQueue;
 		queue = new ReferenceQueue();
 	}
 
+	@:analyzer(no_ssa)
 	private function cleanupRefs():Void
 	{
 		var x:Dynamic = null, nOccupied = nOccupied;
