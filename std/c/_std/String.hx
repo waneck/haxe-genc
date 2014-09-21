@@ -202,7 +202,7 @@ import c.CString.memcmp;
 				var pchr:Pointer<Char> = c.CString.memchr(p0+pos,first,l0-pos);
 				//untyped __c('printf("mm %d \\n",pos)');
 				if (pchr != new Pointer(0)){
-					pos = cast (pchr - p0).value();
+					pos = cast ((pchr - p0).value());
 					if (memcmp(pchr,p1,l1) == 0){
 						return pos;
 					} else {
@@ -270,7 +270,7 @@ import c.CString.memcmp;
 		return ofPointerCopy(len,p); // keep 0x00 for C-compat TODO: do we want that?
 	}
 
-	@:keep private static function ofPointerCopy<T>(len:Int, p:ConstPointer<Char>):String {
+	@:keep private static function ofPointerCopy(len:Int, p:ConstPointer<Char>):String {
 		var ret = new String(null);
 		ret.__a = cast c.CStdlib.calloc(len, 8 /*TODO*/);
 		FixedArray.copy(p,0,ret.__a,0,len);

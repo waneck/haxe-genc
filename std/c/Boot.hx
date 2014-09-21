@@ -7,6 +7,8 @@ import c.NInt;
 import String;
 import c.Closure;
 import c.VTable;
+import c.gc.GC;
+import c.gc.Alloc;
 
 @:headerCode('
 

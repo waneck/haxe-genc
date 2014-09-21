@@ -29,6 +29,8 @@ import c.Types.Short;
 import c.CStdio;
 import c.CString;
 import c.NInt.Int64;
+import c.gc.Memory;
+import c.gc.GC;
 
 //@:coreApi
 @:final class Array<T> implements ArrayAccess<T>
@@ -46,35 +48,35 @@ import c.NInt.Int64;
 	}
 
 	private static function __new<T>(len:Int):Array<T> {
-		var ret = new Array();
+		var ret = new Memory<Array<T>>().get();
 		ret.__a = __alloc_mem(len,Lib.sizeof(new TypeReference<Pointer<Char>>()));
 		ret.__byte_length = len;
 		return cast ret;
 	}
 
 	private static function __new_8<T>(len:Int):Array<Char> {
-		var ret = new Array();
+		var ret = new Memory<Array<Char>>().get();
 		ret.__a = ret.__alloc_mem_8(len);
 		ret.__byte_length = len;
 		return cast ret;
 	}
 
 	private static function __new_16<T>(len:Int):Array<Short> {
-		var ret = new Array();
+		var ret = new Memory<Array<Short>>().get();
 		ret.__a = ret.__alloc_mem_16(len);
 		ret.__byte_length = len;
 		return cast ret;
 	}
 
 	private static function __new_32<T>(len:Int):Array<Int> {
-		var ret = new Array();
+		var ret = new Memory<Array<Int>>().get();
 		ret.__a = ret.__alloc_mem_32(len);
 		ret.__byte_length = len;
 		return cast ret;
 	}
 
 	private static function __new_64<T>(len:Int):Array<c.NInt.Int64> {
-		var ret = new Array();
+		var ret = new Memory<Array<c.NInt.Int64>>().get();
 		ret.__a = ret.__alloc_mem_64(len);
 		ret.__byte_length = len;
 		return cast ret;
@@ -128,7 +130,7 @@ import c.NInt.Int64;
 
 	@:keep private static function ofNative<X>(native:FixedArray<X>):Array<X>
 	{
-		var ret = new Array();
+		var ret:Array<X> = new Memory<Array<X>>();
 		ret.__a = cast native.array;
 		ret.length = native.length;
 		return ret;
@@ -136,7 +138,7 @@ import c.NInt.Int64;
 
 	@:keep private static function ofNative_8(native:Pointer<Char>,length:Int):Array<Char>
 	{
-		var ret    = new Array();
+		var ret    = new Memory<Array<Char>>().get();
 		ret.__a    = native;
 		ret.length = length;
 		return ret;
@@ -144,7 +146,7 @@ import c.NInt.Int64;
 
 	@:keep private static function ofNative_16(native:Pointer<Short>,length:Int):Array<Short>
 	{
-		var ret    = new Array();
+		var ret    = new Memory<Array<Short>>().get();
 		ret.__a    = native;
 		ret.length = length;
 		return ret;
@@ -152,7 +154,7 @@ import c.NInt.Int64;
 
 	@:keep private static function ofNative_32(native:Pointer<Int>,length:Int):Array<Int>
 	{
-		var ret    = new Array();
+		var ret    = new Memory<Array<Int>>().get();
 		ret.__a    = native;
 		ret.length = length;
 		return ret;
@@ -160,7 +162,7 @@ import c.NInt.Int64;
 
 	@:keep private static function ofNative_64(native:Pointer<c.NInt.Int64>,length:Int):Array<c.NInt.Int64>
 	{
-		var ret    = new Array();
+		var ret    = new Memory<Array<c.NInt.Int64>>().get();
 		ret.__a    = native;
 		ret.length = length;
 		return ret;
