@@ -478,8 +478,8 @@ module Ssa = struct
 				{e with eexpr = TVar(v,eo)}
 			| TFunction tf ->
 				List.iter (fun (v,_) -> declare_var v) tf.tf_args;
-				let e = loop tf.tf_expr in
-				{e with eexpr = TFunction {tf with tf_expr = e}}
+				let e' = loop tf.tf_expr in
+				{e with eexpr = TFunction {tf with tf_expr = e'}}
 			(* var modifications *)
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when not (Meta.has Meta.Unbound v.v_meta) && v.v_name <> "this" ->
 				let e2 = loop e2 in

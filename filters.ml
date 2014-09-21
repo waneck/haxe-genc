@@ -950,7 +950,7 @@ let run com tctx main =
 		blockify_ast;
 		if com.foptimize then Optimizer.inline_constructors tctx else (fun e -> e);
 		captured_vars com;
-		check_local_vars_init;
+		(* check_local_vars_init; *)
 	] in
 	List.iter (post_process tctx filters) com.types;
 	post_process_end();
