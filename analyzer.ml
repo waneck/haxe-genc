@@ -486,8 +486,8 @@ module Ssa = struct
 				let v = assign_var v e1.epos in
 				{e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v},e2)}
 			| TBinop(OpAssignOp op,({eexpr = TLocal v} as e1),e2) ->
-				let e1 = loop e1 in
 				let e2 = loop e2 in
+				let e1 = loop e1 in
 				let e_op = mk (TBinop(op,e1,e2)) e.etype e.epos in
 				let v = assign_var v e.epos in
 				let ev = {e1 with eexpr = TLocal v} in
@@ -609,8 +609,8 @@ module Ssa = struct
 							| TBinop (OpAssign,e1,{eexpr = TUnop((Increment | Decrement as op),Postfix,({eexpr = TLocal v2} as e2))}) ->
 								let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 								let binop = if op = Increment then OpAdd else OpSub in
-								let e1 = loop e1 in
 								let e2 = loop e2 in
+								let e1 = loop e1 in
 								let e_op = mk (TBinop(binop,e2,e_one)) e1.etype e1.epos in
 								let e_v = {e with eexpr = TBinop(OpAssign,e1,e2)} in
 								let v2 = assign_var v2 e1.epos in
@@ -942,7 +942,7 @@ let run_expression_filters com t =
 	| TClassDecl c ->
 		let process_field cf =
 			match cf.cf_expr with
-			| Some e when not (has_analyzer_option cf.cf_meta "no_ssa") ->
+			| Some e when not (has_analyzer_option cf.cf_meta "no_ssa") && not (Meta.has Meta.Extern cf.cf_meta) (* TODO: use is_removable_field *) ->
 				cf.cf_expr <- Some (run_ssa com e);
 			| _ -> ()
 		in
