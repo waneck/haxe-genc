@@ -25,6 +25,25 @@ let has_analyzer_option meta s =
 	with Not_found ->
 		false
 
+let rec get_type_meta t = match t with
+	| TMono r ->
+		begin match !r with
+			| None -> raise Not_found
+			| Some t -> get_type_meta t
+		end
+	| TLazy f ->
+		get_type_meta (!f())
+	| TInst(c,_) ->
+		c.cl_meta
+	| TEnum(en,_) ->
+		en.e_meta
+	| TAbstract(a,_) ->
+		a.a_meta
+	| TType(t,_) ->
+		t.t_meta
+	| TAnon _ | TFun _ | TDynamic _ ->
+		raise Not_found
+
 module Simplifier = struct
 	let mk_block_context com gen_temp =
 		let block_el = ref [] in
@@ -795,6 +814,20 @@ module ConstPropagation = struct
 				end;
 			| TCall({eexpr = TField(_,(FStatic(_,cf) | FInstance(_,_,cf) | FAnon cf))},el) when has_analyzer_option cf.cf_meta "no_const_propagation" ->
 				e
+			| TCall(e1,el) ->
+				let e1 = loop e1 in
+				let check e t =
+					try
+						let meta = get_type_meta t in
+						if has_analyzer_option meta "no_const_propagation" then
+							e
+						else
+							loop e
+					with Not_found ->
+						loop e
+				in
+				let el = Codegen.UnificationCallback.check_call check el e1.etype in
+				{e with eexpr = TCall(e1,el)}
 			| TWhile(econd,ebody,flag) ->
 				let econd = loop econd in
 				let old = !is_first_loop_iteration in

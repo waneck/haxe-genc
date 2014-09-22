@@ -27,4 +27,5 @@ package cs;
 
 	Note: Using this type should be considered a bad practice unless overriding a native function is needed.
 **/
+@:analyzer(no_const_propagation)
 typedef Ref<T> = T;
