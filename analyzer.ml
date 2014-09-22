@@ -50,6 +50,11 @@ let type_has_analyzer_option t s =
 	with Not_found ->
 		false
 
+(*
+	This module simplifies the AST by introducing temporary variables for complex expressions in many places.
+	In particular, it ensures that no branching can occur in value-places so that we can later insert SSA PHI
+	nodes without worrying about their placement.
+*)
 module Simplifier = struct
 	let mk_block_context com gen_temp =
 		let block_el = ref [] in
