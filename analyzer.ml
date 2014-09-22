@@ -175,7 +175,18 @@ module Simplifier = struct
 				e
 			| TCall(e1,el) ->
 				let e1 = loop e1 in
-				{e with eexpr = TCall(e1,ordered_list el)}
+				let check e t =
+					try
+						let meta = get_type_meta t in
+						if has_analyzer_option meta "no_simplification" then
+							e
+						else
+							bind e
+					with Not_found ->
+						bind e
+				in
+				let el = Codegen.UnificationCallback.check_call check el e1.etype in
+				{e with eexpr = TCall(e1,el)}
 			| TNew(c,tl,el) ->
 				{e with eexpr = TNew(c,tl,ordered_list el)}
 			| TArrayDecl el ->
