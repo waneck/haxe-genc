@@ -127,7 +127,7 @@ module Simplifier = struct
 		let skip_binding e =
 			let rec loop e =
 				match e.eexpr with
-				| TLocal _ | TConst _ | TTypeExpr _ -> ()
+				| TLocal _ | TConst _ | TTypeExpr _ | TFunction _ -> ()
 				| TParenthesis e1 | TCast(e1,None) | TEnumParameter(e1,_,_) -> Type.iter loop e
 				| _ -> raise Exit
 			in
@@ -216,7 +216,7 @@ module Simplifier = struct
 				let eo = match eo with None -> None | Some e -> Some (loop e) in
 				{e with eexpr = TIf(e1,e2,eo)}
 			| TVar(v,Some e1) ->
-				let e1 = bind e1 in
+				let e1 = loop e1 in
 				{e with eexpr = TVar(v,Some e1)}
 			| TUnop((Neg | NegBits | Not) as op,flag,e1) ->
 				let e1 = bind e1 in

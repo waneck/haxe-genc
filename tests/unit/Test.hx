@@ -18,7 +18,7 @@ class Test #if swf_mark implements mt.Protect #end {
 		}
 	}
 
-	function feq( v : Float, v2 : Float, ?pos ) {
+	function feq( v : Float, v2 : Float, ?pos:haxe.PosInfos ) {
 		count++;
 		if (!Math.isFinite(v) || !Math.isFinite(v2))
 			eq(v, v2, pos);
