@@ -255,8 +255,13 @@ module Simplifier = struct
 				let eo = match eo with None -> None | Some e -> Some (loop e) in
 				{e with eexpr = TIf(e1,e2,eo)}
 			| TVar(v,Some e1) ->
-				let e1 = loop e1 in
-				{e with eexpr = TVar(v,Some e1)}
+				begin match e1.eexpr with
+					| TFunction _ -> e
+					| TArrayDecl [{eexpr = TFunction _}] -> (* closure? *) e
+					| _ ->
+						let e1 = bind e1 in
+						{e with eexpr = TVar(v,Some e1)}
+				end
 			| TUnop((Neg | NegBits | Not) as op,flag,e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TUnop(op,flag,e1)}
