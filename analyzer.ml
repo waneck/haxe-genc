@@ -154,7 +154,10 @@ module Simplifier = struct
 				loop e;
 				true
 			with Exit ->
-				false
+				begin match follow e.etype with
+					| TAbstract({a_path = [],"Void"},_) -> true
+					| _ -> false
+				end
 		in
 		let rec loop e =
 			match e.eexpr with
