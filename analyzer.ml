@@ -260,6 +260,9 @@ module Simplifier = struct
 			| TUnop((Neg | NegBits | Not) as op,flag,e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TUnop(op,flag,e1)}
+			| TField(e1,fa) ->
+				let e1 = bind e1 in
+				{e with eexpr = TField(e1,fa)}
 			| TReturn (Some ({eexpr = TThrow _} as e1)) ->
 				e1 (* this is a bit hackish *)
 			| TReturn (Some e1) ->
