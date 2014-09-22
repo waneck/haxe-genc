@@ -44,6 +44,12 @@ let rec get_type_meta t = match t with
 	| TAnon _ | TFun _ | TDynamic _ ->
 		raise Not_found
 
+let type_has_analyzer_option t s =
+	try
+		has_analyzer_option (get_type_meta t) s
+	with Not_found ->
+		false
+
 module Simplifier = struct
 	let mk_block_context com gen_temp =
 		let block_el = ref [] in
@@ -751,7 +757,7 @@ module ConstPropagation = struct
 				let e1 = loop e1 in
 				assign v e1;
 				{e with eexpr = TVar(v,Some e1)}
-			| TLocal v when (match follow v.v_type with TDynamic _ -> false | _ -> not v.v_capture) ->
+			| TLocal v when (match follow v.v_type with TDynamic _ -> false | _ -> not v.v_capture && not (type_has_analyzer_option v.v_type "no_const_propagation")) ->
 				begin try
 					let e' = (PMap.find v.v_id !var_to_expr_map) in
 					begin match e'.eexpr with
