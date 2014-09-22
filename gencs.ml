@@ -127,6 +127,15 @@ let is_bool t =
 			true
 		| _ -> false
 
+let is_dynamic gen t =
+	match follow (gen.greal_type t) with
+		| TDynamic _ -> true
+		| _ -> false
+
+let is_pointer gen t =
+	match follow (gen.greal_type t) with
+		| TInst( {cl_path = ["cs"], "Pointer"}, _ ) -> true
+		| _ -> false
 
 let rec is_null t =
 	match t with
@@ -140,6 +149,13 @@ let rec is_null t =
 		| TLazy f ->
 			is_null (!f())
 		| _ -> false
+
+let rec get_arrptr e = match e.eexpr with
+	| TParenthesis e | TMeta(_,e)
+	| TCast(e,_) -> get_arrptr e
+	| TCall( { eexpr = TLocal({ v_name = "__arrptr__" }) }, [ e ] ) ->
+		Some e
+	| _ -> None
 
 let parse_explicit_iface =
 	let regex = Str.regexp "\\." in
@@ -387,10 +403,15 @@ struct
 			| _ -> assert false
 		in
 		let string_ext = get_cl ( get_type gen (["haxe";"lang"], "StringExt")) in
-
 		let is_string t = match follow t with | TInst({ cl_path = ([], "String") }, []) -> true | _ -> false in
-
 		let clstring = match basic.tstring with | TInst(cl,_) -> cl | _ -> assert false in
+		let boxed_ptr, clptr =
+			if Common.defined gen.gcon Define.Unsafe then
+				get_cl (get_type gen (["haxe";"lang"], "BoxedPointer")),
+				get_cl (get_type gen (["cs"],"Pointer"))
+			else
+				null_class,null_class
+		in
 
 		let is_struct t = (* not basic type *)
 			match follow t with
@@ -437,6 +458,22 @@ struct
 					run ef
 				| TNew( { cl_path = ([], "String") }, [], [p] ) -> run p (* new String(myString) -> myString *)
 
+				| TCast(expr, _) when is_dynamic gen expr.etype && is_pointer gen e.etype ->
+					(match get_arrptr expr with
+						| None ->
+							(* unboxing *)
+							let expr = run expr in
+							mk_cast e.etype (mk_field_access gen (mk_cast (TInst(boxed_ptr,[])) expr) "value" e.epos)
+						| Some e ->
+							run e)
+				| TCast(expr, _) when is_pointer gen expr.etype && is_dynamic gen e.etype ->
+					(match get_arrptr expr with
+						| None ->
+							(* boxing *)
+							let expr = run expr in
+							{ e with eexpr = TNew(boxed_ptr,[],[expr]) }
+						| Some e ->
+							run e)
 				| TCast(expr, _) when is_bool e.etype ->
 					{
 						eexpr = TCall(
@@ -906,7 +943,8 @@ let configure gen =
 				(check_t_s param) ^ "[]"
 			| TInst({ cl_path = (["cs"], "Pointer") },[t])
 			| TAbstract({ a_path = (["cs"], "Pointer") },[t])->
-				t_s t ^ "*"
+				let ret = t_s t in
+				(if ret = "object" then "void" else ret) ^ "*"
 			(* end of basic types *)
 			| TInst ({ cl_kind = KTypeParameter _; cl_path=p }, []) -> snd p
 			| TMono r -> (match !r with | None -> "object" | Some t -> t_s (run_follow gen t))
@@ -1253,21 +1291,38 @@ let configure gen =
 					write w ")";
 					expr_s w (mk_block eblock)
 				| TCall ({ eexpr = TLocal( { v_name = "__fixed__" } ) }, [ e ] ) ->
-					let first = ref true in
+					let fixeds = ref [] in
 					let rec loop = function
-						| ({ eexpr = TVar(v, Some({ eexpr = TCast( { eexpr = TCast(e, _) }, _) }) ) } as expr) :: tl when is_pointer v.v_type ->
-							(if !first then first := false);
-							write w "fixed(";
-							let vf = mk_temp gen "fixed" v.v_type in
-							expr_s w { expr with eexpr = TVar(vf, Some e) };
-							write w ")";
-							begin_block w;
-							expr_s w { expr with eexpr = TVar(v, Some (mk_local vf expr.epos)) };
-							write w ";";
+						| ({ eexpr = TVar(v, Some(e) ) } as expr) :: tl when is_pointer v.v_type ->
+							let e = match get_arrptr e with
+								| None -> e
+								| Some e -> e
+							in
+							fixeds := (v,e,expr) :: !fixeds;
 							loop tl;
+						| el when !fixeds <> [] ->
+							write w "fixed(";
+							let rec loop fx acc = match fx with
+								| (v,e,expr) :: tl ->
+									let vf = mk_temp gen "fixed" v.v_type in
+									expr_s w { expr with eexpr = TVar(vf, Some e) };
+									let acc = (expr,v,vf) :: acc in
+									if tl = [] then begin
+										write w ")";
+										acc
+									end else begin
+										write w ", ";
+										loop tl acc
+									end
+								| _ -> assert false
+							in
+							let vars = loop (List.rev !fixeds) [] in
+							begin_block w;
+							List.iter (fun (expr,v,vf) ->
+								expr_s w { expr with eexpr = TVar(v, Some (mk_local vf expr.epos)) };
+								write w ";") vars;
+							expr_s w { e with eexpr = TBlock el };
 							end_block w
-						| el when not !first ->
-							expr_s w { e with eexpr = TBlock el }
 						| _ ->
 							trace (debug_expr e);
 							gen.gcon.error "Invalid 'fixed' keyword format" e.epos
@@ -1399,7 +1454,12 @@ let configure gen =
 						| Some e ->
 							write w "else ";
 							in_value := false;
-							expr_s w (mk_block e)
+							let e = match e.eexpr with
+								| TIf _ -> e
+								| TBlock [{eexpr = TIf _} as e] -> e
+								| _ -> mk_block e
+							in
+							expr_s w e
 					)
 				| TWhile (econd, eblock, flag) ->
 					(match flag with
@@ -1428,8 +1488,8 @@ let configure gen =
 							in_value := true;
 							expr_s w e;
 							write w ":";
+							newline w;
 						) el;
-						newline w;
 						in_value := false;
 						expr_s w (mk_block e);
 						newline w;
@@ -1454,8 +1514,8 @@ let configure gen =
 						newline w
 					) ve_l
 				| TReturn eopt ->
-					write w "return ";
-					if is_some eopt then expr_s w (get eopt)
+					write w "return";
+					if is_some eopt then (write w " "; expr_s w (get eopt))
 				| TBreak -> write w "break"
 				| TContinue -> write w "continue"
 				| TThrow e ->
@@ -2218,6 +2278,7 @@ let configure gen =
 	in
 
 	let module_type_gen w md_tp =
+		reset_temps();
 		match md_tp with
 			| TClassDecl cl ->
 				if not cl.cl_extern then begin
@@ -2265,10 +2326,14 @@ let configure gen =
 
 	Hashtbl.add gen.gspecial_vars "__delegate__" true;
 	Hashtbl.add gen.gspecial_vars "__array__" true;
+	Hashtbl.add gen.gspecial_vars "__arrptr__" true;
 
 	Hashtbl.add gen.gsupported_conversions (["haxe"; "lang"], "Null") (fun t1 t2 -> true);
 	let last_needs_box = gen.gneeds_box in
-	gen.gneeds_box <- (fun t -> match t with | TInst( { cl_path = (["haxe"; "lang"], "Null") }, _ ) -> true | _ -> last_needs_box t);
+	gen.gneeds_box <- (fun t -> match (gen.greal_type t) with
+		| TInst( { cl_path = ["cs"], "Pointer" }, _ )
+		| TInst( { cl_path = (["haxe"; "lang"], "Null") }, _ ) -> true
+		| _ -> last_needs_box t);
 
 	gen.greal_type <- real_type;
 	gen.greal_type_param <- change_param_type;
@@ -3447,6 +3512,9 @@ let convert_ilclass ctx p ?(delegate=false) ilcls = match ilcls.csuper with
 		(*	| _ -> raise Exit); *)
 		(match ilcls.csuper with
 			| Some { snorm = LClass ( (["System"],[],"Object"), [] ) } -> ()
+			| Some ({ snorm = LClass ( (["System"],[],"ValueType"), [] ) } as s) ->
+				flags := HExtends (get_type_path ctx (convert_signature ctx p s.snorm)) :: !flags;
+				meta := (Meta.Struct,[],p) :: !meta
 			| Some { snorm = LClass ( (["haxe";"lang"],[],"HxObject"), [] ) } ->
 				meta := (Meta.HxGen,[],p) :: !meta
 			| Some s ->
