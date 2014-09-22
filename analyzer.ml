@@ -143,17 +143,6 @@ module Simplifier = struct
 
 	let run com gen_temp e =
 		let block,declare_temp,close_block = mk_block_context com gen_temp in
-		let has_untyped e =
-			let rec loop e =
-				match e.eexpr with
-				| TLocal v when Meta.has Meta.Unbound v.v_meta -> raise Exit
-				| _ -> Type.iter loop e
-			in
-			try
-				loop e; false
-			with Exit ->
-				true
-		in
 		let skip_binding e =
 			let rec loop e =
 				match e.eexpr with
@@ -172,10 +161,10 @@ module Simplifier = struct
 		in
 		let rec loop e =
 			match e.eexpr with
+			| TLocal v when Meta.has Meta.Unbound v.v_meta ->
+				raise Exit (* nope *)
 			| TBlock el ->
 				{e with eexpr = TBlock (block loop el)}
-			| TCall({eexpr = TLocal v},_) when Meta.has Meta.Unbound v.v_meta ->
-				e
 			| TCall({eexpr = TField(_,(FStatic(c,cf) | FInstance(c,_,cf)))},el) when has_analyzer_option cf.cf_meta "no_simplification" || has_analyzer_option c.cl_meta "no_simplification" ->
 				e
 			| TCall(e1,el) ->
@@ -289,16 +278,12 @@ module Simplifier = struct
 		and ordered_list el =
 			List.map bind el
 		in
-		if has_untyped e then
-			e
-		else begin
-			let e = loop e in
-			match close_block() with
-				| [] ->
-					e
-				| el ->
-					mk (TBlock (List.rev (e :: el))) e.etype e.epos
-		end
+		let e = loop e in
+		match close_block() with
+			| [] ->
+				e
+			| el ->
+				mk (TBlock (List.rev (e :: el))) e.etype e.epos
 end
 
 module Ssa = struct
@@ -555,7 +540,6 @@ module Ssa = struct
 				e
 			(* var user *)
 			| TLocal v ->
-				if (Meta.has Meta.Unbound v.v_meta) then raise Exit; (* don't even try in untyped blocks *)
 				let v = get_var v e.epos in
 				{e with eexpr = TLocal v}
 			(* control flow *)
@@ -982,24 +966,24 @@ let run_ssa com e =
 		| Cpp | Flash8 -> true,has_analyzer_define
 		| _ -> has_analyzer_define,has_analyzer_define
 	in
-	let e = if do_simplify then
-		 Simplifier.run com gen_local e
-	else
-		e
-	in
-	let e = if do_optimize then
-		try
-			let e = Ssa.apply com e in
-			let e = ConstPropagation.apply com e in
-			let e = Ssa.unapply com e in
-			(* let e = LocalDce.apply com e in *)
+	try
+		let e = if do_simplify then
+			 Simplifier.run com gen_local e
+		else
 			e
-		with Exit ->
+		in
+		let e = if do_optimize then
+				let e = Ssa.apply com e in
+				let e = ConstPropagation.apply com e in
+				let e = Ssa.unapply com e in
+				(* let e = LocalDce.apply com e in *)
+				e
+		else
 			e
-	else
+		in
 		e
-	in
-	e
+	with Exit ->
+		e
 
 let run_expression_filters com t =
 	match t with
