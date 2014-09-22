@@ -348,7 +348,7 @@ module Ssa = struct
 	let can_throw e =
 		let rec loop e = match e.eexpr with
 			| TConst _ | TLocal _ | TTypeExpr _ | TFunction _ -> ()
-			| TCall _ | TNew _ | TThrow _ -> raise Exit
+			| TCall _ | TNew _ | TThrow _ | TCast(_,Some _) -> raise Exit
 			| _ -> Type.iter loop e
 		in
 		try
