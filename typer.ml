@@ -2366,8 +2366,7 @@ and type_ident ctx i p mode =
 				AKExpr (mk (TConst TThis) ctx.tthis p)
 			else
 				let t = mk_mono() in
-				let v = alloc_var i t in
-				v.v_meta <- [Meta.Unbound,[],p];
+				let v = alloc_unbound_var i t in
 				AKExpr (mk (TLocal v) t p)
 		end else begin
 			if ctx.curfun = FunStatic && PMap.mem i ctx.curclass.cl_fields then error ("Cannot access " ^ i ^ " in static function") p;
@@ -3686,8 +3685,7 @@ and type_call ctx e el (with_type:with_type) p =
 				| _ ->
 					e
 			in
-			let v_trace = alloc_var "`trace" t_dynamic in
-			v_trace.v_meta <- [Meta.Unbound,[],p];
+			let v_trace = alloc_unbound_var "`trace" t_dynamic in
 			mk (TCall (mk (TLocal v_trace) t_dynamic p,[e;infos])) ctx.t.tvoid p
 		else
 			let me = Meta.ToString,[],pos e in
@@ -3725,8 +3723,7 @@ and type_call ctx e el (with_type:with_type) p =
 		let e = type_expr ctx e Value in
 		if Common.platform ctx.com Flash then
 			let t = tfun [e.etype] e.etype in
-			let v_unprotect = alloc_var "__unprotect__" t in
-			v_unprotect.v_meta <- [Meta.Unbound,[],p];
+			let v_unprotect = alloc_unbound_var "__unprotect__" t in
 			mk (TCall (mk (TLocal v_unprotect) t p,[e])) e.etype e.epos
 		else
 			e

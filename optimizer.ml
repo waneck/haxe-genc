@@ -45,7 +45,7 @@ let has_side_effect e =
 
 let mk_untyped_call name p params =
 	{
-		eexpr = TCall({ eexpr = TLocal(alloc_var name t_dynamic); etype = t_dynamic; epos = p }, params);
+		eexpr = TCall({ eexpr = TLocal(alloc_unbound_var name t_dynamic); etype = t_dynamic; epos = p }, params);
 		etype = t_dynamic;
 		epos = p;
 	}
