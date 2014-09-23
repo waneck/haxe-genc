@@ -160,8 +160,7 @@ module Simplifier = struct
 					| _ -> false
 				end
 		in
-		let rec loop e =
-			match e.eexpr with
+		let rec loop e = match e.eexpr with
 			| TLocal v when Meta.has Meta.Unbound v.v_meta ->
 				raise Exit (* nope *)
 			| TBlock el ->
@@ -174,7 +173,13 @@ module Simplifier = struct
 					if type_has_analyzer_option t "no_simplification" then e
 					else bind e
 				in
-				let el = Codegen.UnificationCallback.check_call check el e1.etype in
+				let el = match e1.eexpr with
+					| TConst TSuper when com.platform = Java || com.platform = Cs ->
+						(* they hate you if you mess up the super call *)
+						el
+					| _ ->
+						Codegen.UnificationCallback.check_call check el e1.etype
+				in
 				{e with eexpr = TCall(e1,el)}
 			| TNew(c,tl,el) ->
 				{e with eexpr = TNew(c,tl,ordered_list el)}
