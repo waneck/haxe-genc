@@ -173,12 +173,15 @@ module Simplifier = struct
 					if type_has_analyzer_option t "no_simplification" then e
 					else bind e
 				in
-				let el = match e1.eexpr with
-					| TConst TSuper when com.platform = Java || com.platform = Cs ->
+				let el = match e1.eexpr,follow e1.etype with
+					| TConst TSuper,_ when com.platform = Java || com.platform = Cs ->
 						(* they hate you if you mess up the super call *)
 						el
-					| _ ->
+					| _,TFun _ ->
 						Codegen.UnificationCallback.check_call check el e1.etype
+					| _ ->
+						(* too dangerous *)
+						el
 				in
 				{e with eexpr = TCall(e1,el)}
 			| TNew(c,tl,el) ->
