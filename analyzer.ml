@@ -949,7 +949,7 @@ let run_ssa com e =
 	in
 	let do_optimize = Common.defined com Define.StaticAnalyzer in
 	let do_simplify = match com.platform with
-		| Cpp | Flash8 -> true
+		| Cpp | Flash8 | Python -> true
 		| _ -> false
 	in
 	let with_timer s f =
