@@ -299,6 +299,14 @@ module Ssa = struct
 		mutable branches : var_map list;
 	}
 
+	type ssa_context = {
+		com : Common.context;
+		mutable var_map : (int,int * tvar) PMap.t;
+		mutable cur_vars : (int,tvar) PMap.t;
+		mutable loop_stack : (join_node * join_node) list;
+		mutable exception_stack : join_node list;
+	}
+
 	let mk_phi =
 		let v_phi = alloc_var "__ssa_phi__" t_dynamic in
 		(fun vl p ->
@@ -356,182 +364,161 @@ module Ssa = struct
 		with Exit ->
 			true
 
-	let apply com e =
-		let mk_join_node() = {
-			branches = []
-		} in
-		let add_vars join vars =
-			join.branches <- vars :: join.branches;
+	let append_phi e phi = match phi with
+		| [] ->
+			e
+		| _ ->
+			let e_phi = to_block (build_phi phi e.epos) e.etype e.epos in
+			concat e e_phi
+
+	let mk_join_node() = {
+		branches = []
+	}
+
+	let add_vars join vars =
+		join.branches <- vars :: join.branches
+
+	let branch ctx =
+		let old = ctx.cur_vars in
+		(fun join ->
+			add_vars join ctx.cur_vars;
+			ctx.cur_vars <- old
+		)
+
+	let set_loop_join ctx join_top join_bottom =
+		ctx.loop_stack <- (join_top,join_bottom) :: ctx.loop_stack;
+		(fun () ->
+			ctx.loop_stack <- List.tl ctx.loop_stack
+		)
+
+	let set_exception_join ctx join =
+		ctx.exception_stack <- join :: ctx.exception_stack;
+		(fun () ->
+			ctx.exception_stack <- List.tl ctx.exception_stack;
+		)
+
+	let declare_var ctx v =
+		ctx.var_map <- PMap.add v.v_id (0,v) ctx.var_map;
+		ctx.cur_vars <- PMap.add v.v_id v ctx.cur_vars
+
+	let assign_var ctx v p =
+		if v.v_capture then v else
+		try
+			let i,_ = PMap.find v.v_id ctx.var_map in
+			let i = i + 1 in
+			ctx.var_map <- PMap.add v.v_id (i,v) ctx.var_map;
+			let v' = alloc_var (Printf.sprintf "%s<%i>" v.v_name i) v.v_type in
+			v'.v_meta <- [(Meta.Custom ":ssa"),[EConst(Int (string_of_int v.v_id)),p],p];
+			ctx.cur_vars <- PMap.add v.v_id v' ctx.cur_vars;
+			v'
+		with Not_found ->
+			ctx.com.warning (Printf.sprintf "Unbound variable %s (is_unbound: %b)" v.v_name (has_meta Meta.Unbound v.v_meta)) p;
+			v
+
+	let get_var ctx v p =
+		try
+			PMap.find v.v_id ctx.cur_vars
+		with Not_found ->
+			ctx.com.warning (Printf.sprintf "Unbound variable %s (is_unbound: %b)" v.v_name (has_meta Meta.Unbound v.v_meta)) p;
+			v
+
+	let close_join_node ctx node =
+		let vars = ref PMap.empty in
+		let rec handle_branch branch =
+			PMap.iter (fun i v ->
+				try
+					let vl = PMap.find i !vars in
+					if not (List.memq v vl) then
+						vars := PMap.add i (v :: vl) !vars
+				with Not_found ->
+					vars := PMap.add i [v] !vars
+			) branch;
 		in
-		let var_map = ref PMap.empty in
-		let cur_vars = ref PMap.empty in
-		let cur_loop_top = ref None in
-		let cur_loop_bottom = ref None in
-		let cur_exception_join = ref None in
-		let branch () =
-			let old = !cur_vars in
-			(fun join ->
-				add_vars join !cur_vars;
-				cur_vars := old
-			)
-		in
-		let set_loop_join join_top join_bottom =
-			let old = !cur_loop_top,!cur_loop_bottom in
-			cur_loop_top := Some join_top;
-			cur_loop_bottom := Some join_bottom;
-			(fun () ->
-				cur_loop_top := fst old;
-				cur_loop_bottom := snd old;
-			)
-		in
-		let set_exception_join join =
-			let old = !cur_exception_join in
-			cur_exception_join := Some join;
-			(fun () ->
-				cur_exception_join := old;
-			)
-		in
-		let declare_var v =
-			var_map := PMap.add v.v_id (0,v) !var_map;
-			cur_vars := PMap.add v.v_id v !cur_vars
-		in
-		let assign_var v p =
-			if v.v_capture then v else
-			try
-				let i,_ = PMap.find v.v_id !var_map in
-				let i = i + 1 in
-				var_map := PMap.add v.v_id (i,v) !var_map;
-				let v' = alloc_var (Printf.sprintf "%s<%i>" v.v_name i) v.v_type in
-				v'.v_meta <- [(Meta.Custom ":ssa"),[EConst(Int (string_of_int v.v_id)),e.epos],e.epos];
-				cur_vars := PMap.add v.v_id v' !cur_vars;
-				v'
-			with Not_found ->
-				com.warning ("Unbound variable " ^ v.v_name) p;
-				v
-		in
-		let get_var v p =
-			try
-				PMap.find v.v_id !cur_vars
-			with Not_found ->
-				com.warning ("Unbound variable " ^ v.v_name) p;
-				v
-		in
-(* 		let s_phi phi =
-			let sl = List.fold_left (fun acc (v,vl) ->
-				(Printf.sprintf "%s = PHI(%s)" v.v_name (String.concat ", " (List.map (fun v -> v.v_name) vl))) :: acc
-			) [] phi in
-			String.concat "\n" sl
-		in
-		let s_vars vars =
-			let sl = PMap.foldi (fun i v acc ->
-				let _,k = PMap.find i !var_map in
-				Printf.sprintf "%s = %s" (k.v_name) v.v_name :: acc
-			) vars [] in
-			String.concat ", " sl
-		in *)
-		let close_join_node node =
-			let vars = ref PMap.empty in
-			let rec handle_branch branch =
-				PMap.iter (fun i v ->
-					try
-						let vl = PMap.find i !vars in
-						if not (List.memq v vl) then
-							vars := PMap.add i (v :: vl) !vars
-					with Not_found ->
-						vars := PMap.add i [v] !vars
-				) branch;
-			in
-			List.iter handle_branch node.branches;
-			PMap.foldi (fun i vl acc -> match vl with
-				| [v] ->
-					cur_vars := PMap.add i v !cur_vars;
-					acc
-				| _ ->
-					let _,v = PMap.find i !var_map in
-					let v' = assign_var v null_pos in
-					((v',vl) :: acc)
-			) !vars []
-		in
-		let append_phi e phi = match phi with
-			| [] ->
-				e
+		List.iter handle_branch node.branches;
+		PMap.foldi (fun i vl acc -> match vl with
+			| [v] ->
+				ctx.cur_vars <- PMap.add i v ctx.cur_vars;
+				acc
 			| _ ->
-				let e_phi = to_block (build_phi phi e.epos) e.etype e.epos in
-				concat e e_phi
-		in
-		let rec handle_if e econd eif eelse =
-			let econd = loop econd in
+				let _,v = PMap.find i ctx.var_map in
+				let v' = assign_var ctx v null_pos in
+				((v',vl) :: acc)
+		) !vars []
+
+	let apply com e =
+		let rec handle_if ctx e econd eif eelse =
+			let econd = loop ctx econd in
 			let join = mk_join_node() in
-			let close = branch() in
-			let eif = loop eif in
+			let close = branch ctx in
+			let eif = loop ctx eif in
 			close join;
 			let eelse = match eelse with
 				| None ->
-					add_vars join !cur_vars;
+					add_vars join ctx.cur_vars;
 					None
 				| Some e ->
-					let close = branch() in
-					let eelse = loop e in
+					let close = branch ctx in
+					let eelse = loop ctx e in
 					close join;
 					Some eelse
 			in
-			let phi = close_join_node join in
+			let phi = close_join_node ctx join in
 			let e = {e with eexpr = TIf(econd,eif,eelse)} in
 			e,(build_phi phi e.epos)
-		and handle_unop op flag e1 =
+		and handle_unop ctx op flag e1 =
 			let v = match e1.eexpr with
 				| TLocal v -> v
 				| _ -> error "Unop on non-local" e1.epos
 			in
 			let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 			let binop = if op = Increment then OpAdd else OpSub in
-			let e1 = loop e1 in
+			let e1 = loop ctx e1 in
 			let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
-			let v = assign_var v e1.epos in
+			let v = assign_var ctx v e1.epos in
 			let ev = {e1 with eexpr = TLocal v} in
 			let e_assign = {e with eexpr = TBinop(OpAssign,ev,e_op) } in
 			e_assign,if flag = Prefix then
 				ev
 			else
 				e1
-		and handle_loop_body e =
+		and handle_loop_body ctx e =
 			let join_top = mk_join_node() in
 			let join_bottom = mk_join_node() in
-			let unset = set_loop_join join_top join_bottom in
-			let close = branch() in
-			let ebody = loop e in
+			let unset = set_loop_join ctx join_top join_bottom in
+			let close = branch ctx in
+			let ebody = loop ctx e in
 			close join_top;
 			unset();
-			add_vars join_top !cur_vars;
-			let phi_top = close_join_node join_top in
+			add_vars join_top ctx.cur_vars;
+			let phi_top = close_join_node ctx join_top in
 			let phi_top_inv = invert_phi phi_top in
 			let ebody = replace_locals phi_top_inv ebody in
 			join_bottom.branches <- List.map (replace_vars phi_top_inv) join_bottom.branches;
-			let phi_bottom = close_join_node join_bottom in
+			let phi_bottom = close_join_node ctx join_bottom in
 			ebody,phi_bottom,phi_top
-		and loop e = match e.eexpr with
+		and loop ctx e = match e.eexpr with
 			(* var declarations *)
 			| TVar(v,eo) ->
-				declare_var v;
+				declare_var ctx v;
 				let eo = match eo with
 					| None -> None
-					| Some e -> Some (loop e)
+					| Some e -> Some (loop ctx e)
 				in
 				{e with eexpr = TVar(v,eo)}
 			| TFunction tf ->
-				List.iter (fun (v,_) -> declare_var v) tf.tf_args;
-				let e' = loop tf.tf_expr in
+				List.iter (fun (v,_) -> declare_var ctx v) tf.tf_args;
+				let e' = loop ctx tf.tf_expr in
 				{e with eexpr = TFunction {tf with tf_expr = e'}}
 			(* var modifications *)
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when not (Meta.has Meta.Unbound v.v_meta) && v.v_name <> "this" ->
-				let e2 = loop e2 in
-				let v = assign_var v e1.epos in
+				let e2 = loop ctx e2 in
+				let v = assign_var ctx v e1.epos in
 				{e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v},e2)}
 			| TBinop(OpAssignOp op,({eexpr = TLocal v} as e1),e2) ->
-				let e2 = loop e2 in
-				let e1 = loop e1 in
+				let e2 = loop ctx e2 in
+				let e1 = loop ctx e1 in
 				let e_op = mk (TBinop(op,e1,e2)) e.etype e.epos in
-				let v = assign_var v e.epos in
+				let v = assign_var ctx v e.epos in
 				let ev = {e1 with eexpr = TLocal v} in
 				let e_assign = {e with eexpr = TBinop(OpAssign,ev,e_op) } in
 				e_assign
@@ -539,33 +526,33 @@ module Ssa = struct
 				let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 				let binop = if op = Increment then OpAdd else OpSub in
 				let e = {e with eexpr = TBinop(OpAssignOp binop,e1,e_one)} in
-				loop e
+				loop ctx e
 			| TUnop((Increment | Decrement),Postfix,{eexpr = TLocal _}) ->
 				com.warning ("Postfix unop outside block: " ^ (s_expr e)) e.epos;
 				e
 			(* var user *)
 			| TLocal v ->
-				let v = get_var v e.epos in
+				let v = get_var ctx v e.epos in
 				{e with eexpr = TLocal v}
 			(* control flow *)
 			| TIf(econd,eif,eelse) ->
 				(* com.warning "If outside block" e.epos; *)
-				let e,phi = handle_if e econd eif eelse in
+				let e,phi = handle_if ctx e econd eif eelse in
 				mk (TBlock (e :: phi)) e.etype e.epos
 			| TSwitch(e1,cases,edef) ->
-				let e1 = loop e1 in
+				let e1 = loop ctx e1 in
 				let join = mk_join_node() in
 				let cases = List.map (fun (el,e) ->
-					let close = branch() in
-					let el = List.map loop el in
-					let e = loop e in
+					let close = branch ctx in
+					let el = List.map (loop ctx) el in
+					let e = loop ctx e in
 					close join;
 					el,e
 				) cases in
 				let edef = match edef with
 					| Some e ->
-						let close = branch() in
-						let e = loop e in
+						let close = branch ctx in
+						let e = loop ctx e in
 						close join;
 						Some e
 					| None ->
@@ -574,56 +561,56 @@ module Ssa = struct
 							| TParenthesis({eexpr = TMeta((Meta.Exhaustive,_,_),_)}) ->
 								()
 							| _ ->
-								add_vars join !cur_vars;
+								add_vars join ctx.cur_vars;
 						end;
 						None
 				in
-				let phi = close_join_node join in
+				let phi = close_join_node ctx join in
 				let e = {e with eexpr = TSwitch(e1,cases,edef)} in
 				append_phi e phi
 			| TWhile(econd,ebody,mode) ->
-				let econd = loop econd in
-				let ebody,phi_bottom,phi_top = handle_loop_body ebody in
+				let econd = loop ctx econd in
+				let ebody,phi_bottom,phi_top = handle_loop_body ctx ebody in
 				let e_phi_top = to_block (build_phi phi_top e.epos) e.etype e.epos in
 				let e = {e with eexpr = TWhile(econd,concat e_phi_top ebody,mode)} in
 				append_phi e phi_bottom
 			| TFor(v,e1,ebody) ->
-				declare_var v;
-				let e1 = loop e1 in
-				let ebody,phi_bottom,phi_top = handle_loop_body ebody in
+				declare_var  ctx v;
+				let e1 = loop ctx e1 in
+				let ebody,phi_bottom,phi_top = handle_loop_body ctx ebody in
 				let e_phi_top = to_block (build_phi phi_top e.epos) e.etype e.epos in
 				let e = {e with eexpr = TFor(v,e1,concat e_phi_top ebody)} in
 				append_phi e phi_bottom
 			| TTry(e1,catches) ->
 				let join_ex = mk_join_node() in
 				let join_bottom = mk_join_node() in
-				let unset = set_exception_join join_ex in
-				let e1 = loop e1 in
+				let unset = set_exception_join ctx join_ex in
+				let e1 = loop ctx e1 in
 				unset();
-				add_vars join_bottom !cur_vars;
-				let phi = close_join_node join_ex in
+				add_vars join_bottom ctx.cur_vars;
+				let phi = close_join_node ctx join_ex in
 				let e_phi = to_block (build_phi phi e.epos) e.etype e.epos in
 				let catches = List.map (fun (v,e) ->
-					declare_var v;
-					let close = branch() in
-					let e = loop e in
+					declare_var ctx v;
+					let close = branch ctx in
+					let e = loop ctx e in
 					close join_bottom;
 					let e = concat e_phi e in
 					v,e
 				) catches in
-				let phi = close_join_node join_bottom in
+				let phi = close_join_node ctx join_bottom in
 				let e = {e with eexpr = TTry(e1,catches)} in
 				append_phi e phi
 			| TBreak ->
-				begin match !cur_loop_bottom with
-					| None -> error "Break outside loop" e.epos
-					| Some join -> add_vars join !cur_vars
+				begin match ctx.loop_stack with
+					| [] -> error "Break outside loop" e.epos
+					| (_,join) :: _ -> add_vars join ctx.cur_vars
 				end;
 				e
 			| TContinue ->
-				begin match !cur_loop_top with
-					| None -> error "Continue outside loop" e.epos
-					| Some join -> add_vars join !cur_vars
+				begin match ctx.loop_stack with
+					| [] -> error "Continue outside loop" e.epos
+					| (join,_) :: _ -> add_vars join ctx.cur_vars
 				end;
 				e
 			(* misc *)
@@ -632,38 +619,38 @@ module Ssa = struct
 					| e :: el ->
 						begin match e.eexpr with
 							| TIf(econd,eif,eelse) | TParenthesis({eexpr = TIf(econd,eif,eelse)}) ->
-								let e,phi = handle_if e econd eif eelse in
+								let e,phi = handle_if ctx e econd eif eelse in
 								(e :: phi) @ loop2 el
 							| TUnop((Increment | Decrement as op),flag,({eexpr = TLocal _} as e1)) ->
-								let e_assign,e' = handle_unop op flag e1 in
+								let e_assign,e' = handle_unop ctx op flag e1 in
 								e_assign :: (loop2 el)
 							| TVar (v,Some {eexpr = TUnop((Increment | Decrement as op),Postfix,({eexpr = TLocal v2} as e1))}) ->
-								declare_var v;
+								declare_var ctx v;
 								let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 								let binop = if op = Increment then OpAdd else OpSub in
-								let e1 = loop e1 in
+								let e1 = loop ctx e1 in
 								let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
 								let e_v = {e with eexpr = TVar(v, Some e1)} in
-								let v2 = assign_var v2 e1.epos in
+								let v2 = assign_var ctx v2 e1.epos in
 								let e_assign = {e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v2},e_op)} in
 								e_v :: e_assign :: (loop2 el)
 							| TBinop (OpAssign,e1,{eexpr = TUnop((Increment | Decrement as op),Postfix,({eexpr = TLocal v2} as e2))}) ->
 								let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 								let binop = if op = Increment then OpAdd else OpSub in
-								let e2 = loop e2 in
-								let e1 = loop e1 in
+								let e2 = loop ctx e2 in
+								let e1 = loop ctx e1 in
 								let e_op = mk (TBinop(binop,e2,e_one)) e1.etype e1.epos in
 								let e_v = {e with eexpr = TBinop(OpAssign,e1,e2)} in
-								let v2 = assign_var v2 e1.epos in
+								let v2 = assign_var ctx v2 e1.epos in
 								let e_assign = {e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v2},e_op)} in
 								e_v :: e_assign :: (loop2 el)
 							| TVar (v,Some {eexpr = TUnop((Increment | Decrement as op),Prefix,({eexpr = TLocal v2} as e1))}) ->
-								declare_var v;
+								declare_var ctx v;
 								let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
 								let binop = if op = Increment then OpAdd else OpSub in
-								let e1 = loop e1 in
+								let e1 = loop ctx e1 in
 								let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
-								let v2 = assign_var v2 e1.epos in
+								let v2 = assign_var ctx v2 e1.epos in
 								let e_loc = {e1 with eexpr = TLocal v2} in
 								let e_v = {e with eexpr = TVar(v, Some e_loc)} in
 								let e_assign = {e with eexpr = TBinop(OpAssign,e_loc,e_op)} in
@@ -671,7 +658,7 @@ module Ssa = struct
 							| TParenthesis (e1) ->
 								loop2 (e1 :: el)
 							| _ ->
-								let e = loop e in
+								let e = loop ctx e in
 								e :: (loop2 el)
 						end
 					| [] ->
@@ -680,14 +667,20 @@ module Ssa = struct
 				let el = loop2 el in
 				{e with eexpr = TBlock el}
 			| _ ->
-				begin match !cur_exception_join with
-					| Some join when can_throw e -> add_vars join !cur_vars
-					| Some join -> ()
+				begin match ctx.exception_stack with
+					| join :: _ when can_throw e -> add_vars join ctx.cur_vars
 					| _ -> ()
 				end;
-				Type.map_expr loop e
+				Type.map_expr (loop ctx) e
 		in
-		loop e
+		let ctx = {
+			com = com;
+			var_map = PMap.empty;
+			cur_vars = PMap.empty;
+			loop_stack = [];
+			exception_stack = [];
+		} in
+		loop ctx e
 
 	let unapply com e =
 		let vars = ref PMap.empty in
