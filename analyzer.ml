@@ -972,16 +972,24 @@ let run_ssa com e =
 		| Cpp | Flash8 -> true,has_analyzer_define
 		| _ -> has_analyzer_define,has_analyzer_define
 	in
+	let with_timer s f =
+		let timer = timer s in
+		let r = f() in
+		timer();
+		r
+	in
 	try
 		let e = if do_simplify then
-			 Simplifier.run com gen_local e
+			with_timer "analyzer-simplify" (fun () ->
+				Simplifier.run com gen_local e
+			)
 		else
 			e
 		in
 		let e = if do_optimize then
-				let e = Ssa.apply com e in
-				let e = ConstPropagation.apply com e in
-				let e = Ssa.unapply com e in
+				let e = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
+				let e = with_timer "analyzer-const-propagation" (fun () -> ConstPropagation.apply com e) in
+				let e = with_timer "analyzer-ssa-unapply" (fun () -> Ssa.unapply com e) in
 				(* let e = LocalDce.apply com e in *)
 				e
 		else
