@@ -267,6 +267,9 @@ module Simplifier = struct
 			| TReturn (Some e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TReturn (Some e1)}
+			| TCast(e1,mto) ->
+				let e1 = bind e1 in
+				{e with eexpr = TCast(e1,mto)}
 			| _ ->
 				Type.map_expr loop e
 		and bind e =
