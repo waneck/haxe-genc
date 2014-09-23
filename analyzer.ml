@@ -100,7 +100,7 @@ module Simplifier = struct
 		in
 		let declare_temp t eo p =
 			let v = gen_temp t in
-			v.v_meta <- [Meta.Custom ":test",[],p];
+			v.v_id <- -v.v_id;
 			let e_v = mk (TLocal v) t p in
 			let declare e_init =
 				let e = mk (TVar (v,e_init)) com.basic.tvoid p in
@@ -142,7 +142,7 @@ module Simplifier = struct
 		in
 		block,declare_temp,fun () -> !block_el
 
-	let run com gen_temp e =
+	let apply com gen_temp e =
 		let block,declare_temp,close_block = mk_block_context com gen_temp in
 		let skip_binding ?(allow_tlocal=false) e =
 			let rec loop e =
@@ -306,14 +306,14 @@ module Simplifier = struct
 		let rec loop e = match e.eexpr with
 			| TBlock el ->
 				let el = ExtList.List.filter_map (fun e -> match e.eexpr with
-					| TVar(v,Some e1) when Meta.has (Meta.Custom ":test") v.v_meta ->
+					| TVar(v,Some e1) when v.v_id < 0 ->
 						var_map := PMap.add v.v_id (loop e1) !var_map;
 						None
 					| _ ->
 						Some (loop e)
 				) el in
 				{e with eexpr = TBlock el}
-			| TLocal v when Meta.has (Meta.Custom ":test") v.v_meta ->
+			| TLocal v when v.v_id < 0 ->
 				begin try PMap.find v.v_id !var_map
 				with Not_found -> e end
 			| _ ->
@@ -502,22 +502,6 @@ module Ssa = struct
 			let phi = close_join_node ctx join in
 			let e = {e with eexpr = TIf(econd,eif,eelse)} in
 			e,(build_phi phi e.epos)
-		and handle_unop ctx op flag e1 =
-			let v = match e1.eexpr with
-				| TLocal v -> v
-				| _ -> error "Unop on non-local" e1.epos
-			in
-			let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
-			let binop = if op = Increment then OpAdd else OpSub in
-			let e1 = loop ctx e1 in
-			let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
-			let v = assign_var ctx v e1.epos in
-			let ev = {e1 with eexpr = TLocal v} in
-			let e_assign = {e with eexpr = TBinop(OpAssign,ev,e_op) } in
-			e_assign,if flag = Prefix then
-				ev
-			else
-				e1
 		and handle_loop_body ctx e =
 			let join_top = mk_join_node() in
 			let join_bottom = mk_join_node() in
@@ -963,10 +947,10 @@ let run_ssa com e =
 		else
 			alloc_var name t
 	in
-	let has_analyzer_define = Common.defined com Define.StaticAnalyzer in
-	let do_simplify,do_optimize = match com.platform with
-		| Cpp | Flash8 -> true,has_analyzer_define
-		| _ -> has_analyzer_define,has_analyzer_define
+	let do_optimize = Common.defined com Define.StaticAnalyzer in
+	let do_simplify = match com.platform with
+		| Cpp | Flash8 -> true
+		| _ -> false
 	in
 	let with_timer s f =
 		let timer = timer s in
@@ -975,10 +959,8 @@ let run_ssa com e =
 		r
 	in
 	try
-		let e = if do_simplify then
-			with_timer "analyzer-simplify" (fun () ->
-				Simplifier.run com gen_local e
-			)
+		let e = if do_simplify || do_optimize then
+			with_timer "analyzer-simplify-apply" (fun () -> Simplifier.apply com gen_local e)
 		else
 			e
 		in
@@ -986,10 +968,14 @@ let run_ssa com e =
 				let e,cleanup = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
 				let e = with_timer "analyzer-const-propagation" (fun () -> ConstPropagation.apply com e) in
 				let e = with_timer "analyzer-ssa-unapply" (fun () -> Ssa.unapply com e) in
-				let e = Simplifier.unapply e in
 				List.iter (fun f -> f()) cleanup;
 				(* let e = LocalDce.apply com e in *)
 				e
+		else
+			e
+		in
+		let e = if not do_simplify then
+			with_timer "analyzer-simplify-unapply" (fun () -> Simplifier.unapply e)
 		else
 			e
 		in
