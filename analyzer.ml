@@ -262,13 +262,13 @@ module Simplifier = struct
 				let e1 = bind e1 in
 				{e with eexpr = TReturn (Some e1)}
 			| TCast(e1,mto) ->
-				let e1 = bind e1 in
+				let e1 = bind ~allow_tlocal:true e1 in
 				{e with eexpr = TCast(e1,mto)}
 			| _ ->
 				Type.map_expr loop e
-		and bind e =
+		and bind ?(allow_tlocal=false) e =
 			let e = loop e in
-			if skip_binding e then
+			if skip_binding ~allow_tlocal e then
 				e
 			else
 				declare_temp e.etype (Some e) e.epos
