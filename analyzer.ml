@@ -1001,12 +1001,12 @@ let run_ssa com e =
 
 let run_expression_filters com t =
 	match t with
-	| TClassDecl c when (has_analyzer_option c.cl_meta "no_ssa") ->
+	| TClassDecl c when (has_analyzer_option c.cl_meta "ignore") ->
 		()
 	| TClassDecl c ->
 		let process_field cf =
 			match cf.cf_expr with
-			| Some e when not (has_analyzer_option cf.cf_meta "no_ssa") && not (Meta.has Meta.Extern cf.cf_meta) (* TODO: use is_removable_field *) ->
+			| Some e when not (has_analyzer_option cf.cf_meta "ignore") && not (Meta.has Meta.Extern cf.cf_meta) (* TODO: use is_removable_field *) ->
 				cf.cf_expr <- Some (run_ssa com e);
 			| _ -> ()
 		in
