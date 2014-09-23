@@ -171,14 +171,8 @@ module Simplifier = struct
 			| TCall(e1,el) ->
 				let e1 = loop e1 in
 				let check e t =
-					try
-						let meta = get_type_meta t in
-						if has_analyzer_option meta "no_simplification" then
-							e
-						else
-							bind e
-					with Not_found ->
-						bind e
+					if type_has_analyzer_option t "no_simplification" then e
+					else bind e
 				in
 				let el = Codegen.UnificationCallback.check_call check el e1.etype in
 				{e with eexpr = TCall(e1,el)}
@@ -840,14 +834,8 @@ module ConstPropagation = struct
 			| TCall(e1,el) ->
 				let e1 = loop e1 in
 				let check e t =
-					try
-						let meta = get_type_meta t in
-						if has_analyzer_option meta "no_const_propagation" then
-							e
-						else
-							loop e
-					with Not_found ->
-						loop e
+					if type_has_analyzer_option t "no_const_propagation" then e
+					else loop e
 				in
 				let el = Codegen.UnificationCallback.check_call check el e1.etype in
 				{e with eexpr = TCall(e1,el)}
