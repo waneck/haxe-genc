@@ -91,7 +91,7 @@ module Simplifier = struct
 				| TBinop(OpAssignOp op,({eexpr = TLocal _} as e1),e2) ->
 					push e;
 					mk_assign e1
-				| TParenthesis e1 ->
+				| TParenthesis e1 | TMeta(_, e1) ->
 					loop e1 (* this is weird *)
 				| _ ->
 					mk_assign e
@@ -163,7 +163,7 @@ module Simplifier = struct
 				end
 		in
 		let rec loop e = match e.eexpr with
-			| TLocal v when Meta.has Meta.Unbound v.v_meta ->
+			| TLocal v when Meta.has Meta.Unbound v.v_meta && v.v_name <> "`trace" ->
 				raise Exit (* nope *)
 			| TBlock el ->
 				{e with eexpr = TBlock (block loop el)}
