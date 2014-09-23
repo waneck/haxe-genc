@@ -93,17 +93,17 @@ class TestAnalyzer extends TestBase {
 		assertEqualsConst(1, a);
 	}
 
-	function testUnop() {
-		var a = 0;
-		assertEqualsConst(0, a++);
-		assertEqualsConst(1, a);
-		assertEqualsConst(2, ++a);
-		assertEqualsConst(2, a);
-		if (cond1()) {
-			a++;
-		}
-		assertEquals(3, a);
-	}
+	//function testUnop() {
+		//var a = 0;
+		//assertEqualsConst(0, a++);
+		//assertEqualsConst(1, a);
+		//assertEqualsConst(2, ++a);
+		//assertEqualsConst(2, a);
+		//if (cond1()) {
+			//a++;
+		//}
+		//assertEquals(3, a);
+	//}
 
 	function testMultiAssign() {
 		var a;
@@ -123,8 +123,8 @@ class TestAnalyzer extends TestBase {
 		a = 2;
 		var b = a;
 		assertEqualsConst(2, b);
-		b++;
-		assertEqualsConst(3, b);
+		//b++;
+		//assertEqualsConst(3, b);
 	}
 
 	function testConst2() {
