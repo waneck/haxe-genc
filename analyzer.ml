@@ -100,6 +100,7 @@ module Simplifier = struct
 		in
 		let declare_temp t eo p =
 			let v = gen_temp t in
+			v.v_meta <- [Meta.Custom ":test",[],p];
 			let e_v = mk (TLocal v) t p in
 			let declare e_init =
 				let e = mk (TVar (v,e_init)) com.basic.tvoid p in
@@ -295,6 +296,26 @@ module Simplifier = struct
 				e
 			| el ->
 				mk (TBlock (List.rev (e :: el))) e.etype e.epos
+
+	let unapply e =
+		let var_map = ref PMap.empty in
+		let rec loop e = match e.eexpr with
+			| TBlock el ->
+				let el = ExtList.List.filter_map (fun e -> match e.eexpr with
+					| TVar(v,Some e1) when Meta.has (Meta.Custom ":test") v.v_meta ->
+						var_map := PMap.add v.v_id (loop e1) !var_map;
+						None
+					| _ ->
+						Some (loop e)
+				) el in
+				{e with eexpr = TBlock el}
+			| TLocal v when Meta.has (Meta.Custom ":test") v.v_meta ->
+				begin try PMap.find v.v_id !var_map
+				with Not_found -> e end
+			| _ ->
+				Type.map_expr loop e
+		in
+		loop e
 end
 
 module Ssa = struct
@@ -961,6 +982,7 @@ let run_ssa com e =
 				let e,cleanup = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
 				let e = with_timer "analyzer-const-propagation" (fun () -> ConstPropagation.apply com e) in
 				let e = with_timer "analyzer-ssa-unapply" (fun () -> Ssa.unapply com e) in
+				let e = Simplifier.unapply e in
 				List.iter (fun f -> f()) cleanup;
 				(* let e = LocalDce.apply com e in *)
 				e
