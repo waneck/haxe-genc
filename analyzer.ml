@@ -307,7 +307,7 @@ module Ssa = struct
 
 	type ssa_context = {
 		com : Common.context;
-		mutable var_map : (int,int * tvar) PMap.t;
+		mutable cleanup : (unit -> unit) list;
 		mutable cur_vars : (int,tvar) PMap.t;
 		mutable loop_stack : (join_node * join_node) list;
 		mutable exception_stack : join_node list;
@@ -358,6 +358,8 @@ module Ssa = struct
 	let to_block el t p =
 		mk (TBlock el) t p
 
+	let mk_loc v = mk (TLocal v) v.v_type null_pos
+
 	(* TODO: make sure this is conservative *)
 	let can_throw e =
 		let rec loop e = match e.eexpr with
@@ -404,22 +406,25 @@ module Ssa = struct
 		)
 
 	let declare_var ctx v =
-		ctx.var_map <- PMap.add v.v_id (0,v) ctx.var_map;
-		ctx.cur_vars <- PMap.add v.v_id v ctx.cur_vars
+		let old = v.v_name,v.v_extra in
+		ctx.cleanup <- (fun () ->
+			v.v_name <- fst old;
+			v.v_extra <- snd old
+		) :: ctx.cleanup;
+		ctx.cur_vars <- PMap.add v.v_id v ctx.cur_vars;
+		v.v_extra <- Some ([],(Some (mk_loc v)))
 
 	let assign_var ctx v p =
-		if v.v_capture then v else
-		try
-			let i,_ = PMap.find v.v_id ctx.var_map in
-			let i = i + 1 in
-			ctx.var_map <- PMap.add v.v_id (i,v) ctx.var_map;
-			let v' = alloc_var (Printf.sprintf "%s<%i>" v.v_name i) v.v_type in
-			v'.v_meta <- [(Meta.Custom ":ssa"),[EConst(Int (string_of_int v.v_id)),p],p];
+		if v.v_capture then
+			v
+		else begin
+			v.v_name <- v.v_name ^ "'";
+			let v' = alloc_var (Printf.sprintf "%s'" v.v_name) v.v_type in
+			v'.v_meta <- [(Meta.Custom ":ssa"),[],p];
+			v'.v_extra <- Some ([],(Some (mk_loc v)));
 			ctx.cur_vars <- PMap.add v.v_id v' ctx.cur_vars;
 			v'
-		with Not_found ->
-			ctx.com.warning (Printf.sprintf "Unbound variable %s (is_unbound: %b)" v.v_name (has_meta Meta.Unbound v.v_meta)) p;
-			v
+		end
 
 	let get_var ctx v p =
 		try
@@ -445,10 +450,11 @@ module Ssa = struct
 			| [v] ->
 				ctx.cur_vars <- PMap.add i v ctx.cur_vars;
 				acc
-			| _ ->
-				let _,v = PMap.find i ctx.var_map in
+			| {v_extra = Some (_,Some {eexpr = TLocal v})} :: _ ->
 				let v' = assign_var ctx v null_pos in
 				((v',vl) :: acc)
+			| _ ->
+				assert false
 		) !vars []
 
 	let apply com e =
@@ -681,12 +687,13 @@ module Ssa = struct
 		in
 		let ctx = {
 			com = com;
-			var_map = PMap.empty;
 			cur_vars = PMap.empty;
 			loop_stack = [];
 			exception_stack = [];
+			cleanup = [];
 		} in
-		loop ctx e
+		let e = loop ctx e in
+		e,ctx.cleanup
 
 	let unapply com e =
 		let vars = ref PMap.empty in
@@ -716,19 +723,8 @@ module Ssa = struct
 				let e1 = loop e1 in
 				let e2 = loop e2 in
 				{e with eexpr = TFor(v,e1,e2)}
-			| TLocal v when Meta.has (Meta.Custom ":ssa") v.v_meta ->
-				begin match Meta.get (Meta.Custom ":ssa") v.v_meta with
-					| _,[(EConst(Int i)),_],_ ->
-						begin try
-							let v = PMap.find i !vars in
-							{e with eexpr = TLocal v}
-						with Not_found ->
-							com.warning ("Not_found: " ^ (v.v_name)) e.epos;
-							e
-						end
-					| _ ->
-						assert false
-				end
+			| TLocal ({v_extra = Some([],Some {eexpr = TLocal v'})} as v) when Meta.has (Meta.Custom ":ssa") v.v_meta ->
+				{e with eexpr = TLocal v'}
 			| TBlock el ->
 				let rec filter e = match e.eexpr with
 					| TMeta((Meta.Custom ":ssa",_,_),_) ->
@@ -1001,9 +997,10 @@ let run_ssa com e =
 			e
 		in
 		let e = if do_optimize then
-				let e = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
+				let e,cleanup = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
 				let e = with_timer "analyzer-const-propagation" (fun () -> ConstPropagation.apply com e) in
 				let e = with_timer "analyzer-ssa-unapply" (fun () -> Ssa.unapply com e) in
+				List.iter (fun f -> f()) cleanup;
 				(* let e = LocalDce.apply com e in *)
 				e
 		else
