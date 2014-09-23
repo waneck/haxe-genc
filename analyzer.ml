@@ -522,25 +522,16 @@ module Ssa = struct
 				let e' = loop ctx tf.tf_expr in
 				{e with eexpr = TFunction {tf with tf_expr = e'}}
 			(* var modifications *)
-			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when not (Meta.has Meta.Unbound v.v_meta) && v.v_name <> "this" ->
+			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when v.v_name <> "this" ->
 				let e2 = loop ctx e2 in
 				let v = assign_var ctx v e1.epos in
 				{e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v},e2)}
 			| TBinop(OpAssignOp op,({eexpr = TLocal v} as e1),e2) ->
+				ignore(assign_var ctx v e1.epos);
 				let e2 = loop ctx e2 in
-				let e1 = loop ctx e1 in
-				let e_op = mk (TBinop(op,e1,e2)) e.etype e.epos in
-				let v = assign_var ctx v e.epos in
-				let ev = {e1 with eexpr = TLocal v} in
-				let e_assign = {e with eexpr = TBinop(OpAssign,ev,e_op) } in
-				e_assign
-			| TUnop((Increment | Decrement as op),Prefix,({eexpr = TLocal _} as e1)) ->
-				let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
-				let binop = if op = Increment then OpAdd else OpSub in
-				let e = {e with eexpr = TBinop(OpAssignOp binop,e1,e_one)} in
-				loop ctx e
-			| TUnop((Increment | Decrement),Postfix,{eexpr = TLocal _}) ->
-				com.warning ("Postfix unop outside block: " ^ (s_expr e)) e.epos;
+				{e with eexpr = TBinop(OpAssignOp op,e1,e2)}
+			| TUnop((Increment | Decrement),flag,({eexpr = TLocal v} as e1)) ->
+				ignore(assign_var ctx v e1.epos);
 				e
 			(* var user *)
 			| TLocal v ->
@@ -633,40 +624,6 @@ module Ssa = struct
 							| TIf(econd,eif,eelse) | TParenthesis({eexpr = TIf(econd,eif,eelse)}) ->
 								let e,phi = handle_if ctx e econd eif eelse in
 								(e :: phi) @ loop2 el
-							| TUnop((Increment | Decrement as op),flag,({eexpr = TLocal _} as e1)) ->
-								let e_assign,e' = handle_unop ctx op flag e1 in
-								e_assign :: (loop2 el)
-							| TVar (v,Some {eexpr = TUnop((Increment | Decrement as op),Postfix,({eexpr = TLocal v2} as e1))}) ->
-								declare_var ctx v;
-								let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
-								let binop = if op = Increment then OpAdd else OpSub in
-								let e1 = loop ctx e1 in
-								let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
-								let e_v = {e with eexpr = TVar(v, Some e1)} in
-								let v2 = assign_var ctx v2 e1.epos in
-								let e_assign = {e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v2},e_op)} in
-								e_v :: e_assign :: (loop2 el)
-							| TBinop (OpAssign,e1,{eexpr = TUnop((Increment | Decrement as op),Postfix,({eexpr = TLocal v2} as e2))}) ->
-								let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
-								let binop = if op = Increment then OpAdd else OpSub in
-								let e2 = loop ctx e2 in
-								let e1 = loop ctx e1 in
-								let e_op = mk (TBinop(binop,e2,e_one)) e1.etype e1.epos in
-								let e_v = {e with eexpr = TBinop(OpAssign,e1,e2)} in
-								let v2 = assign_var ctx v2 e1.epos in
-								let e_assign = {e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v2},e_op)} in
-								e_v :: e_assign :: (loop2 el)
-							| TVar (v,Some {eexpr = TUnop((Increment | Decrement as op),Prefix,({eexpr = TLocal v2} as e1))}) ->
-								declare_var ctx v;
-								let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
-								let binop = if op = Increment then OpAdd else OpSub in
-								let e1 = loop ctx e1 in
-								let e_op = mk (TBinop(binop,e1,e_one)) e1.etype e1.epos in
-								let v2 = assign_var ctx v2 e1.epos in
-								let e_loc = {e1 with eexpr = TLocal v2} in
-								let e_v = {e with eexpr = TVar(v, Some e_loc)} in
-								let e_assign = {e with eexpr = TBinop(OpAssign,e_loc,e_op)} in
-								e_assign :: e_v :: (loop2 el)
 							| TParenthesis (e1) ->
 								loop2 (e1 :: el)
 							| _ ->
@@ -786,10 +743,10 @@ module ConstPropagation = struct
 					| e1 :: el ->
 						let e1 = loop e1 in
 						if List.for_all (fun e2 -> match e2.eexpr with
- 							| TLocal v when not !is_first_loop_iteration && Meta.has (Meta.Custom ":ssa") v.v_meta && not (PMap.mem v.v_id !var_to_expr_map) ->
- 								(* This means that the SSA variable was not part of the AST, which can happen if parts of the
-								   AST are eliminated (e.g. `if (false)`). In this case we can ignore the value. *)
-								true
+(*  							| TLocal v when not !is_first_loop_iteration && Meta.has (Meta.Custom ":ssa") v.v_meta && not (PMap.mem v.v_id !var_to_expr_map) ->
+ 								This means that the SSA variable was not part of the AST, which can happen if parts of the
+								   AST are eliminated (e.g. `if (false)`). In this case we can ignore the value.
+								true *)
 							| _ ->
 								let b = expr_eq e1 (loop e2) in
 								(* if e1.epos.pfile = "src/Main.hx" then Printf.printf "%s %s %b\n" (s_expr e1) (s_expr e2) b; *)
@@ -799,6 +756,10 @@ module ConstPropagation = struct
 						else
 							e
 				end
+			| TUnop((Increment | Decrement),_,_) ->
+				e
+			| TBinop(OpAssignOp _,_,_) ->
+				e
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
 				let e2 = loop e2 in
 				assign v e2;
