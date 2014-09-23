@@ -63,7 +63,7 @@ class Reflect {
 	@:keep public static function setField( o : Dynamic, field : String, value : Dynamic ) : Void
 	{
 		var field = handleKeywords(field);
-		Builtin.setattr(o,field,value);
+		return Builtin.setattr(o,field,value);
 	}
 
 	public static function getProperty( o : Dynamic, field : String ) : Dynamic
@@ -86,7 +86,7 @@ class Reflect {
 
 		var field = handleKeywords(field);
 
-		if (Builtin.hasattr(o,"set_"+field)) {
+		return if (Builtin.hasattr(o,"set_"+field)) {
 			var tmp = Builtin.getattr(o,"set_"+field);
 			tmp(value);
 		}

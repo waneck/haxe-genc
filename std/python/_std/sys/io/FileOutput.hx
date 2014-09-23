@@ -14,7 +14,7 @@ class FileOutput extends Output {
 	}
 
 	public function seek( p : Int, pos : FileSeek ) : Void {
-		impl.seek(p, pos);
+		return impl.seek(p, pos);
 	}
 
 	public function tell() : Int {

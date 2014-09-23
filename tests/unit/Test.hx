@@ -10,7 +10,7 @@ class Test #if swf_mark implements mt.Protect #end {
 	public function new() {
 	}
 
-	function eq<T>( v : T, v2 : T, ?pos:haxe.PosInfos ) {
+	function eq<T>( v : T, v2 : T, ?pos ) {
 		count++;
 		if( v != v2 ) {
 			report(Std.string(v)+" should be "+Std.string(v2),pos);
@@ -18,7 +18,7 @@ class Test #if swf_mark implements mt.Protect #end {
 		}
 	}
 
-	function feq( v : Float, v2 : Float, ?pos:haxe.PosInfos ) {
+	function feq( v : Float, v2 : Float, ?pos ) {
 		count++;
 		if (!Math.isFinite(v) || !Math.isFinite(v2))
 			eq(v, v2, pos);
@@ -259,7 +259,7 @@ class Test #if swf_mark implements mt.Protect #end {
 			new TestIO(),
 			new TestLocals(),
 			new TestEReg(),
-			//new TestXML(),
+			new TestXML(),
 			new TestMisc(),
 			new TestJson(),
 			new TestResource(),
@@ -300,20 +300,20 @@ class Test #if swf_mark implements mt.Protect #end {
 			//new TestRemoting(),
 		];
 		// SPOD tests
-		//#if ( (neko || php || java || cpp) && !macro && !interp)
-		//#if (travis && !cpp)
-		//if (Sys.systemName() != "Mac")
-		//{
-			//classes.push(new TestSpod(sys.db.Mysql.connect({
-				//host : "localhost",
-				//user : "travis",
-				//pass : "",
-				//port : 3306,
-				//database : "haxe_test" })));
-		//}
-		//#end
-		//classes.push(new TestSpod(sys.db.Sqlite.open("db.db3")));
-		//#end
+		#if ( (neko || php || java || cpp) && !macro && !interp)
+		#if (travis && !cpp)
+		if (Sys.systemName() != "Mac")
+		{
+			classes.push(new TestSpod(sys.db.Mysql.connect({
+				host : "localhost",
+				user : "travis",
+				pass : "",
+				port : 3306,
+				database : "haxe_test" })));
+		}
+		#end
+		classes.push(new TestSpod(sys.db.Sqlite.open("db.db3")));
+		#end
 		TestIssues.addIssueClasses();
 		var current = null;
 		#if (!fail_eager)
