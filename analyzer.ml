@@ -272,8 +272,8 @@ module Simplifier = struct
 			| TField(e1,fa) ->
 				let e1 = bind e1 in
 				{e with eexpr = TField(e1,fa)}
-			| TReturn (Some ({eexpr = TThrow _} as e1)) ->
-				e1 (* this is a bit hackish *)
+			| TReturn (Some ({eexpr = TThrow _ | TReturn _} as e1)) ->
+				loop e1 (* this is a bit hackish *)
 			| TReturn (Some e1) ->
 				let e1 = bind e1 in
 				{e with eexpr = TReturn (Some e1)}
