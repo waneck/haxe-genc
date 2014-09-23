@@ -85,12 +85,12 @@ module Simplifier = struct
 					) cases in
 					let edef = match edef with None -> None | Some edef -> Some (loop edef) in
 					{e with eexpr = TSwitch(e1,cases,edef)}
-				| TBinop(OpAssign,({eexpr = TLocal _} as e1),e2) ->
+(* 				| TBinop(OpAssign,({eexpr = TLocal _} as e1),e2) ->
 					push e;
-					mk_assign e1
-				| TBinop(OpAssignOp op,({eexpr = TLocal _} as e1),e2) ->
+					mk_assign e1 *)
+(* 				| TBinop(OpAssignOp op,({eexpr = TLocal _} as e1),e2) ->
 					push e;
-					mk_assign e1
+					mk_assign e1 *)
 				| TParenthesis e1 | TMeta(_, e1) ->
 					loop e1 (* this is weird *)
 				| _ ->
