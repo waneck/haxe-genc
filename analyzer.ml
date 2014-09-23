@@ -181,7 +181,7 @@ module Simplifier = struct
 						Codegen.UnificationCallback.check_call check el e1.etype
 					| _ ->
 						(* too dangerous *)
-						el
+						List.map loop el
 				in
 				{e with eexpr = TCall(e1,el)}
 			| TNew(c,tl,el) ->
@@ -883,10 +883,11 @@ end
 
 module LocalDce = struct
 	let apply com e =
-		let is_used v = Meta.has Meta.Used v.v_meta in
+		let in_loop = ref false in
+		let is_used v = !in_loop || Meta.has Meta.Used v.v_meta in
 		let use v = v.v_meta <- (Meta.Used,[],Ast.null_pos) :: v.v_meta in
 		let rec filter e = match e.eexpr with
-			| TVar(v,eo) when not (is_used v) ->
+ 			| TVar(v,eo) when not (is_used v) ->
 				begin match eo with
 					| None ->
 						None
@@ -897,7 +898,7 @@ module LocalDce = struct
 				end
 			| TVar _ ->
 				Some e
-			| TBinop(OpAssign,{eexpr = TLocal v},e2) when not (is_used v) ->
+			| TBinop(OpAssign,{eexpr = TLocal v},e2) | TMeta(_,{eexpr = TBinop(OpAssign,{eexpr = TLocal v},e2)}) when not (is_used v) ->
 				filter e2
 			| TLocal v when not (is_used v) ->
 				None
@@ -911,9 +912,15 @@ module LocalDce = struct
 			| TBlock el ->
 				let rec block el = match el with
 					| e :: el ->
+						let last = el = [] in
 						let el = block el in
 						let e = loop e in
-						begin match filter e with
+						begin if last then match e.eexpr with
+							| TBinop(OpAssign,{eexpr = TLocal v},e2) when not (is_used v) ->
+								el
+							| _ ->
+								e :: el
+						else match filter e with
 							| None ->
 								el
 							| Some e ->
@@ -927,12 +934,27 @@ module LocalDce = struct
 				use v;
 				e
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
+				use v;
 				let e2 = loop e2 in
 				{e with eexpr = TBinop(OpAssign,e1,e2)}
 			| TIf ({ eexpr = TConst (TBool t) },e1,e2) ->
 				(if t then loop e1 else match e2 with None -> { e with eexpr = TBlock [] } | Some e -> loop e)
+			| TWhile(e1,e2,mode) ->
+				let e2 = handle_loop_body e2 in
+				let e1 = loop e1 in
+				{e with eexpr = TWhile(e1,e2,mode)}
+			| TFor(v,e1,e2) ->
+				let e2 = handle_loop_body e2 in
+				let e1 = loop e1 in
+				{e with eexpr = TFor(v,e1,e2)}
 			| _ ->
 				Type.map_expr loop e
+		and handle_loop_body e =
+			let old = !in_loop in
+			in_loop := true;
+			let e = loop e in
+			in_loop := old;
+			e
 		in
 		loop e
 end
