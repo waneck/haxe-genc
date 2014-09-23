@@ -10,15 +10,11 @@ class TestBase {
 		numFailures = 0;
 	}
 
-	@:generic
 	function assertEquals<T>(expected:T, actual:T, ?p:haxe.PosInfos) {
 		++numTests;
 		if (expected != actual) {
 			++numFailures;
-			trace(p.lineNumber);
-			haxe.Log.trace(actual);
-			haxe.Log.trace("should be");
-			haxe.Log.trace(expected);
+			haxe.Log.trace('$actual should be $expected', p);
 		}
 	}
 

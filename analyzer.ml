@@ -146,7 +146,7 @@ module Simplifier = struct
 		let skip_binding e =
 			let rec loop e =
 				match e.eexpr with
-				| TLocal _ | TConst _ | TTypeExpr _ | TFunction _ -> ()
+				| TConst _ | TTypeExpr _ | TFunction _ -> ()
 				| TParenthesis e1 | TCast(e1,None) | TEnumParameter(e1,_,_) -> Type.iter loop e
 				| _ -> raise Exit
 			in
