@@ -143,10 +143,11 @@ module Simplifier = struct
 
 	let run com gen_temp e =
 		let block,declare_temp,close_block = mk_block_context com gen_temp in
-		let skip_binding e =
+		let skip_binding ?(allow_tlocal=false) e =
 			let rec loop e =
 				match e.eexpr with
 				| TConst _ | TTypeExpr _ | TFunction _ -> ()
+				| TLocal _ when allow_tlocal -> ()
 				| TParenthesis e1 | TCast(e1,None) | TEnumParameter(e1,_,_) -> Type.iter loop e
 				| _ -> raise Exit
 			in
@@ -276,7 +277,10 @@ module Simplifier = struct
 			else
 				declare_temp e.etype (Some e) e.epos
 		and ordered_list el =
-			List.map bind el
+			if List.for_all (skip_binding ~allow_tlocal:true) el then
+				List.map loop el
+			else
+				List.map bind el
 		in
 		let e = loop e in
 		match close_block() with
