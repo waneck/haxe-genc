@@ -149,6 +149,7 @@ module Simplifier = struct
 				| TConst _ | TTypeExpr _ | TFunction _ -> ()
 				| TLocal _ when allow_tlocal -> ()
 				| TParenthesis e1 | TCast(e1,None) | TEnumParameter(e1,_,_) -> Type.iter loop e
+				| TField(_,(FStatic(c,cf) | FInstance(c,_,cf))) when has_analyzer_option cf.cf_meta "no_simplification" || has_analyzer_option c.cl_meta "no_simplification" -> ()
 				| _ -> raise Exit
 			in
 			try
@@ -166,6 +167,8 @@ module Simplifier = struct
 			| TBlock el ->
 				{e with eexpr = TBlock (block loop el)}
 			| TCall({eexpr = TField(_,(FStatic(c,cf) | FInstance(c,_,cf)))},el) when has_analyzer_option cf.cf_meta "no_simplification" || has_analyzer_option c.cl_meta "no_simplification" ->
+				e
+			| TField(_,(FStatic(c,cf) | FInstance(c,_,cf))) when has_analyzer_option cf.cf_meta "no_simplification" || has_analyzer_option c.cl_meta "no_simplification" ->
 				e
 			| TCall(e1,el) ->
 				let e1 = loop e1 in
