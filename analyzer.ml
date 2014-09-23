@@ -250,6 +250,10 @@ module Simplifier = struct
 				let e_true = mk (TConst (TBool true)) com.basic.tbool p in
 				let e = mk (TWhile(Codegen.mk_parent e_true,e_block,NormalWhile)) e.etype p in
 				loop e
+			| TFor(v,e1,e2) ->
+				let e1 = bind e1 in
+				let e2 = loop e2 in
+				{e with eexpr = TFor(v,e1,e2)}
 			| TIf(e1,e2,eo) ->
 				let e1 = bind e1 in
 				let e2 = loop e2 in
