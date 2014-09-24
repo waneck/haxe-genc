@@ -339,49 +339,12 @@ module Ssa = struct
 			e
 		)
 
-	let invert_phi phi =
-		List.fold_left (fun acc (v,vl) -> match List.rev vl with
-			| [] -> acc
-			| v2 :: _ -> PMap.add v2.v_id v acc
-		) PMap.empty phi
-
-	let replace_locals phi_inv e =
-		let rec loop e = match e.eexpr with
-			| TLocal v ->
-				begin try
-					{e with eexpr = TLocal (PMap.find v.v_id phi_inv)}
-				with Not_found ->
-					e
-				end
-			| _ ->
-				Type.map_expr loop e
-		in
-		loop e
-
-	let replace_vars phi_inv vars =
-		PMap.mapi (fun i v ->
-			try
-				let v' = PMap.find v.v_id phi_inv in
-				v'
-			with Not_found -> v
-		) vars
-
-	let build_phi vl p =
-		List.map (fun (v,vl) ->
-			let phi = mk_phi vl p in
-			let e = Codegen.binop OpAssign (mk (TLocal v) v.v_type p) phi phi.etype p in
-			mk (TMeta((Meta.Custom ":ssa",[],e.epos),e)) e.etype e.epos
-		) vl
-
-	let to_block el t p =
-		mk (TBlock el) t p
-
 	let mk_loc v = mk (TLocal v) v.v_type null_pos
 
 	(* TODO: make sure this is conservative *)
 	let can_throw e =
 		let rec loop e = match e.eexpr with
-			| TConst _ | TLocal _ | TTypeExpr _ | TFunction _ -> ()
+			| TConst _ | TLocal _ | TTypeExpr _ | TFunction _ | TBlock _ -> ()
 			| TCall _ | TNew _ | TThrow _ | TCast(_,Some _) -> raise Exit
 			| _ -> Type.iter loop e
 		in
@@ -389,13 +352,6 @@ module Ssa = struct
 			loop e; false
 		with Exit ->
 			true
-
-	let append_phi e phi = match phi with
-		| [] ->
-			e
-		| _ ->
-			let e_phi = to_block (build_phi phi e.epos) e.etype e.epos in
-			concat e e_phi
 
 	let mk_join_node() = {
 		branches = []
@@ -433,7 +389,7 @@ module Ssa = struct
 
 	let assign_var ctx v e p =
 		if v.v_capture then
-			v
+			()
 		else begin
 			let i = match v.v_extra with
 				| Some (l,eo) ->
@@ -448,7 +404,7 @@ module Ssa = struct
 			ctx.cur_vars <- PMap.add v.v_id v' ctx.cur_vars;
 			ctx.var_values <- PMap.add v'.v_id e ctx.var_values;
 			(* if p.pfile = "src/Main.hx" then Printf.printf "%s (%i) = %s\n" v'.v_name v'.v_id (s_expr_pretty e); *)
-			v'
+			()
 		end
 
 	let get_var ctx v p =
@@ -471,16 +427,31 @@ module Ssa = struct
 			) branch;
 		in
 		List.iter handle_branch node.branches;
-		PMap.foldi (fun i vl acc -> match vl with
+		PMap.iter (fun i vl -> match vl with
 			| [v] ->
 				ctx.cur_vars <- PMap.add i v ctx.cur_vars;
-				acc
 			| {v_extra = Some (_,Some {eexpr = TLocal v})} :: _ ->
-				let v' = assign_var ctx v (mk_phi vl null_pos) p in
-				((v',vl) :: acc)
+				assign_var ctx v (mk_phi vl null_pos) p
 			| _ ->
 				assert false
-		) !vars []
+		) !vars
+
+	let replace_locals ctx e =
+		let rec loop e = match e.eexpr with
+			| TLocal {v_extra = Some (_,Some {eexpr = TLocal v})} ->
+				begin try
+					let v = PMap.find v.v_id ctx.cur_vars in
+					{e with eexpr = TLocal v}
+				with Not_found ->
+					e
+				end
+			| TBinop((OpAssign | OpAssignOp _),{eexpr = TLocal _},_)
+			| TUnop((Increment | Decrement),_,{eexpr = TLocal _}) ->
+				e
+			| _ ->
+				Type.map_expr loop e
+		in
+		loop e
 
 	let apply com e =
 		let rec handle_if ctx e econd eif eelse =
@@ -499,25 +470,22 @@ module Ssa = struct
 					close join;
 					Some eelse
 			in
-			let phi = close_join_node ctx join e.epos in
+			close_join_node ctx join e.epos;
 			let e = {e with eexpr = TIf(econd,eif,eelse)} in
-			e,(build_phi phi e.epos)
+			e
 		and handle_loop_body ctx e =
 			let join_top = mk_join_node() in
 			let join_bottom = mk_join_node() in
 			let unset = set_loop_join ctx join_top join_bottom in
 			let close = branch ctx in
-			let ebody = loop ctx e in
+			ignore(loop ctx e); (* TODO: I don't know if this is sane. *)
 			close join_top;
-			unset();
 			add_vars join_top ctx.cur_vars;
-			let phi_top = close_join_node ctx join_top e.epos in
-			let phi_top_inv = invert_phi phi_top in
-			let ebody = replace_locals phi_top_inv ebody in
-			join_bottom.branches <- List.map (replace_vars phi_top_inv) join_bottom.branches;
-			ctx.var_values <- PMap.map (fun e -> replace_locals phi_top_inv e) ctx.var_values;
-			let phi_bottom = close_join_node ctx join_bottom e.epos in
-			ebody,phi_bottom,phi_top
+			close_join_node ctx join_top e.epos;
+			let ebody = loop ctx e in
+			unset();
+			close_join_node ctx join_bottom e.epos;
+			ebody
 		and loop ctx e = match e.eexpr with
 			(* var declarations *)
 			| TVar(v,eo) ->
@@ -537,8 +505,8 @@ module Ssa = struct
 			(* var modifications *)
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when v.v_name <> "this" ->
 				let e2 = loop ctx e2 in
-				let v = assign_var ctx v e2 e1.epos in
-				{e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v},e2)}
+				let _ = assign_var ctx v e2 e1.epos in
+				{e with eexpr = TBinop(OpAssign,e1,e2)}
 			| TBinop(OpAssignOp op,({eexpr = TLocal v} as e1),e2) ->
 				let e_op = mk (TBinop(op,e1,e2)) e.etype e.epos in
 				ignore(assign_var ctx v e_op e1.epos);
@@ -556,9 +524,7 @@ module Ssa = struct
 				{e with eexpr = TLocal v}
 			(* control flow *)
 			| TIf(econd,eif,eelse) ->
-				(* com.warning "If outside block" e.epos; *)
-				let e,phi = handle_if ctx e econd eif eelse in
-				mk (TBlock (e :: phi)) e.etype e.epos
+				handle_if ctx e econd eif eelse
 			| TSwitch(e1,cases,edef) ->
 				let e1 = loop ctx e1 in
 				let join = mk_join_node() in
@@ -585,22 +551,20 @@ module Ssa = struct
 						end;
 						None
 				in
-				let phi = close_join_node ctx join e.epos in
+				close_join_node ctx join e.epos;
 				let e = {e with eexpr = TSwitch(e1,cases,edef)} in
-				append_phi e phi
+				e
 			| TWhile(econd,ebody,mode) ->
 				let econd = loop ctx econd in
-				let ebody,phi_bottom,phi_top = handle_loop_body ctx ebody in
-				let e_phi_top = to_block (build_phi phi_top e.epos) e.etype e.epos in
-				let e = {e with eexpr = TWhile(econd,concat e_phi_top ebody,mode)} in
-				append_phi e phi_bottom
+				let ebody = handle_loop_body ctx ebody in
+				let e = {e with eexpr = TWhile(econd,ebody,mode)} in
+				e
 			| TFor(v,e1,ebody) ->
 				declare_var  ctx v;
 				let e1 = loop ctx e1 in
-				let ebody,phi_bottom,phi_top = handle_loop_body ctx ebody in
-				let e_phi_top = to_block (build_phi phi_top e.epos) e.etype e.epos in
-				let e = {e with eexpr = TFor(v,e1,concat e_phi_top ebody)} in
-				append_phi e phi_bottom
+				let ebody = handle_loop_body ctx ebody in
+				let e = {e with eexpr = TFor(v,e1,ebody)} in
+				e
 			| TTry(e1,catches) ->
 				let join_ex = mk_join_node() in
 				let join_bottom = mk_join_node() in
@@ -608,19 +572,17 @@ module Ssa = struct
 				let e1 = loop ctx e1 in
 				unset();
 				add_vars join_bottom ctx.cur_vars;
-				let phi = close_join_node ctx join_ex e.epos in
-				let e_phi = to_block (build_phi phi e.epos) e.etype e.epos in
+				close_join_node ctx join_ex e.epos;
 				let catches = List.map (fun (v,e) ->
 					declare_var ctx v;
 					let close = branch ctx in
 					let e = loop ctx e in
 					close join_bottom;
-					let e = concat e_phi e in
 					v,e
 				) catches in
-				let phi = close_join_node ctx join_bottom e.epos in
+				close_join_node ctx join_bottom e.epos;
 				let e = {e with eexpr = TTry(e1,catches)} in
-				append_phi e phi
+				e
 			| TBreak ->
 				begin match ctx.loop_stack with
 					| [] -> error "Break outside loop" e.epos
@@ -633,25 +595,6 @@ module Ssa = struct
 					| (join,_) :: _ -> add_vars join ctx.cur_vars
 				end;
 				e
-			(* misc *)
-			| TBlock el ->
-				let rec loop2 el = match el with
-					| e :: el ->
-						begin match e.eexpr with
-							| TIf(econd,eif,eelse) | TParenthesis({eexpr = TIf(econd,eif,eelse)}) ->
-								let e,phi = handle_if ctx e econd eif eelse in
-								(e :: phi) @ loop2 el
-							| TParenthesis (e1) ->
-								loop2 (e1 :: el)
-							| _ ->
-								let e = loop ctx e in
-								e :: (loop2 el)
-						end
-					| [] ->
-						[]
-				in
-				let el = loop2 el in
-				{e with eexpr = TBlock el}
 			| _ ->
 				begin match ctx.exception_stack with
 					| join :: _ when can_throw e -> add_vars join ctx.cur_vars
@@ -725,20 +668,35 @@ module ConstPropagation = struct
 		| _ ->
 			false
 
-	let rec value e = match e.eexpr with
-(* 		| TBinop(OpAssign,_,e2) ->
-			value e2 *)
-		| TBinop(op,e1,e2) ->
-			let e1 = value e1 in
-			let e2 = value e2 in
+	let rec local ssa v =
+		if v.v_capture then raise Not_found;
+		if type_has_analyzer_option v.v_type "no_const_propagation" then raise Not_found;
+		begin match follow v.v_type with
+			| TDynamic _ -> raise Not_found
+			| _ -> ()
+		end;
+		let e = PMap.find v.v_id ssa.var_values in
+		ssa.var_values <- PMap.remove v.v_id ssa.var_values;
+		let e = value ssa e in
+		ssa.var_values <- PMap.add v.v_id e ssa.var_values;
+		e
+
+	and value ssa e = match e.eexpr with
+		| TUnop((Increment | Decrement),_,_)
+		| TBinop(OpAssignOp _,_,_)
+		| TBinop(OpAssign,_,_) ->
+			raise Not_found
+(* 		| TBinop(op,e1,e2) ->
+			let e1 = value ssa e1 in
+			let e2 = value ssa e2 in
 			let e = {e with eexpr = TBinop(op,e1,e2)} in
 			let e' = Optimizer.optimize_binop e op e1 e2 in
 			e'
 		| TUnop(op,flag,e1) ->
-			let e1 = value e1 in
-			Optimizer.optimize_unop {e with eexpr = TUnop(op,flag,e1)} op flag e1
+			let e1 = value ssa e1 in
+			Optimizer.optimize_unop {e with eexpr = TUnop(op,flag,e1)} op flag e1 *)
 		| TCall ({eexpr = TLocal {v_name = "__ssa_phi__"}},el) ->
-			let el = List.map value el in
+			let el = List.map (value ssa) el in
 			begin match el with
 				| [] -> assert false
 				| e1 :: el ->
@@ -747,7 +705,7 @@ module ConstPropagation = struct
 						(* if e1.epos.pfile = "src/Main.hx" then Printf.printf "Eq: %s %s %b\n" (s_expr e1) (s_expr e2) b; *)
 						b
 					) el then
-						e1
+						value ssa e1
 					else
 						raise Not_found
 			end
@@ -757,7 +715,9 @@ module ConstPropagation = struct
 				| _ -> e
 			end
 		| TParenthesis e1 | TMeta(_,e1) ->
-			value e1
+			value ssa e1
+		| TLocal v ->
+			local ssa v
 		| _ ->
 			raise Not_found
 
@@ -769,14 +729,9 @@ module ConstPropagation = struct
 			| TFunction tf ->
 				had_function := true;
 				{e with eexpr = TFunction {tf with tf_expr = loop tf.tf_expr}}
-			| TLocal v when (match follow v.v_type with TDynamic _ -> false | _ -> not v.v_capture && not (type_has_analyzer_option v.v_type "no_const_propagation")) ->
-				begin try
-					let e' = PMap.find v.v_id ssa.var_values in
-					let e' = value e' in
-					e'
-				with Not_found ->
-					e
-				end
+			| TLocal v ->
+				begin try local ssa v
+				with Not_found -> e end
 			| TCall({eexpr = TField(_,(FStatic(_,cf) | FInstance(_,_,cf) | FAnon cf))},el) when has_analyzer_option cf.cf_meta "no_const_propagation" ->
 				e
 			| TCall(e1,el) ->
@@ -787,13 +742,12 @@ module ConstPropagation = struct
 				in
 				let el = Codegen.UnificationCallback.check_call check el e1.etype in
 				{e with eexpr = TCall(e1,el)}
-			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
-				let e2 = loop e2 in
-				ssa.var_values <- PMap.add v.v_id e2 ssa.var_values;
-				{e with eexpr = TBinop(OpAssign,e1,e2)}
 			| TUnop((Increment | Decrement),_,_)
 			| TBinop(OpAssignOp _,_,_) ->
 				e
+			| TBinop(OpAssign,({eexpr = TLocal _} as e1),e2) ->
+				let e2 = loop e2 in
+				{e with eexpr = TBinop(OpAssign,e1,e2)}
 			| TIf(e1,e2,eo) ->
 				let e1 = loop e1 in
 				let e2 = loop e2 in
@@ -811,10 +765,6 @@ module ConstPropagation = struct
 						let eo = match eo with None -> None | Some e -> Some (loop e) in
 						{e with eexpr = TIf(e1,e2,eo)}
 				end;
-			| TVar(v,Some e1) ->
-				let e1 = loop e1 in
-				ssa.var_values <- PMap.add v.v_id e1 ssa.var_values;
-				{e with eexpr = TVar(v,Some e1)}
 			| _ ->
 				Type.map_expr loop e
 		in
@@ -823,78 +773,31 @@ end
 
 module LocalDce = struct
 	let apply com e =
-		let in_loop = ref false in
-		let is_used v = !in_loop || Meta.has Meta.Used v.v_meta in
+		let is_used v = Meta.has Meta.Used v.v_meta in
 		let use v = v.v_meta <- (Meta.Used,[],Ast.null_pos) :: v.v_meta in
-		let rec filter e = match e.eexpr with
-			| TVar(v,eo) when not (is_used v) ->
-				begin match eo with
-					| None ->
-						None
-					| Some e when not (Optimizer.has_side_effect e) ->
-						None
-					| Some e ->
-						filter e
-				end
-			| TVar _ ->
-				Some e
-			| TBinop(OpAssign,{eexpr = TLocal v},e2) | TMeta(_,{eexpr = TBinop(OpAssign,{eexpr = TLocal v},e2)}) when not (is_used v) ->
-				filter e2
-			| TLocal v when not (is_used v) ->
-				None
-			| _ ->
-				if Optimizer.has_side_effect e then
-					Some e
-				else
-					None
-		in
 		let rec loop e = match e.eexpr with
+ 			| TLocal {v_extra = Some (_,Some {eexpr = TLocal v})} ->
+				use v;
+				e
+			| TVar(v,Some e1) when not (is_used v) ->
+				let e1 = loop e1 in
+				e1
 			| TBlock el ->
 				let rec block el = match el with
 					| e :: el ->
-						let last = el = [] in
 						let el = block el in
-						let e = loop e in
-						begin if last then match e.eexpr with
-							| TBinop(OpAssign,{eexpr = TLocal v},e2) when not (is_used v) ->
-								el
-							| _ ->
-								e :: el
-						else match filter e with
-							| None ->
-								el
-							| Some e ->
-								e :: el
+						if el <> [] && not (Optimizer.has_side_effect e) then
+							el
+						else begin
+							let e = loop e in
+							e :: el
 						end
 					| [] ->
 						[]
 				in
 				{e with eexpr = TBlock (block el)}
-			| TLocal v ->
-				use v;
-				e
-			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
-				use v;
-				let e2 = loop e2 in
-				{e with eexpr = TBinop(OpAssign,e1,e2)}
-			| TIf ({ eexpr = TConst (TBool t) },e1,e2) ->
-				(if t then loop e1 else match e2 with None -> { e with eexpr = TBlock [] } | Some e -> loop e)
-			| TWhile(e1,e2,mode) ->
-				let e2 = handle_loop_body e2 in
-				let e1 = loop e1 in
-				{e with eexpr = TWhile(e1,e2,mode)}
-			| TFor(v,e1,e2) ->
-				let e2 = handle_loop_body e2 in
-				let e1 = loop e1 in
-				{e with eexpr = TFor(v,e1,e2)}
 			| _ ->
 				Type.map_expr loop e
-		and handle_loop_body e =
-			let old = !in_loop in
-			in_loop := true;
-			let e = loop e in
-			in_loop := old;
-			e
 		in
 		loop e
 end
@@ -938,9 +841,9 @@ let run_ssa com e =
 		let e = if do_optimize then
 				let e,ssa = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
 				let e = with_timer "analyzer-const-propagation" (fun () -> ConstPropagation.apply ssa e) in
+				(* let e = LocalDce.apply com e in *)
 				let e = with_timer "analyzer-ssa-unapply" (fun () -> Ssa.unapply com e) in
 				List.iter (fun f -> f()) ssa.Ssa.cleanup;
-				(* let e = LocalDce.apply com e in *)
 				e
 		else
 			e

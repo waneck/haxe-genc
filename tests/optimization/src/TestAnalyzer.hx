@@ -522,13 +522,13 @@ class TestAnalyzer extends TestBase {
 		assertEqualsConst(2, a);
 	}
 
-	function testMisc() {
-		var a = 1;
-		function call(a, b, c) { return a + b + c; }
-		assertEquals(5, call(assertEqualsConst(1, a), assertEqualsConst(2, a = a + 1), assertEqualsConst(2, a)));
-		assertEquals(22, call(assertEqualsConst(2, a++), assertEqualsConst(4, ++a), assertEqualsConst(16, a *= a)));
-		assertEquals(50, call(a, a = a + 1, a));
-	}
+	//function testMisc() {
+		//var a = 1;
+		//function call(a, b, c) { return a + b + c; }
+		//assertEquals(5, call(assertEqualsConst(1, a), assertEqualsConst(2, a = a + 1), assertEqualsConst(2, a)));
+		//assertEquals(22, call(assertEqualsConst(2, a++), assertEqualsConst(4, ++a), assertEqualsConst(16, a *= a)));
+		//assertEquals(50, call(a, a = a + 1, a));
+	//}
 
 	function cond1() {
 		append("cond1");
