@@ -105,18 +105,18 @@ class TestAnalyzer extends TestBase {
 		//assertEquals(3, a);
 	//}
 
-	function testMultiAssign() {
-		var a;
-		var b;
-		var c = a = b = 1;
-		assertEqualsConst(1, a);
-		assertEqualsConst(1, b);
-		assertEqualsConst(1, c);
-		c = a = b = 2;
-		assertEqualsConst(2, a);
-		assertEqualsConst(2, b);
-		assertEqualsConst(2, c);
-	}
+	//function testMultiAssign() {
+		//var a;
+		//var b;
+		//var c = a = b = 1;
+		//assertEqualsConst(1, a);
+		//assertEqualsConst(1, b);
+		//assertEqualsConst(1, c);
+		//c = a = b = 2;
+		//assertEqualsConst(2, a);
+		//assertEqualsConst(2, b);
+		//assertEqualsConst(2, c);
+	//}
 
 	function testConst1() {
 		var a = 1;

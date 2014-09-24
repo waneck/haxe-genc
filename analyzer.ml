@@ -2,16 +2,8 @@ open Ast
 open Type
 open Common
 
-let assigns_to_trace = ref false
-
-let rec run e =
-	match e.eexpr with
-	| TBinop(OpAssign, {eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"}, {cf_name = "trace"}))}, _) ->
-		assigns_to_trace := true
-	| _ ->
-		Type.iter run e
-
 let s_expr = s_expr (s_type (print_context()))
+let s_expr_pretty = s_expr_pretty "" (s_type (print_context()))
 let debug e = if e.epos.pfile = "src/Main.hx" then print_endline (s_expr e)
 
 let has_analyzer_option meta s =
@@ -336,6 +328,7 @@ module Ssa = struct
 		mutable cur_vars : (int,tvar) PMap.t;
 		mutable loop_stack : (join_node * join_node) list;
 		mutable exception_stack : join_node list;
+		mutable var_values : (int,texpr) PMap.t;
 	}
 
 	let mk_phi =
@@ -431,23 +424,30 @@ module Ssa = struct
 		)
 
 	let declare_var ctx v =
-		let old = v.v_name,v.v_extra in
+		let old = v.v_extra in
 		ctx.cleanup <- (fun () ->
-			v.v_name <- fst old;
-			v.v_extra <- snd old
+			v.v_extra <- old
 		) :: ctx.cleanup;
 		ctx.cur_vars <- PMap.add v.v_id v ctx.cur_vars;
 		v.v_extra <- Some ([],(Some (mk_loc v)))
 
-	let assign_var ctx v p =
+	let assign_var ctx v e p =
 		if v.v_capture then
 			v
 		else begin
-			v.v_name <- v.v_name ^ "'";
-			let v' = alloc_var (Printf.sprintf "%s'" v.v_name) v.v_type in
+			let i = match v.v_extra with
+				| Some (l,eo) ->
+					v.v_extra <- Some (("",t_dynamic) :: l,eo);
+					List.length l + 1
+				| _ ->
+					assert false
+			in
+			let v' = alloc_var (Printf.sprintf "%s<%i>" v.v_name i) v.v_type in
 			v'.v_meta <- [(Meta.Custom ":ssa"),[],p];
 			v'.v_extra <- Some ([],(Some (mk_loc v)));
 			ctx.cur_vars <- PMap.add v.v_id v' ctx.cur_vars;
+			ctx.var_values <- PMap.add v'.v_id e ctx.var_values;
+			(* if p.pfile = "src/Main.hx" then Printf.printf "%s (%i) = %s\n" v'.v_name v'.v_id (s_expr_pretty e); *)
 			v'
 		end
 
@@ -458,7 +458,7 @@ module Ssa = struct
 			ctx.com.warning (Printf.sprintf "Unbound variable %s (is_unbound: %b)" v.v_name (has_meta Meta.Unbound v.v_meta)) p;
 			v
 
-	let close_join_node ctx node =
+	let close_join_node ctx node p =
 		let vars = ref PMap.empty in
 		let rec handle_branch branch =
 			PMap.iter (fun i v ->
@@ -476,7 +476,7 @@ module Ssa = struct
 				ctx.cur_vars <- PMap.add i v ctx.cur_vars;
 				acc
 			| {v_extra = Some (_,Some {eexpr = TLocal v})} :: _ ->
-				let v' = assign_var ctx v null_pos in
+				let v' = assign_var ctx v (mk_phi vl null_pos) p in
 				((v',vl) :: acc)
 			| _ ->
 				assert false
@@ -499,7 +499,7 @@ module Ssa = struct
 					close join;
 					Some eelse
 			in
-			let phi = close_join_node ctx join in
+			let phi = close_join_node ctx join e.epos in
 			let e = {e with eexpr = TIf(econd,eif,eelse)} in
 			e,(build_phi phi e.epos)
 		and handle_loop_body ctx e =
@@ -511,11 +511,12 @@ module Ssa = struct
 			close join_top;
 			unset();
 			add_vars join_top ctx.cur_vars;
-			let phi_top = close_join_node ctx join_top in
+			let phi_top = close_join_node ctx join_top e.epos in
 			let phi_top_inv = invert_phi phi_top in
 			let ebody = replace_locals phi_top_inv ebody in
 			join_bottom.branches <- List.map (replace_vars phi_top_inv) join_bottom.branches;
-			let phi_bottom = close_join_node ctx join_bottom in
+			ctx.var_values <- PMap.map (fun e -> replace_locals phi_top_inv e) ctx.var_values;
+			let phi_bottom = close_join_node ctx join_bottom e.epos in
 			ebody,phi_bottom,phi_top
 		and loop ctx e = match e.eexpr with
 			(* var declarations *)
@@ -523,7 +524,10 @@ module Ssa = struct
 				declare_var ctx v;
 				let eo = match eo with
 					| None -> None
-					| Some e -> Some (loop ctx e)
+					| Some e ->
+						let e = loop ctx e in
+						ctx.var_values <- PMap.add v.v_id e ctx.var_values;
+						Some e
 				in
 				{e with eexpr = TVar(v,eo)}
 			| TFunction tf ->
@@ -533,14 +537,18 @@ module Ssa = struct
 			(* var modifications *)
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when v.v_name <> "this" ->
 				let e2 = loop ctx e2 in
-				let v = assign_var ctx v e1.epos in
+				let v = assign_var ctx v e2 e1.epos in
 				{e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v},e2)}
 			| TBinop(OpAssignOp op,({eexpr = TLocal v} as e1),e2) ->
-				ignore(assign_var ctx v e1.epos);
+				let e_op = mk (TBinop(op,e1,e2)) e.etype e.epos in
+				ignore(assign_var ctx v e_op e1.epos);
 				let e2 = loop ctx e2 in
 				{e with eexpr = TBinop(OpAssignOp op,e1,e2)}
-			| TUnop((Increment | Decrement),flag,({eexpr = TLocal v} as e1)) ->
-				ignore(assign_var ctx v e1.epos);
+			| TUnop((Increment | Decrement as op),flag,({eexpr = TLocal v} as e1)) ->
+				let op = match op with Increment -> OpAdd | Decrement -> OpSub | _ -> assert false in
+				let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
+				let e_op = mk (TBinop(op,e1,e_one)) e.etype e.epos in
+				ignore(assign_var ctx v e_op e1.epos);
 				e
 			(* var user *)
 			| TLocal v ->
@@ -577,7 +585,7 @@ module Ssa = struct
 						end;
 						None
 				in
-				let phi = close_join_node ctx join in
+				let phi = close_join_node ctx join e.epos in
 				let e = {e with eexpr = TSwitch(e1,cases,edef)} in
 				append_phi e phi
 			| TWhile(econd,ebody,mode) ->
@@ -600,7 +608,7 @@ module Ssa = struct
 				let e1 = loop ctx e1 in
 				unset();
 				add_vars join_bottom ctx.cur_vars;
-				let phi = close_join_node ctx join_ex in
+				let phi = close_join_node ctx join_ex e.epos in
 				let e_phi = to_block (build_phi phi e.epos) e.etype e.epos in
 				let catches = List.map (fun (v,e) ->
 					declare_var ctx v;
@@ -610,7 +618,7 @@ module Ssa = struct
 					let e = concat e_phi e in
 					v,e
 				) catches in
-				let phi = close_join_node ctx join_bottom in
+				let phi = close_join_node ctx join_bottom e.epos in
 				let e = {e with eexpr = TTry(e1,catches)} in
 				append_phi e phi
 			| TBreak ->
@@ -657,9 +665,10 @@ module Ssa = struct
 			loop_stack = [];
 			exception_stack = [];
 			cleanup = [];
+			var_values = PMap.empty;
 		} in
 		let e = loop ctx e in
-		e,ctx.cleanup
+		e,ctx
 
 	let unapply com e =
 		let vars = ref PMap.empty in
@@ -708,142 +717,79 @@ module Ssa = struct
 end
 
 module ConstPropagation = struct
+	open Ssa
+
 	let expr_eq e1 e2 = match e1.eexpr,e2.eexpr with
 		| TConst ct1, TConst ct2 ->
 			ct1 = ct2
 		| _ ->
 			false
 
-	let apply com e =
-		let var_to_expr_map = ref PMap.empty in
-		let assign v e =
-			var_to_expr_map := PMap.add v.v_id e !var_to_expr_map
-		in
-		let is_first_loop_iteration = ref false in
-		let had_function = ref false in
+	let rec value e = match e.eexpr with
+(* 		| TBinop(OpAssign,_,e2) ->
+			value e2 *)
+		| TBinop(op,e1,e2) ->
+			let e1 = value e1 in
+			let e2 = value e2 in
+			let e = {e with eexpr = TBinop(op,e1,e2)} in
+			let e' = Optimizer.optimize_binop e op e1 e2 in
+			e'
+		| TUnop(op,flag,e1) ->
+			let e1 = value e1 in
+			Optimizer.optimize_unop {e with eexpr = TUnop(op,flag,e1)} op flag e1
+		| TCall ({eexpr = TLocal {v_name = "__ssa_phi__"}},el) ->
+			let el = List.map value el in
+			begin match el with
+				| [] -> assert false
+				| e1 :: el ->
+					if List.for_all (fun e2 ->
+						let b = expr_eq e1 e2 in
+						(* if e1.epos.pfile = "src/Main.hx" then Printf.printf "Eq: %s %s %b\n" (s_expr e1) (s_expr e2) b; *)
+						b
+					) el then
+						e1
+					else
+						raise Not_found
+			end
+		| TConst ct ->
+			begin match ct with
+				| TThis | TSuper -> raise Not_found
+				| _ -> e
+			end
+		| TParenthesis e1 | TMeta(_,e1) ->
+			value e1
+		| _ ->
+			raise Not_found
+
+	let apply ssa e =
 		let rec loop e = match e.eexpr with
-			| TFunction _ when !had_function ->
-				e
-			| TFunction tf ->
-				had_function := true;
-				{e with eexpr = TFunction {tf with tf_expr = loop tf.tf_expr}}
-			| TVar(v,Some e1) ->
-				let e1 = loop e1 in
-				assign v e1;
-				{e with eexpr = TVar(v,Some e1)}
 			| TLocal v when (match follow v.v_type with TDynamic _ -> false | _ -> not v.v_capture && not (type_has_analyzer_option v.v_type "no_const_propagation")) ->
 				begin try
-					let e' = (PMap.find v.v_id !var_to_expr_map) in
-					begin match e'.eexpr with
- 						| TConst (TThis | TSuper) ->
-							e
-						| TConst _ ->
-							e'
-						| _ ->
-							e
-					end
+					let e' = PMap.find v.v_id ssa.var_values in
+					let e' = value e' in
+					e'
 				with Not_found ->
 					e
 				end
-			| TCall ({eexpr = TLocal {v_name = "__ssa_phi__"}},el) ->
-				let el = List.map loop el in
-				begin match List.rev el with
-					| [] -> assert false
-					| e1 :: el ->
-						let e1 = loop e1 in
-						if List.for_all (fun e2 -> match e2.eexpr with
-(*  							| TLocal v when not !is_first_loop_iteration && Meta.has (Meta.Custom ":ssa") v.v_meta && not (PMap.mem v.v_id !var_to_expr_map) ->
- 								This means that the SSA variable was not part of the AST, which can happen if parts of the
-								   AST are eliminated (e.g. `if (false)`). In this case we can ignore the value.
-								true *)
-							| _ ->
-								let b = expr_eq e1 (loop e2) in
-								(* if e1.epos.pfile = "src/Main.hx" then Printf.printf "%s %s %b\n" (s_expr e1) (s_expr e2) b; *)
-								b
-						) el then
-							e1
-						else
-							e
-				end
-			| TUnop((Increment | Decrement),_,_) ->
-				e
-			| TBinop(OpAssignOp _,_,_) ->
-				e
+			| TCall(e1,el) ->
+			let e1 = loop e1 in
+			let check e t =
+				if type_has_analyzer_option t "no_const_propagation" then e
+				else loop e
+			in
+			let el = Codegen.UnificationCallback.check_call check el e1.etype in
+			{e with eexpr = TCall(e1,el)}
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
 				let e2 = loop e2 in
-				assign v e2;
+				ssa.var_values <- PMap.add v.v_id e2 ssa.var_values;
 				{e with eexpr = TBinop(OpAssign,e1,e2)}
-			| TBinop(op,e1,e2) ->
-				let e1 = loop e1 in
-				let e2 = loop e2 in
-				let e = {e with eexpr = TBinop(op,e1,e2)} in
-				let e' = Optimizer.optimize_binop e op e1 e2 in
-				e'
-			| TUnop(op,flag,e1) ->
-				let e1 = loop e1 in
-				Optimizer.optimize_unop {e with eexpr = TUnop(op,flag,e1)} op flag e1
-			| TIf(e1,e2,eo) ->
-				let e1 = loop e1 in
-				let e2 = loop e2 in
-				begin match e1.eexpr with
-					| TConst (TBool true) ->
-						e2
-					| TConst (TBool false) ->
-						begin match eo with
-							| None ->
-								mk (TConst TNull) t_dynamic e.epos
-							| Some e ->
-								loop e
-						end
-					| _ ->
-						let eo = match eo with None -> None | Some e -> Some (loop e) in
-						{e with eexpr = TIf(e1,e2,eo)}
-				end;
-			| TCall({eexpr = TField(_,(FStatic(_,cf) | FInstance(_,_,cf) | FAnon cf))},el) when has_analyzer_option cf.cf_meta "no_const_propagation" ->
+			| TUnop((Increment | Decrement),_,_)
+			| TBinop(OpAssignOp _,_,_) ->
 				e
-			| TCall(e1,el) ->
+			| TVar(v,Some e1) ->
 				let e1 = loop e1 in
-				let check e t =
-					if type_has_analyzer_option t "no_const_propagation" then e
-					else loop e
-				in
-				let el = Codegen.UnificationCallback.check_call check el e1.etype in
-				{e with eexpr = TCall(e1,el)}
-			| TWhile(econd,ebody,flag) ->
-				let econd = loop econd in
-				let old = !is_first_loop_iteration in
-				is_first_loop_iteration := true;
-				let ebody = loop ebody in
-				is_first_loop_iteration := old;
-				let ebody = loop ebody in
-				{e with eexpr = TWhile(econd,ebody,flag)}
-			| TFor(v,e1,ebody) ->
-				let e1 = loop e1 in
-				let old = !is_first_loop_iteration in
-				is_first_loop_iteration := true;
-				let ebody = loop ebody in
-				is_first_loop_iteration := old;
-				let ebody = loop ebody in
-				{e with eexpr = TFor(v,e1,ebody)}
-			| TBlock el ->
-				let rec loop2 el = match el with
-					| e :: el ->
-						let e = loop e in
-						begin match e.eexpr with
-							| TBreak | TContinue | TReturn _ | TThrow _ ->
-								begin match el with
-									| e :: _ -> com.warning "Unreachable code" e.epos
-									| [] -> ()
-								end;
-								[e]
-							| _ ->
-								e :: loop2 el
-						end
-					| [] ->
-						[]
-				in
-				let el = loop2 el in
-				{e with eexpr = TBlock el}
+				ssa.var_values <- PMap.add v.v_id e1 ssa.var_values;
+				{e with eexpr = TVar(v,Some e1)}
 			| _ ->
 				Type.map_expr loop e
 		in
@@ -856,7 +802,7 @@ module LocalDce = struct
 		let is_used v = !in_loop || Meta.has Meta.Used v.v_meta in
 		let use v = v.v_meta <- (Meta.Used,[],Ast.null_pos) :: v.v_meta in
 		let rec filter e = match e.eexpr with
- 			| TVar(v,eo) when not (is_used v) ->
+			| TVar(v,eo) when not (is_used v) ->
 				begin match eo with
 					| None ->
 						None
@@ -965,10 +911,10 @@ let run_ssa com e =
 			e
 		in
 		let e = if do_optimize then
-				let e,cleanup = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
-				let e = with_timer "analyzer-const-propagation" (fun () -> ConstPropagation.apply com e) in
+				let e,ssa = with_timer "analyzer-ssa-apply" (fun () -> Ssa.apply com e) in
+				let e = with_timer "analyzer-const-propagation" (fun () -> ConstPropagation.apply ssa e) in
 				let e = with_timer "analyzer-ssa-unapply" (fun () -> Ssa.unapply com e) in
-				List.iter (fun f -> f()) cleanup;
+				List.iter (fun f -> f()) ssa.Ssa.cleanup;
 				(* let e = LocalDce.apply com e in *)
 				e
 		else
