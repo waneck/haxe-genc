@@ -712,6 +712,9 @@ module ConstPropagation = struct
 		| TConst ct ->
 			begin match ct with
 				| TThis | TSuper -> raise Not_found
+				(* Some targets don't like seeing null in certain places and won't even compile. We have to detect `if (x != null)
+				   in order for this to work. *)
+				| TNull when (match ssa.com.platform with Php | Cpp -> true | _ -> false) -> raise Not_found
 				| _ -> e
 			end
 		| TParenthesis e1 | TMeta(_,e1) ->
