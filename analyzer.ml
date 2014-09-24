@@ -319,7 +319,7 @@ module Ssa = struct
 	type var_map = ((int,tvar) PMap.t)
 
 	type join_node = {
-		mutable branches : var_map list;
+		mutable branches : (var_map * pos) list;
 	}
 
 	type ssa_context = {
@@ -334,8 +334,8 @@ module Ssa = struct
 	let mk_phi =
 		let v_phi = alloc_var "__ssa_phi__" t_dynamic in
 		(fun vl p ->
-			let mk_loc v = mk (TLocal v) v.v_type p in
-			let e = mk (TCall(mk_loc v_phi,(List.map mk_loc vl))) t_dynamic p in
+			let mk_loc (v,p) = mk (TLocal v) v.v_type p in
+			let e = mk (TCall(mk_loc (v_phi,p),(List.map mk_loc vl))) t_dynamic p in
 			e
 		)
 
@@ -357,13 +357,13 @@ module Ssa = struct
 		branches = []
 	}
 
-	let add_vars join vars =
-		join.branches <- vars :: join.branches
+	let add_vars join vars p =
+		join.branches <- (vars,p) :: join.branches
 
-	let branch ctx =
+	let branch ctx p =
 		let old = ctx.cur_vars in
 		(fun join ->
-			add_vars join ctx.cur_vars;
+			add_vars join ctx.cur_vars p;
 			ctx.cur_vars <- old
 		)
 
@@ -403,7 +403,7 @@ module Ssa = struct
 			v'.v_extra <- Some ([],(Some (mk_loc v)));
 			ctx.cur_vars <- PMap.add v.v_id v' ctx.cur_vars;
 			ctx.var_values <- PMap.add v'.v_id e ctx.var_values;
-			(* if p.pfile = "src/Main.hx" then Printf.printf "%s (%i) = %s\n" v'.v_name v'.v_id (s_expr_pretty e); *)
+			if p.pfile = "src/Main.hx" then Printf.printf "%s (%i) = %s\n" v'.v_name v'.v_id (s_expr_pretty e);
 			()
 		end
 
@@ -416,21 +416,21 @@ module Ssa = struct
 
 	let close_join_node ctx node p =
 		let vars = ref PMap.empty in
-		let rec handle_branch branch =
+		let rec handle_branch (branch,p) =
 			PMap.iter (fun i v ->
 				try
 					let vl = PMap.find i !vars in
-					if not (List.memq v vl) then
-						vars := PMap.add i (v :: vl) !vars
+					if not (List.exists (fun (v',_) -> v == v') vl) then
+						vars := PMap.add i ((v,p) :: vl) !vars
 				with Not_found ->
-					vars := PMap.add i [v] !vars
+					vars := PMap.add i [v,p] !vars
 			) branch;
 		in
 		List.iter handle_branch node.branches;
 		PMap.iter (fun i vl -> match vl with
-			| [v] ->
+			| [v,p] ->
 				ctx.cur_vars <- PMap.add i v ctx.cur_vars;
-			| {v_extra = Some (_,Some {eexpr = TLocal v})} :: _ ->
+			| ({v_extra = Some (_,Some {eexpr = TLocal v})},p) :: _ ->
 				assign_var ctx v (mk_phi vl null_pos) p
 			| _ ->
 				assert false
@@ -457,15 +457,15 @@ module Ssa = struct
 		let rec handle_if ctx e econd eif eelse =
 			let econd = loop ctx econd in
 			let join = mk_join_node() in
-			let close = branch ctx in
+			let close = branch ctx eif.epos in
 			let eif = loop ctx eif in
 			close join;
 			let eelse = match eelse with
 				| None ->
-					add_vars join ctx.cur_vars;
+					add_vars join ctx.cur_vars e.epos;
 					None
 				| Some e ->
-					let close = branch ctx in
+					let close = branch ctx e.epos in
 					let eelse = loop ctx e in
 					close join;
 					Some eelse
@@ -477,10 +477,10 @@ module Ssa = struct
 			let join_top = mk_join_node() in
 			let join_bottom = mk_join_node() in
 			let unset = set_loop_join ctx join_top join_bottom in
-			let close = branch ctx in
+			let close = branch ctx e.epos in
 			ignore(loop ctx e); (* TODO: I don't know if this is sane. *)
 			close join_top;
-			add_vars join_top ctx.cur_vars;
+			add_vars join_top ctx.cur_vars e.epos;
 			close_join_node ctx join_top e.epos;
 			let ebody = loop ctx e in
 			unset();
@@ -531,7 +531,7 @@ module Ssa = struct
 				let e1 = loop ctx e1 in
 				let join = mk_join_node() in
 				let cases = List.map (fun (el,e) ->
-					let close = branch ctx in
+					let close = branch ctx e.epos in
 					let el = List.map (loop ctx) el in
 					let e = loop ctx e in
 					close join;
@@ -539,7 +539,7 @@ module Ssa = struct
 				) cases in
 				let edef = match edef with
 					| Some e ->
-						let close = branch ctx in
+						let close = branch ctx e.epos in
 						let e = loop ctx e in
 						close join;
 						Some e
@@ -549,7 +549,7 @@ module Ssa = struct
 							| TParenthesis({eexpr = TMeta((Meta.Exhaustive,_,_),_)}) ->
 								()
 							| _ ->
-								add_vars join ctx.cur_vars;
+								add_vars join ctx.cur_vars e.epos;
 						end;
 						None
 				in
@@ -573,11 +573,11 @@ module Ssa = struct
 				let unset = set_exception_join ctx join_ex in
 				let e1 = loop ctx e1 in
 				unset();
-				add_vars join_bottom ctx.cur_vars;
+				add_vars join_bottom ctx.cur_vars e.epos;
 				close_join_node ctx join_ex e.epos;
 				let catches = List.map (fun (v,e) ->
 					declare_var ctx v;
-					let close = branch ctx in
+					let close = branch ctx e.epos in
 					let e = loop ctx e in
 					close join_bottom;
 					v,e
@@ -588,18 +588,18 @@ module Ssa = struct
 			| TBreak ->
 				begin match ctx.loop_stack with
 					| [] -> error "Break outside loop" e.epos
-					| (_,join) :: _ -> add_vars join ctx.cur_vars
+					| (_,join) :: _ -> add_vars join ctx.cur_vars e.epos
 				end;
 				e
 			| TContinue ->
 				begin match ctx.loop_stack with
 					| [] -> error "Continue outside loop" e.epos
-					| (join,_) :: _ -> add_vars join ctx.cur_vars
+					| (join,_) :: _ -> add_vars join ctx.cur_vars e.epos
 				end;
 				e
 			| _ ->
 				begin match ctx.exception_stack with
-					| join :: _ when can_throw e -> add_vars join ctx.cur_vars
+					| join :: _ when can_throw e -> add_vars join ctx.cur_vars e.epos
 					| _ -> ()
 				end;
 				Type.map_expr (loop ctx) e
