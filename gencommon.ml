@@ -70,15 +70,26 @@ let rec like_float t =
 	match follow t with
 		| TAbstract({ a_path = ([], "Float") },[])
 		| TAbstract({ a_path = ([], "Int") },[]) -> true
+		| TAbstract({ a_path = (["cs"], "Pointer") },_) -> false
 		| TAbstract(a, _) -> List.exists (fun t -> like_float t) a.a_from || List.exists (fun t -> like_float t) a.a_to
 		| _ -> false
 
 let rec like_int t =
 	match follow t with
 		| TAbstract({ a_path = ([], "Int") },[]) -> true
+		| TAbstract({ a_path = (["cs"], "Pointer") },_) -> false
 		| TAbstract(a, _) -> List.exists (fun t -> like_int t) a.a_from || List.exists (fun t -> like_int t) a.a_to
 		| _ -> false
 
+let rec like_i64 t =
+	match follow t with
+		| TInst({ cl_path = (["cs"], "Int64") },[])
+		| TInst({ cl_path = (["cs"], "UInt64") },[])
+		| TInst({ cl_path = (["java"], "Int64") },[])
+		| TInst({ cl_path = (["haxe"], "Int64") },[])
+		| TAbstract({ a_path = (["haxe"], "Int64") },[]) -> true
+		| TAbstract(a, _) -> List.exists (fun t -> like_i64 t) a.a_from || List.exists (fun t -> like_i64 t) a.a_to
+		| _ -> false
 
 let follow_once t =
 	match t with
@@ -239,6 +250,8 @@ let path_s path =
 	| _ -> assert false
 
 let get_cl mt = match mt with | TClassDecl cl -> cl | _ -> failwith ("Unexpected module type of '" ^ path_s (t_path mt) ^ "'")
+
+let get_abstract mt = match mt with | TAbstractDecl a -> a | _ -> failwith ("Unexpected module type of '" ^ path_s (t_path mt) ^ "'")
 
 let get_tdef mt = match mt with | TTypeDecl t -> t | _ -> assert false
 
@@ -1205,11 +1218,6 @@ let t_to_mt t =
 		| TEnum(e, _) -> TEnumDecl(e)
 		| TAbstract(a, _) -> TAbstractDecl a
 		| _ -> assert false
-
-let mk_paren e =
-	match e.eexpr with
-		| TParenthesis _ -> e
-		| _ -> { e with eexpr = TParenthesis(e) }
 
 let rec get_last_ctor cl =
 	Option.map_default (fun (super,_) -> if is_some super.cl_constructor then Some(get super.cl_constructor) else get_last_ctor super) None cl.cl_super
@@ -3014,7 +3022,13 @@ struct
 			| TAbstract (a, pl) when not (Meta.has Meta.CoreType a.a_meta) ->
 					get_type_params acc ( Abstract.get_underlying_type a pl)
 			| TAnon a ->
-				PMap.fold (fun cf acc -> get_type_params acc cf.cf_type) a.a_fields acc
+				PMap.fold (fun cf acc ->
+					let params = List.map (fun (_,t) -> match follow t with
+						| TInst(c,_) -> c
+						| _ -> assert false) cf.cf_params
+					in
+					List.filter (fun t -> not (List.mem t params)) (get_type_params acc cf.cf_type)
+				) a.a_fields acc
 			| TType(_, [])
 			| TAbstract (_, [])
 			| TInst(_, [])
@@ -3405,7 +3419,7 @@ struct
 			let rettype_real_to_func t = match run_follow gen t with
 				| TType({ t_path = [],"Null" }, _) ->
 					0,t_dynamic
-				| _ when like_float t ->
+				| _ when like_float t && not (like_i64 t) ->
 					(1, basic.tfloat)
 				| _ ->
 					(0, t_dynamic)
@@ -3416,10 +3430,10 @@ struct
 					[{ eexpr = TArrayDecl el; etype = basic.tarray t_dynamic; epos = pos }]
 				else begin
 					List.fold_left (fun acc e ->
-																						if like_float (gen.greal_type e.etype) then
-																							( e :: undefined e.epos :: acc )
-																						else
-																							( null basic.tfloat e.epos :: e :: acc )
+						if like_float (gen.greal_type e.etype) && not (like_i64 (gen.greal_type e.etype)) then
+							( e :: undefined e.epos :: acc )
+						else
+							( null basic.tfloat e.epos :: e :: acc )
 					) ([]) (List.rev el)
 				end
 			in
@@ -3565,8 +3579,9 @@ struct
 					| TCall(tc, params) -> (tc, params)
 					| _ -> assert false
 				in
+					let ct = gen.greal_type call_expr.etype in
 					let postfix, ret_t =
-						if like_float (gen.greal_type call_expr.etype) then
+						if like_float ct && not (like_i64 ct) then
 								"_f", gen.gcon.basic.tfloat
 						else
 							"_o", t_dynamic
@@ -3636,7 +3651,7 @@ struct
 						let vf, _ = List.nth args (i * 2) in
 						let vo, _ = List.nth args (i * 2 + 1) in
 
-						let needs_cast, is_float = match t, like_float t with
+						let needs_cast, is_float = match t, like_float t && not (like_i64 t) with
 							| TInst({ cl_path = ([], "Float") }, []), _
 							| TAbstract({ a_path = ([], "Float") },[]), _ -> false, true
 							| _, true -> true, true
@@ -3893,7 +3908,7 @@ struct
 				in
 				(* let rec loop goes here *)
 				let map_fn cur_arity fun_ret_type vars (api:(int->t->tconstant option->texpr)) =
-					let is_float = like_float fun_ret_type in
+					let is_float = like_float fun_ret_type && not (like_i64 fun_ret_type) in
 					match cur_arity with
 						| -1 ->
 							let dynargs = api (-1) (t_dynamic) None in
@@ -4559,7 +4574,7 @@ struct
 
 				let rec run md =
 					match md with
-						| TClassDecl ({ cl_extern = false; cl_params = [] } as cl) ->
+						| TClassDecl ({ cl_params = [] } as cl) ->
 							(* see if we're implementing any generic interface *)
 							let rec check (iface,tl) =
 								if tl <> [] && set_hxgeneric gen (TClassDecl iface) then
@@ -4569,7 +4584,7 @@ struct
 							in
 							List.iter (check) cl.cl_implements;
 							md
-						| TClassDecl ({ cl_extern = false; cl_params = hd :: tl } as cl) when set_hxgeneric gen md ->
+						| TClassDecl ({ cl_params = hd :: tl } as cl) when set_hxgeneric gen md ->
 							let iface = mk_class cl.cl_module cl.cl_path cl.cl_pos in
 							iface.cl_array_access <- Option.map (apply_params (cl.cl_params) (List.map (fun _ -> t_dynamic) cl.cl_params)) cl.cl_array_access;
 							iface.cl_module <- cl.cl_module;
@@ -6263,6 +6278,8 @@ struct
 				| TBinop ( (Ast.OpAssign | Ast.OpAssignOp _ as op), e1, e2 ) ->
 					let e1 = run ~just_type:true e1 in
 					{ e with eexpr = TBinop(op, clean_cast e1, run e2) }
+				| TBinop( (Ast.OpShl | Ast.OpShr | Ast.OpUShr) as op, e1, e2 ) ->
+					handle { e with eexpr = TBinop(op, run e1, run e2); etype = e1.etype } (gen.greal_type e.etype) (gen.greal_type e1.etype)
 				| TField(ef, f) ->
 					handle_type_parameter gen None e (run ef) ~clean_ef:ef ~overloads_cast_to_base:overloads_cast_to_base f [] calls_parameters_explicitly
 				| TArrayDecl el ->
@@ -6315,7 +6332,7 @@ struct
 				| TNew (cl, tparams, eparams) -> (try
 					let is_overload, cf, sup, stl = choose_ctor gen cl tparams (List.map (fun e -> e.etype) eparams) maybe_empty_t e.epos in
 					let handle e t1 t2 =
-						if true then
+						if is_overload then
 							let ret = handle e t1 t2 in
 							match ret.eexpr with
 							| TCast _ -> ret
@@ -7118,7 +7135,7 @@ struct
 						| TInst ( { cl_path = ["haxe"], "Int64" }, [] ) ->
 							loop tl ((name, gen.ghandle_cast t_dynamic real_t expr) :: acc) acc_f
 						| _ ->
-							if like_float real_t then
+							if like_float real_t && not (like_i64 real_t) then
 								loop tl acc ((name, gen.ghandle_cast basic.tfloat real_t expr) :: acc_f)
 							else
 								loop tl ((name, gen.ghandle_cast t_dynamic real_t expr) :: acc) acc_f
@@ -7633,7 +7650,7 @@ struct
 						match follow (ctx.rcf_gen.greal_type (ctx.rcf_gen.gfollow#run_f cf.cf_type)) with
 							| TDynamic _ | TMono _
 							| TInst ({ cl_kind = KTypeParameter _ }, _) -> true
-							| t when like_float t -> true
+							| t when like_float t && not (like_i64 t) -> true
 							| _ -> false
 					) ret
 				else
@@ -10241,7 +10258,7 @@ struct
 				let to_add = ref [] in
 				let fields = List.filter (fun cf ->
 					match cf.cf_kind with
-						| Var vkind ->
+						| Var vkind when not (Type.is_extern_field cf && Meta.has Meta.Property cf.cf_meta) ->
 							(match vkind.v_read with
 								| AccCall ->
 									let newcf = mk_class_field ("get_" ^ cf.cf_name) (TFun([],cf.cf_type)) true cf.cf_pos (Method MethNormal) [] in
@@ -10266,10 +10283,11 @@ struct
 				cl.cl_ordered_fields <- fields;
 
 				List.iter (fun cf ->
-					if not (PMap.mem cf.cf_name cl.cl_fields) then begin
-						cl.cl_ordered_fields <- cf :: cl.cl_ordered_fields;
-						cl.cl_fields <- PMap.add cf.cf_name cf cl.cl_fields
-					end
+					match field_access gen (TInst(cl,List.map snd cl.cl_params)) cf.cf_name with
+						| FNotFound | FDynamicField _ ->
+							cl.cl_ordered_fields <- cf :: cl.cl_ordered_fields;
+							cl.cl_fields <- PMap.add cf.cf_name cf cl.cl_fields
+						| _ -> ()
 				) !to_add;
 
 				md
@@ -10682,7 +10700,7 @@ struct
 							end
 						with | Not_found -> ()
 					in
-					List.iter loop_f iface.cl_ordered_fields
+					List.iter (fun f -> match f.cf_kind with | Var _ -> () | _ -> loop_f f) iface.cl_ordered_fields
 				in
 				List.iter (fun (iface,itl) -> loop_iface iface itl) c.cl_implements;
 				(* now go through all overrides, *)
@@ -10804,6 +10822,8 @@ struct
 	| TType(t,tl) -> TType(t,List.map filter_param tl)
 	| TInst(c,tl) -> TInst(c,List.map filter_param tl)
 	| TEnum(e,tl) -> TEnum(e,List.map filter_param tl)
+	| TAbstract(a,tl) when not (Meta.has Meta.CoreType a.a_meta) ->
+		filter_param (Abstract.get_underlying_type a tl)
 	| TAbstract(a,tl) -> TAbstract(a, List.map filter_param tl)
 	| TAnon a ->
 		TAnon {
@@ -10824,9 +10844,26 @@ struct
 		in
 		run
 
+	let default_implementation_module gen ~metas =
+		let rec run md = match md with
+			| TClassDecl cl ->
+				let rec map cf =
+					cf.cf_type <- filter_param cf.cf_type;
+					List.iter map cf.cf_overloads
+				in
+				List.iter map cl.cl_ordered_fields;
+				List.iter map cl.cl_ordered_statics;
+				Option.may map cl.cl_constructor;
+				md
+			| _ -> md
+		in
+		run
+
 	let configure gen ~metas =
 		let map e = Some(default_implementation gen e ~metas:metas) in
-		gen.gexpr_filters#add ~name:name ~priority:(PCustom priority) map
+		gen.gexpr_filters#add ~name:name ~priority:(PCustom priority) map;
+		let map md = Some(default_implementation_module gen ~metas md) in
+		gen.gmodule_filters#add ~name:name ~priority:(PCustom priority) map
 
 end;;
 

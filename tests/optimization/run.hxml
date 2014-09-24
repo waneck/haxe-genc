@@ -1,7 +1,9 @@
--cp src
--js testopt.js
---macro Macro.register('Test')
---macro Macro.register('TestJs')
---macro Macro.register('TestAnalyzer')
--dce std
--D static_analyzer
+analyzer.hxml
+#--next
+
+#-cp src
+#-js testopt.js
+#--macro Macro.register('Test')
+#--macro Macro.register('TestJs')
+#-D static-analyzer
+#-dce std

@@ -3,6 +3,9 @@ import haxe.io.Bytes;
 import haxe.test.Base;
 import haxe.test.Base.Base_InnerClass;
 import haxe.test.TEnum;
+#if unsafe
+import cs.Pointer;
+#end
 
 //C#-specific tests, like unsafe code
 class TestCSharp extends Test
@@ -19,6 +22,49 @@ class TestCSharp extends Test
 		Base._untyped = 40;
 		eq(Base._untyped, 40);
 	}
+
+#if unsafe
+	@:unsafe function testBoxedPointer()
+	{
+		var ptr:Pointer<Int> = cast cs.system.runtime.interopservices.Marshal.AllocHGlobal(10 * 4).ToPointer();
+		ptr[0] = 0;
+		eq(ptr[0],0);
+		ptr[0] = -1;
+		eq(ptr[0],-1);
+
+		var dyn:Dynamic = ptr;
+		ptr = null;
+		ptr = dyn;
+		eq(ptr[0],-1);
+
+		var arr = [ptr];
+		eq(arr[0][0], -1);
+
+		var captured = ptr;
+		function test(v:Int) captured[0] = v;
+
+		test(0xFFFF);
+		eq(ptr[0],0xFFFF);
+		eq(captured[0],0xFFFF);
+		t(ptr == captured);
+
+		var other:Pointer<Pointer<Int>> = cast cs.system.runtime.interopservices.Marshal.AllocHGlobal(10 * 4).ToPointer();
+		other[0] = ptr;
+		eq(other[0][0], 0xFFFF);
+		var captured = other;
+		function test(v:Int) captured[0][0] = v;
+		test(-1);
+		eq(other[0][0],-1);
+		eq(captured[0][0],-1);
+		t(other == captured);
+
+		function test2(p:Pointer<Pointer<Int>>, v:Int)
+			p[0][0]=v;
+
+		test2(other,-2);
+		eq(other[0][0],-2);
+	}
+#end
 
 	function testTypes()
 	{

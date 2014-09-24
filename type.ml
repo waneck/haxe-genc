@@ -320,6 +320,11 @@ let alloc_var =
 	let uid = ref 0 in
 	(fun n t -> incr uid; { v_name = n; v_type = t; v_id = !uid; v_capture = false; v_extra = None; v_meta = [] })
 
+let alloc_unbound_var n t =
+	let v = alloc_var n t in
+	v.v_meta <- [Meta.Unbound,[],null_pos];
+	v
+
 let alloc_mid =
 	let mid = ref 0 in
 	(fun() -> incr mid; !mid)
@@ -328,7 +333,7 @@ let mk e t p = { eexpr = e; etype = t; epos = p }
 
 let mk_block e =
 	match e.eexpr with
-	| TBlock (_ :: _) -> e
+	| TBlock _ -> e
 	| _ -> mk (TBlock [e]) e.etype e.epos
 
 let mk_cast e t p = mk (TCast(e,None)) t p
@@ -1299,8 +1304,13 @@ let rec unify a b =
 	| TAbstract (a1,tl1) , TAbstract (a2,tl2) ->
 		let f1 = unify_to a1 tl1 b in
 		let f2 = unify_from a2 tl2 a b in
-		if not (List.exists (f1 ~allow_transitive_cast:false) a1.a_to) && not (List.exists (f2 ~allow_transitive_cast:false) a2.a_from)
-		    && not (List.exists f1 a1.a_to) && not (List.exists f2 a2.a_from) then error [cannot_unify a b]
+		if (List.exists (f1 ~allow_transitive_cast:false) a1.a_to)
+		|| (List.exists (f2 ~allow_transitive_cast:false) a2.a_from)
+		|| (((Meta.has Meta.CoreType a1.a_meta) || (Meta.has Meta.CoreType a2.a_meta))
+			&& ((List.exists f1 a1.a_to) || (List.exists f2 a2.a_from))) then
+			()
+		else
+			error [cannot_unify a b]
 	| TInst (c1,tl1) , TInst (c2,tl2) ->
 		let rec loop c tl =
 			if c == c2 then begin
@@ -1879,34 +1889,3 @@ let map_expr_type f ft fv e =
 		{ e with eexpr = TCast (f e1,t); etype = ft e.etype }
 	| TMeta (m,e1) ->
 		{e with eexpr = TMeta(m, f e1); etype = ft e.etype }
-
-(* ======= Miscellaneous ======= *)
-
-let find_array_access a pl t1 t2 is_set =
-	let ta = apply_params a.a_params pl a.a_this in
-	let rec loop cfl = match cfl with
-		| [] -> raise Not_found
-		| cf :: cfl when not (Meta.has Meta.ArrayAccess cf.cf_meta) ->
-			loop cfl
-		| cf :: cfl ->
-			match follow (apply_params a.a_params pl (monomorphs cf.cf_params cf.cf_type)) with
-			| TFun([(_,_,tab);(_,_,ta1);(_,_,ta2)],r) as tf when is_set ->
-				begin try
-					unify tab ta;
-					unify t1 ta1;
-					unify t2 ta2;
-					cf,tf,r
-				with Unify_error _ ->
-					loop cfl
-				end
-			| TFun([(_,_,tab);(_,_,ta1)],r) as tf when not is_set ->
-				begin try
-					unify tab ta;
-					unify t1 ta1;
-					cf,tf,r
-				with Unify_error _ ->
-					loop cfl
-				end
-			| _ -> loop cfl
-	in
-	loop a.a_array

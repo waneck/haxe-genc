@@ -46,6 +46,8 @@ let rec is_cs_basic_type t =
 		| TEnum( { e_path = ([], "Bool") }, [] )
 		| TAbstract ({ a_path = ([], "Bool") },[]) ->
 			true
+		| TAbstract ({ a_path = (["cs"], "Pointer") },_) ->
+			false
 		| TAbstract _ when like_float t ->
 			true
 		| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
@@ -109,13 +111,12 @@ let is_tparam t =
 let rec is_int_float t =
 	match follow t with
 		| TInst( { cl_path = (["haxe"], "Int32") }, [] )
-		| TInst( { cl_path = (["haxe"], "Int64") }, [] )
 		| TInst( { cl_path = ([], "Int") }, [] )
 		| TAbstract ({ a_path = ([], "Int") },[])
 		| TInst( { cl_path = ([], "Float") }, [] )
 		| TAbstract ({ a_path = ([], "Float") },[]) ->
 			true
-		| TAbstract _ when like_float t ->
+		| TAbstract _ when like_float t && not (like_i64 t) ->
 			true
 		| TInst( { cl_path = (["haxe"; "lang"], "Null") }, [t] ) -> is_int_float t
 		| _ -> false
@@ -127,6 +128,16 @@ let is_bool t =
 			true
 		| _ -> false
 
+let is_dynamic gen t =
+	match follow (gen.greal_type t) with
+		| TDynamic _ -> true
+		| _ -> false
+
+let is_pointer gen t =
+	match follow (gen.greal_type t) with
+		| TAbstract( ( {a_path = ["cs"], "Pointer"}, _ ) )
+		| TInst( {cl_path = ["cs"], "Pointer"}, _ ) -> true
+		| _ -> false
 
 let rec is_null t =
 	match t with
@@ -140,6 +151,13 @@ let rec is_null t =
 		| TLazy f ->
 			is_null (!f())
 		| _ -> false
+
+let rec get_arrptr e = match e.eexpr with
+	| TParenthesis e | TMeta(_,e)
+	| TCast(e,_) -> get_arrptr e
+	| TCall( { eexpr = TLocal({ v_name = "__arrptr__" }) }, [ e ] ) ->
+		Some e
+	| _ -> None
 
 let parse_explicit_iface =
 	let regex = Str.regexp "\\." in
@@ -387,10 +405,16 @@ struct
 			| _ -> assert false
 		in
 		let string_ext = get_cl ( get_type gen (["haxe";"lang"], "StringExt")) in
-
 		let is_string t = match follow t with | TInst({ cl_path = ([], "String") }, []) -> true | _ -> false in
-
 		let clstring = match basic.tstring with | TInst(cl,_) -> cl | _ -> assert false in
+		let ti64 = match ( get_type gen (["cs"], "Int64") ) with | TTypeDecl t -> TType(t,[]) | TAbstractDecl a -> TAbstract(a,[]) | _ -> assert false in
+		let boxed_ptr =
+			if Common.defined gen.gcon Define.Unsafe then
+				get_cl (get_type gen (["haxe";"lang"], "BoxedPointer"))
+				(* get_abstract (get_type gen (["cs"],"Pointer")) *)
+			else
+				null_class
+		in
 
 		let is_struct t = (* not basic type *)
 			match follow t with
@@ -437,6 +461,25 @@ struct
 					run ef
 				| TNew( { cl_path = ([], "String") }, [], [p] ) -> run p (* new String(myString) -> myString *)
 
+				| TCast(expr, _) when like_float expr.etype && is_pointer gen e.etype ->
+					let expr = run expr in
+					mk_cast e.etype (mk_cast ti64 expr)
+				| TCast(expr, _) when is_dynamic gen expr.etype && is_pointer gen e.etype ->
+					(match get_arrptr expr with
+						| None ->
+							(* unboxing *)
+							let expr = run expr in
+							mk_cast e.etype (mk_field_access gen (mk_cast (TInst(boxed_ptr,[])) expr) "value" e.epos)
+						| Some e ->
+							run e)
+				| TCast(expr, _) when is_pointer gen expr.etype && is_dynamic gen e.etype ->
+					(match get_arrptr expr with
+						| None ->
+							(* boxing *)
+							let expr = run expr in
+							{ e with eexpr = TNew(boxed_ptr,[],[expr]) }
+						| Some e ->
+							run e)
 				| TCast(expr, _) when is_bool e.etype ->
 					{
 						eexpr = TCall(
@@ -906,7 +949,8 @@ let configure gen =
 				(check_t_s param) ^ "[]"
 			| TInst({ cl_path = (["cs"], "Pointer") },[t])
 			| TAbstract({ a_path = (["cs"], "Pointer") },[t])->
-				t_s t ^ "*"
+				let ret = t_s t in
+				(if ret = "object" then "void" else ret) ^ "*"
 			(* end of basic types *)
 			| TInst ({ cl_kind = KTypeParameter _; cl_path=p }, []) -> snd p
 			| TMono r -> (match !r with | None -> "object" | Some t -> t_s (run_follow gen t))
@@ -1153,10 +1197,11 @@ let configure gen =
 							write w (escape s);
 							write w "\""
 						| TBool b -> write w (if b then "true" else "false")
-						| TNull ->
+						| TNull when is_cs_basic_type e.etype || is_tparam e.etype ->
 							write w "default(";
 							write w (t_s e.etype);
 							write w ")"
+						| TNull -> write w "null"
 						| TThis -> write w "this"
 						| TSuper -> write w "base")
 				| TLocal { v_name = "__sbreak__" } -> write w "break"
@@ -1252,21 +1297,38 @@ let configure gen =
 					write w ")";
 					expr_s w (mk_block eblock)
 				| TCall ({ eexpr = TLocal( { v_name = "__fixed__" } ) }, [ e ] ) ->
-					let first = ref true in
+					let fixeds = ref [] in
 					let rec loop = function
-						| ({ eexpr = TVar(v, Some({ eexpr = TCast( { eexpr = TCast(e, _) }, _) }) ) } as expr) :: tl when is_pointer v.v_type ->
-							(if !first then first := false);
-							write w "fixed(";
-							let vf = mk_temp gen "fixed" v.v_type in
-							expr_s w { expr with eexpr = TVar(vf, Some e) };
-							write w ")";
-							begin_block w;
-							expr_s w { expr with eexpr = TVar(v, Some (mk_local vf expr.epos)) };
-							write w ";";
+						| ({ eexpr = TVar(v, Some(e) ) } as expr) :: tl when is_pointer v.v_type ->
+							let e = match get_arrptr e with
+								| None -> e
+								| Some e -> e
+							in
+							fixeds := (v,e,expr) :: !fixeds;
 							loop tl;
+						| el when !fixeds <> [] ->
+							write w "fixed(";
+							let rec loop fx acc = match fx with
+								| (v,e,expr) :: tl ->
+									let vf = mk_temp gen "fixed" v.v_type in
+									expr_s w { expr with eexpr = TVar(vf, Some e) };
+									let acc = (expr,v,vf) :: acc in
+									if tl = [] then begin
+										write w ")";
+										acc
+									end else begin
+										write w ", ";
+										loop tl acc
+									end
+								| _ -> assert false
+							in
+							let vars = loop (List.rev !fixeds) [] in
+							begin_block w;
+							List.iter (fun (expr,v,vf) ->
+								expr_s w { expr with eexpr = TVar(v, Some (mk_local vf expr.epos)) };
+								write w ";") vars;
+							expr_s w { e with eexpr = TBlock el };
 							end_block w
-						| el when not !first ->
-							expr_s w { e with eexpr = TBlock el }
 						| _ ->
 							trace (debug_expr e);
 							gen.gcon.error "Invalid 'fixed' keyword format" e.epos
@@ -1396,16 +1458,21 @@ let configure gen =
 					(match eelse with
 						| None -> ()
 						| Some e ->
-							write w " else ";
+							write w "else ";
 							in_value := false;
-							expr_s w (mk_block e)
+							let e = match e.eexpr with
+								| TIf _ -> e
+								| TBlock [{eexpr = TIf _} as e] -> e
+								| _ -> mk_block e
+							in
+							expr_s w e
 					)
 				| TWhile (econd, eblock, flag) ->
 					(match flag with
 						| Ast.NormalWhile ->
 							write w "while ";
 							expr_s w (mk_paren econd);
-							write w "";
+							write w " ";
 							in_value := false;
 							expr_s w (mk_block eblock)
 						| Ast.DoWhile ->
@@ -1419,6 +1486,7 @@ let configure gen =
 				| TSwitch (econd, ele_l, default) ->
 					write w "switch ";
 					expr_s w (mk_paren econd);
+					write w " ";
 					begin_block w;
 					List.iter (fun (el, e) ->
 						List.iter (fun e ->
@@ -1426,8 +1494,8 @@ let configure gen =
 							in_value := true;
 							expr_s w e;
 							write w ":";
+							newline w;
 						) el;
-						newline w;
 						in_value := false;
 						expr_s w (mk_block e);
 						newline w;
@@ -1452,8 +1520,8 @@ let configure gen =
 						newline w
 					) ve_l
 				| TReturn eopt ->
-					write w "return ";
-					if is_some eopt then expr_s w (get eopt)
+					write w "return";
+					if is_some eopt then (write w " "; expr_s w (get eopt))
 				| TBreak -> write w "break"
 				| TContinue -> write w "continue"
 				| TThrow e ->
@@ -1601,6 +1669,13 @@ let configure gen =
 		) metadata
 	in
 
+	let gen_nocompletion w metadata =
+		if Meta.has Meta.NoCompletion metadata then begin
+			write w "[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]";
+			newline w
+		end;
+	in
+
 	let argt_s t =
 		let w = new_source_writer () in
 		let rec run t =
@@ -1649,6 +1724,16 @@ let configure gen =
 				(params, String.concat " " params_extends)
 	in
 
+	let gen_field_decl w visibility v_n modifiers t n =
+		let parts = ref [] in
+		if visibility <> "" then parts := visibility :: !parts;
+		if v_n <> "" then parts := v_n :: !parts;
+		if modifiers <> [] then parts := modifiers @ !parts;
+		if t <> "" then parts := t :: !parts;
+		parts := n :: !parts;
+		write w (String.concat " " (List.rev !parts));
+	in
+
 	let rec gen_prop w is_static cl is_final (prop,t,get,set) =
 		gen_attributes w prop.cf_meta;
 		let is_interface = cl.cl_interface in
@@ -1658,7 +1743,7 @@ let configure gen =
 				(match mkind with | MethInline -> true | _ -> false) || Meta.has Meta.Final m.cf_meta
 			| _ -> assert false
 		in
-		let is_virtual = not (is_final || Meta.has Meta.Final prop.cf_meta || fn_is_final get || fn_is_final set) in
+		let is_virtual = not (is_interface || is_final || Meta.has Meta.Final prop.cf_meta || fn_is_final get || fn_is_final set) in
 
 		let fn_is_override = function
 			| Some cf -> List.memq cf cl.cl_overrides
@@ -1667,9 +1752,11 @@ let configure gen =
 		let is_override = fn_is_override get || fn_is_override set in
 		let visibility = if is_interface then "" else "public" in
 		let visibility, modifiers = get_fun_modifiers prop.cf_meta visibility [] in
-		let v_n = if is_static then "static " else if is_override && not is_interface then "override " else if is_virtual then "virtual " else "" in
-		let no_completion = if Meta.has Meta.NoCompletion prop.cf_meta then "[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)] " else "" in
-		print w "%s%s %s %s %s %s" no_completion (visibility) v_n (String.concat " " modifiers) (t_s (run_follow gen t)) (change_field prop.cf_name);
+		let v_n = if is_static then "static" else if is_override && not is_interface then "override" else if is_virtual then "virtual" else "" in
+		gen_nocompletion w prop.cf_meta;
+
+		gen_field_decl w visibility v_n modifiers (t_s (run_follow gen t)) (change_field prop.cf_name);
+
 		let check cf = match cf with
 			| Some ({ cf_overloads = o :: _ } as cf) ->
 					gen.gcon.error "Property functions with more than one overload is currently unsupported" cf.cf_pos;
@@ -1679,26 +1766,32 @@ let configure gen =
 		check get;
 		check set;
 
-		begin_block w;
-		(match prop.cf_kind with
-		| Var { v_read = AccCall } when is_interface ->
-			write w "get;";
-		| _ -> match get with
-			| Some cf  ->
-				print w "get { return _get_%s(); }" prop.cf_name;
-				cf.cf_meta <- (Meta.Custom "?prop_impl", [], null_pos) :: cf.cf_meta;
-				newline w
-			| _ -> ());
-		(match prop.cf_kind with
-		| Var { v_write = AccCall } when is_interface ->
-			write w "set;";
-		| _ -> match set with
-			| Some cf  ->
-				print w "set { _set_%s(value); }" prop.cf_name;
-				cf.cf_meta <- (Meta.Custom "?prop_impl", [], null_pos) :: cf.cf_meta;
-				newline w
-			| _ -> ());
-		end_block w;
+		write w " ";
+		if is_interface then begin
+			write w "{ ";
+			let s = ref "" in
+			(match prop.cf_kind with Var { v_read = AccCall } -> write w "get;"; s := " "; | _ -> ());
+			(match prop.cf_kind with Var { v_write = AccCall } -> print w "%sset;" !s | _ -> ());
+			write w " }";
+			newline w;
+		end else begin
+			begin_block w;
+			(match get with
+				| Some cf ->
+					print w "get { return _get_%s(); }" prop.cf_name;
+					newline w;
+					cf.cf_meta <- (Meta.Custom "?prop_impl", [], null_pos) :: cf.cf_meta;
+				| None -> ());
+			(match set with
+				| Some cf ->
+					print w "set { _set_%s(value); }" prop.cf_name;
+					newline w;
+					cf.cf_meta <- (Meta.Custom "?prop_impl", [], null_pos) :: cf.cf_meta;
+				| None -> ());
+			end_block w;
+			newline w;
+			newline w;
+		end;
 	in
 
 	let rec gen_class_field w ?(is_overload=false) is_static cl is_final cf =
@@ -1745,15 +1838,15 @@ let configure gen =
 				if not is_interface then begin
 					let access, modifiers = get_fun_modifiers cf.cf_meta "public" [] in
 					let modifiers = modifiers @ modf in
-					let no_completion = if Meta.has Meta.NoCompletion cf.cf_meta then "[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)] " else "" in
+					gen_nocompletion w cf.cf_meta;
+					gen_field_decl w access (if is_static then "static" else "") modifiers (t_s (run_follow gen cf.cf_type)) (change_field name);
 					(match cf.cf_expr with
 						| Some e ->
-							print w "%s%s %s%s %s %s = " no_completion access (if is_static then "static " else "") (String.concat " " modifiers) (t_s (run_follow gen cf.cf_type)) (change_field name);
+							write w " = ";
 							expr_s w e;
-							write w ";"
-						| None ->
-							print w "%s%s %s%s %s %s;" no_completion access (if is_static then "static " else "") (String.concat " " modifiers) (t_s (run_follow gen cf.cf_type)) (change_field name)
-					)
+						| None -> ()
+					);
+					write w ";"
 				end (* TODO see how (get,set) variable handle when they are interfaces *)
 			| Method _ when Type.is_extern_field cf || (match cl.cl_kind, cf.cf_expr with | KAbstractImpl _, None -> true | _ -> false) ->
 				List.iter (fun cf -> if cl.cl_interface || cf.cf_expr <> None then
@@ -1785,13 +1878,14 @@ let configure gen =
 				let visibility, modifiers = get_fun_modifiers cf.cf_meta visibility [] in
 				let modifiers = modifiers @ modf in
 				let visibility, is_virtual = if is_explicit_iface then "",false else if visibility = "private" then "private",false else visibility, is_virtual in
-				let v_n = if is_static then "static " else if is_override && not is_interface then "override " else if is_virtual then "virtual " else "" in
+				let v_n = if is_static then "static" else if is_override && not is_interface then "override" else if is_virtual then "virtual" else "" in
 				let cf_type = if is_override && not is_overload && not (Meta.has Meta.Overload cf.cf_meta) then match field_access gen (TInst(cl, List.map snd cl.cl_params)) cf.cf_name with | FClassField(_,_,_,_,_,actual_t,_) -> actual_t | _ -> assert false else cf.cf_type in
 				let ret_type, args = match follow cf_type with | TFun (strbtl, t) -> (t, strbtl) | _ -> assert false in
-				let no_completion = if Meta.has Meta.NoCompletion cf.cf_meta then "[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)] " else "" in
+				gen_nocompletion w cf.cf_meta;
 
 				(* public static void funcName *)
-				print w "%s%s %s %s %s %s" no_completion (visibility) v_n (String.concat " " modifiers) (if is_new then "" else rett_s (run_follow gen ret_type)) (change_field name);
+				gen_field_decl w visibility v_n modifiers (if not is_new then (rett_s (run_follow gen ret_type)) else "") (change_field name);
+
 				let params, params_ext = get_string_params cf.cf_params in
 				(* <T>(string arg1, object arg2) with T : object *)
 				(match cf.cf_expr with
@@ -1803,6 +1897,7 @@ let configure gen =
 				if is_interface then
 					write w ";"
 				else begin
+					write w " ";
 					let rec loop meta =
 						match meta with
 							| [] ->
@@ -1831,26 +1926,31 @@ let configure gen =
 											(match super_call with
 												| None -> ()
 												| Some sc ->
-													write w " : ";
+													write w ": ";
 													let t = Common.timer "expression to string" in
 													expr_s w sc;
+													write w " ";
 													t()
 											);
 											begin_block w;
-											write w "unchecked ";
-											let t = Common.timer "expression to string" in
-											expr_s w { expr with eexpr = TBlock(rest) };
-											t();
-											if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
+											if rest <> [] then begin
+												write w "unchecked ";
+												let t = Common.timer "expression to string" in
+												expr_s w { expr with eexpr = TBlock(rest) };
+												t();
+												if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
+											end;
 											end_block w;
 										| _ -> assert false
 								end else begin
 									begin_block w;
-									write w "unchecked ";
-									let t = Common.timer "expression to string" in
-									expr_s w expr;
-									t();
-									if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
+									if expr.eexpr <> TBlock [] then begin
+										write w "unchecked ";
+										let t = Common.timer "expression to string" in
+										expr_s w expr;
+										t();
+										if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
+									end;
 									end_block w;
 								end)
 							| (Meta.FunctionCode, [Ast.EConst (Ast.String contents),_],_) :: tl ->
@@ -2024,7 +2124,7 @@ let configure gen =
 		let should_close = match change_ns (TClassDecl cl) (fst (cl.cl_path)) with
 			| [] -> false
 			| ns ->
-				print w "namespace %s" (String.concat "." ns);
+				print w "namespace %s " (String.concat "." ns);
 				begin_block w;
 				true
 		in
@@ -2037,15 +2137,16 @@ let configure gen =
 						for cases where the main class is called Main, there will be a problem with creating the entry point there.
 						In this special case, a special entry point class will be created
 					*)
-					write w "public class EntryPoint__Main";
+					write w "public class EntryPoint__Main ";
 					begin_block w;
-					write w "public static void Main()";
+					write w "public static void Main() ";
 					begin_block w;
 					(if Hashtbl.mem gen.gtypes (["cs"], "Boot") then write w "global::cs.Boot.init();"; newline w);
 					expr_s w { eexpr = TTypeExpr(TClassDecl cl); etype = t_dynamic; epos = Ast.null_pos };
 					write w ".main();";
 					end_block w;
 					end_block w;
+					newline w;
 					false
 				| Some path when path = cl.cl_path && not cl.cl_interface -> true
 				| _ -> false
@@ -2054,7 +2155,8 @@ let configure gen =
 		let clt, access, modifiers = get_class_modifiers cl.cl_meta (if cl.cl_interface then "interface" else "class") "public" [] in
 		let is_final = clt = "struct" || Meta.has Meta.Final cl.cl_meta in
 
-		print w "%s %s %s %s" access (String.concat " " modifiers) clt (change_clname (snd cl.cl_path));
+		let modifiers = [access] @ modifiers in
+		print w "%s %s %s" (String.concat " " modifiers) clt (change_clname (snd cl.cl_path));
 		(* type parameters *)
 		let params, params_ext = get_string_params cl.cl_params in
 		let extends_implements = (match cl.cl_super with | None -> [] | Some (cl,p) -> [path_param_s (TClassDecl cl) cl.cl_path p]) @ (List.map (fun (cl,p) -> path_param_s (TClassDecl cl) cl.cl_path p) cl.cl_implements) in
@@ -2064,6 +2166,7 @@ let configure gen =
 		(* class head ok: *)
 		(* public class Test<A> : X, Y, Z where A : Y *)
 		begin_block w;
+		newline w;
 		(* our constructor is expected to be a normal "new" function *
 		if !strict_mode && is_some cl.cl_constructor then assert false;*)
 
@@ -2088,7 +2191,11 @@ let configure gen =
 			| None -> ()
 			| Some init ->
 				print w "static %s() " (snd cl.cl_path);
-				expr_s w (mk_block init));
+				expr_s w (mk_block init);
+				if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
+				newline w;
+				newline w
+		);
 
 		(* collect properties *)
 		let partition_props cl cflist =
@@ -2110,24 +2217,27 @@ let configure gen =
 						ret
 					| _ -> raise Not_found
 			in
+			let interf = cl.cl_interface in
 			(* get all functions that are getters/setters *)
-			List.iter (function
+			let nonprops = List.filter (function
 				| cf when String.starts_with cf.cf_name "get_" -> (try
 					(* find the property *)
 					let prop = find_prop (String.sub cf.cf_name 4 (String.length cf.cf_name - 4)) in
 					let v, t, get, set = !prop in
 					assert (get = None);
 					prop := (v,t,Some cf,set);
-				with | Not_found -> ())
+					not interf
+				with | Not_found -> true)
 				| cf when String.starts_with cf.cf_name "set_" -> (try
 					(* find the property *)
 					let prop = find_prop (String.sub cf.cf_name 4 (String.length cf.cf_name - 4)) in
 					let v, t, get, set = !prop in
 					assert (set = None);
 					prop := (v,t,get,Some cf);
-				with | Not_found -> ())
-				| _ -> ()
-			) nonprops;
+					not interf
+				with | Not_found -> true)
+				| _ -> true
+			) nonprops in
 			let ret = List.map (fun (_,v) -> !v) !props in
 			let ret = List.filter (function | (_,_,None,None) -> false | _ -> true) ret in
 			ret, nonprops
@@ -2174,10 +2284,11 @@ let configure gen =
 	in
 
 	let module_type_gen w md_tp =
+		reset_temps();
 		match md_tp with
 			| TClassDecl cl ->
 				if not cl.cl_extern then begin
-					(if no_root && len w = 0 then write w "using haxe.root;"; newline w;);
+					(if no_root && len w = 0 then write w "using haxe.root;\n"; newline w;);
 					gen_class w cl;
 					newline w;
 					newline w
@@ -2185,7 +2296,7 @@ let configure gen =
 				(not cl.cl_extern)
 			| TEnumDecl e ->
 				if not e.e_extern then begin
-					(if no_root && len w = 0 then write w "using haxe.root;"; newline w;);
+					(if no_root && len w = 0 then write w "using haxe.root;\n"; newline w;);
 					gen_enum w e;
 					newline w;
 					newline w
@@ -2221,10 +2332,15 @@ let configure gen =
 
 	Hashtbl.add gen.gspecial_vars "__delegate__" true;
 	Hashtbl.add gen.gspecial_vars "__array__" true;
+	Hashtbl.add gen.gspecial_vars "__arrptr__" true;
 
 	Hashtbl.add gen.gsupported_conversions (["haxe"; "lang"], "Null") (fun t1 t2 -> true);
 	let last_needs_box = gen.gneeds_box in
-	gen.gneeds_box <- (fun t -> match t with | TInst( { cl_path = (["haxe"; "lang"], "Null") }, _ ) -> true | _ -> last_needs_box t);
+	gen.gneeds_box <- (fun t -> match (gen.greal_type t) with
+		| TAbstract( ( { a_path = ["cs"], "Pointer" }, _ ) )
+		| TInst( { cl_path = ["cs"], "Pointer" }, _ )
+		| TInst( { cl_path = (["haxe"; "lang"], "Null") }, _ ) -> true
+		| _ -> last_needs_box t);
 
 	gen.greal_type <- real_type;
 	gen.greal_type_param <- change_param_type;
@@ -3403,6 +3519,9 @@ let convert_ilclass ctx p ?(delegate=false) ilcls = match ilcls.csuper with
 		(*	| _ -> raise Exit); *)
 		(match ilcls.csuper with
 			| Some { snorm = LClass ( (["System"],[],"Object"), [] ) } -> ()
+			| Some ({ snorm = LClass ( (["System"],[],"ValueType"), [] ) } as s) ->
+				flags := HExtends (get_type_path ctx (convert_signature ctx p s.snorm)) :: !flags;
+				meta := (Meta.Struct,[],p) :: !meta
 			| Some { snorm = LClass ( (["haxe";"lang"],[],"HxObject"), [] ) } ->
 				meta := (Meta.HxGen,[],p) :: !meta
 			| Some s ->

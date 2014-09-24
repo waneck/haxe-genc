@@ -628,9 +628,6 @@ let on_inherit ctx c p h =
 	| HExtends { tpackage = ["haxe";"remoting"]; tname = "AsyncProxy"; tparams = [TPType(CTPath t)] } ->
 		extend_remoting ctx c t p true true;
 		false
-	| HExtends { tpackage = ["mt"]; tname = "AsyncProxy"; tparams = [TPType(CTPath t)] } ->
-		extend_remoting ctx c t p true false;
-		false
 	| HExtends { tpackage = ["haxe";"xml"]; tname = "Proxy"; tparams = [TPExpr(EConst (String file),p);TPType t] } ->
 		extend_xml_proxy ctx c t file p;
 		true
@@ -647,7 +644,7 @@ module AbstractCast = struct
 	let make_static_call ctx c cf a pl args t p =
 		make_static_call ctx c cf (apply_params a.a_params pl) args t p
 
-	let rec do_check_cast ctx tleft eright p =
+	let do_check_cast ctx tleft eright p =
 		let recurse cf f =
 			if cf == ctx.curfield || List.mem cf !cast_stack then error "Recursive implicit cast" p;
 			cast_stack := cf :: !cast_stack;
@@ -695,8 +692,7 @@ module AbstractCast = struct
 					loop2 a.a_to
 				end
 			| _ ->
-				unify_raise ctx eright.etype tleft p;
-				eright
+				raise Not_found
 			in
 			loop tleft eright.etype
 		end
@@ -715,6 +711,55 @@ module AbstractCast = struct
 		with Error (Unify _ as err,_) ->
 			if not ctx.untyped then display_error ctx (error_msg err) p;
 			eright
+
+	let find_array_access_raise ctx a pl e1 e2o p =
+		let is_set = e2o <> None in
+		let ta = apply_params a.a_params pl a.a_this in
+		let rec loop cfl = match cfl with
+			| [] -> raise Not_found
+			| cf :: cfl when not (Ast.Meta.has Ast.Meta.ArrayAccess cf.cf_meta) ->
+				loop cfl
+			| cf :: cfl ->
+				let monos = List.map (fun _ -> mk_mono()) cf.cf_params in
+				let map t = apply_params a.a_params pl (apply_params cf.cf_params monos t) in
+				let check_constraints () =
+					List.iter2 (fun m (name,t) -> match follow t with
+						| TInst ({ cl_kind = KTypeParameter constr },_) when constr <> [] ->
+							List.iter (fun tc -> match follow m with TMono _ -> raise (Unify_error []) | _ -> Type.unify m (map tc) ) constr
+						| _ -> ()
+					) monos cf.cf_params;
+				in
+				match follow (map cf.cf_type) with
+				| TFun([(_,_,tab);(_,_,ta1);(_,_,ta2)],r) as tf when is_set ->
+					begin try
+						Type.unify tab ta;
+						let e1 = cast_or_unify ctx ta1 e1 p in
+						let e2o = match e2o with None -> None | Some e2 -> Some (cast_or_unify ctx ta2 e2 p) in
+						check_constraints();
+						cf,tf,r,e1,e2o
+					with Unify_error _ ->
+						loop cfl
+					end
+				| TFun([(_,_,tab);(_,_,ta1)],r) as tf when not is_set ->
+					begin try
+						Type.unify tab ta;
+						let e1 = cast_or_unify ctx ta1 e1 p in
+						check_constraints();
+						cf,tf,r,e1,None
+					with Unify_error _ ->
+						loop cfl
+					end
+				| _ -> loop cfl
+		in
+		loop a.a_array
+
+	let find_array_access ctx a tl e1 e2o p =
+		try find_array_access_raise ctx a tl e1 e2o p
+		with Not_found -> match e2o with
+			| None ->
+				error (Printf.sprintf "No @:arrayAccess function accepts argument of %s" (s_type (print_context()) e1.etype)) p
+			| Some e2 ->
+				error (Printf.sprintf "No @:arrayAccess function accepts arguments of %s and %s" (s_type (print_context()) e1.etype) (s_type (print_context()) e2.etype)) p
 
 	let find_multitype_specialization com a pl p =
 		let m = mk_mono() in
@@ -1238,7 +1283,6 @@ let rec is_volatile t =
 		is_volatile (!f())
 	| TType (t,tl) ->
 		(match t.t_path with
-		| ["mt";"flash"],"Volatile" -> true
 		| _ -> is_volatile (apply_params t.t_params tl t.t_type))
 	| _ ->
 		false
@@ -1326,12 +1370,12 @@ let dump_types com =
 			| Some f -> print_field false f);
 			List.iter (print_field false) c.cl_ordered_fields;
 			List.iter (print_field true) c.cl_ordered_statics;
-			(match c.cl_init with
-			| None -> ()
-			| Some e ->
-				print "\n\n\t__init__ = ";
-				print "%s" (s_expr s_type e);
-				print "}\n");
+            (match c.cl_init with
+            | None -> ()
+            | Some e ->
+                print "\n\n\t__init__ = ";
+                print "%s" (s_expr s_type e);
+                print "}\n");
 			print "}";
 		| Type.TEnumDecl e ->
 			print "%s%senum %s%s {\n" (if e.e_private then "private " else "") (if e.e_extern then "extern " else "") (s_type_path path) (params e.e_params);
@@ -1601,7 +1645,7 @@ module UnificationCallback = struct
 		| TFun(args,_) ->
 			check_call_params f el args
 		| _ ->
-			el
+			List.map (fun e -> f e t_dynamic) el
 
 	let rec run f e =
 		let f e t =

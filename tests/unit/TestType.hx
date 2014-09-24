@@ -387,7 +387,7 @@ class TestType extends Test {
 		eq(c.b, true);
 		eq(c.t, String);
 
-		var c = new InitChildWithCtor("null");
+		var c = new InitChildWithCtor(null);
 		eq(c.i, 2);
 		eq(c.s, "foo");
 		eq(c.b, true);
@@ -489,7 +489,7 @@ class TestType extends Test {
 	{
 		eq(UsingChild1.test(), "FOOFOOFOO");
 		eq(UsingChild2.test(), "FOO");
-		eq(UsingUnrelated.test(), "FOOFOO");
+		eq(UsingUnrelated.test(), "trueFOOFOO");
 	}
 
 	function testInlineInit()
@@ -665,6 +665,7 @@ class TestType extends Test {
 		eq(c.fProp(9), "test09");
 	}
 
+	@:analyzer(ignore)
 	function testVoidFunc() {
 		exc(function() { throw null; return 1; } );
 		exc(function() { throw null; return "foo"; } );
