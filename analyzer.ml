@@ -762,7 +762,13 @@ module ConstPropagation = struct
 			raise Not_found
 
 	let apply ssa e =
+		let had_function = ref false in
 		let rec loop e = match e.eexpr with
+			| TFunction _ when !had_function ->
+				e
+			| TFunction tf ->
+				had_function := true;
+				{e with eexpr = TFunction {tf with tf_expr = loop tf.tf_expr}}
 			| TLocal v when (match follow v.v_type with TDynamic _ -> false | _ -> not v.v_capture && not (type_has_analyzer_option v.v_type "no_const_propagation")) ->
 				begin try
 					let e' = PMap.find v.v_id ssa.var_values in
@@ -771,14 +777,16 @@ module ConstPropagation = struct
 				with Not_found ->
 					e
 				end
+			| TCall({eexpr = TField(_,(FStatic(_,cf) | FInstance(_,_,cf) | FAnon cf))},el) when has_analyzer_option cf.cf_meta "no_const_propagation" ->
+				e
 			| TCall(e1,el) ->
-			let e1 = loop e1 in
-			let check e t =
-				if type_has_analyzer_option t "no_const_propagation" then e
-				else loop e
-			in
-			let el = Codegen.UnificationCallback.check_call check el e1.etype in
-			{e with eexpr = TCall(e1,el)}
+				let e1 = loop e1 in
+				let check e t =
+					if type_has_analyzer_option t "no_const_propagation" then e
+					else loop e
+				in
+				let el = Codegen.UnificationCallback.check_call check el e1.etype in
+				{e with eexpr = TCall(e1,el)}
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
 				let e2 = loop e2 in
 				ssa.var_values <- PMap.add v.v_id e2 ssa.var_values;
@@ -786,6 +794,23 @@ module ConstPropagation = struct
 			| TUnop((Increment | Decrement),_,_)
 			| TBinop(OpAssignOp _,_,_) ->
 				e
+			| TIf(e1,e2,eo) ->
+				let e1 = loop e1 in
+				let e2 = loop e2 in
+				begin match e1.eexpr with
+					| TConst (TBool true) ->
+						e2
+					| TConst (TBool false) ->
+						begin match eo with
+							| None ->
+								mk (TConst TNull) t_dynamic e.epos
+							| Some e ->
+								loop e
+						end
+					| _ ->
+						let eo = match eo with None -> None | Some e -> Some (loop e) in
+						{e with eexpr = TIf(e1,e2,eo)}
+				end;
 			| TVar(v,Some e1) ->
 				let e1 = loop e1 in
 				ssa.var_values <- PMap.add v.v_id e1 ssa.var_values;
