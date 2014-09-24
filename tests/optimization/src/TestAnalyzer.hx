@@ -443,13 +443,12 @@ class TestAnalyzer extends TestBase {
 		try {
 			assertEqualsConst(1, a);
 			throw true;
-			assertEqualsConst(1, a);
 		} catch(e:Dynamic) {
 			assertEqualsConst(1, a);
 			a = 2;
 			assertEqualsConst(2, a);
 		}
-		assertEquals(2, a);
+		assertEqualsConst(2, a);
 	}
 
 	function testTry3() {
@@ -520,6 +519,115 @@ class TestAnalyzer extends TestBase {
 			a = 2;
 		}
 		assertEqualsConst(2, a);
+	}
+
+	function testTry8() {
+		var a = 1;
+		try {
+			if (cond1()) {
+				a = 2;
+				throw "out";
+			}
+		} catch(e:Dynamic) {
+
+		}
+		assertEquals(2, a);
+	}
+
+	function testTry9() {
+		var a = 1;
+		try {
+			throw "foo";
+		} catch(e:String) {
+			a = 2;
+		} catch(e:Dynamic) {
+			a = 2;
+		}
+		assertEqualsConst(2, a);
+	}
+
+	function testTry10() {
+		var a = 1;
+		try {
+			if (cond1()) {
+				throw "foo";
+			}
+		} catch(e:String) {
+			a = 2;
+		} catch(e:Dynamic) {
+			a = 2;
+		}
+		assertEquals(2, a);
+	}
+
+	function testTry11() {
+		var a = 1;
+		try {
+			if (cond1()) {
+				throw "foo";
+			}
+		} catch(e:String) {
+
+		} catch(e:Dynamic) {
+			a = 2;
+		}
+		assertEquals(1, a);
+	}
+
+	function testThrow1() {
+		var a = 1;
+		if (!cond1()) {
+			a = 2;
+			throw true;
+		}
+		assertEqualsConst(1, a);
+	}
+
+	function testThrow2() {
+		var a = 1;
+		if (!cond1()) {
+			a = 2;
+			if (!cond1()) {
+				throw true;
+			}
+		}
+		assertEquals(1, a);
+	}
+
+	function testReturn1() {
+		var a = 1;
+		if (!cond1()) {
+			a = 2;
+			return;
+		}
+		assertEqualsConst(1, a);
+	}
+
+	function testBreak1() {
+		var a = 1;
+		while (true) {
+			if (cond1()) {
+				a = 2;
+				break;
+			}
+			assertEqualsConst(1, a);
+		}
+		assertEquals(2, a);
+	}
+
+	function testContinue1() {
+		var a = 1;
+		while (true) {
+			if (a == 2) {
+				break;
+			}
+			if (cond1()) {
+				a = 2;
+				continue;
+			}
+			assertEquals(2, a);
+		}
+		assertEquals(2, a);
 	}
 
 	//function testMisc() {

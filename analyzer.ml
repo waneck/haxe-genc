@@ -396,7 +396,7 @@ module Ssa = struct
 					v.v_extra <- Some (("",t_dynamic) :: l,eo);
 					List.length l + 1
 				| _ ->
-					assert false
+					error "Something went wrong" p
 			in
 			let v' = alloc_var (Printf.sprintf "%s<%i>" v.v_name i) v.v_type in
 			v'.v_meta <- [(Meta.Custom ":ssa"),[],p];
@@ -499,8 +499,10 @@ module Ssa = struct
 				in
 				{e with eexpr = TVar(v,eo)}
 			| TFunction tf ->
+				let close = branch ctx e.epos in
 				List.iter (fun (v,_) -> declare_var ctx v) tf.tf_args;
 				let e' = loop ctx tf.tf_expr in
+				close (mk_join_node());
 				{e with eexpr = TFunction {tf with tf_expr = e'}}
 			(* var modifications *)
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when v.v_name <> "this" ->
@@ -590,6 +592,7 @@ module Ssa = struct
 					| [] -> error "Break outside loop" e.epos
 					| (_,join) :: _ -> add_vars join ctx.cur_vars e.epos
 				end;
+				ctx.cur_vars <- PMap.empty;
 				e
 			| TContinue ->
 				begin match ctx.loop_stack with
@@ -597,6 +600,30 @@ module Ssa = struct
 					| (join,_) :: _ -> add_vars join ctx.cur_vars e.epos
 				end;
 				e
+			| TThrow e1 ->
+				let e1 = loop ctx e1 in
+				begin match ctx.exception_stack with
+					| join :: _ -> add_vars join ctx.cur_vars e.epos
+					| _ -> ()
+				end;
+				ctx.cur_vars <- PMap.empty;
+				{e with eexpr = TThrow e1}
+			| TReturn eo ->
+				let eo = match eo with None -> None | Some e -> Some (loop ctx e) in
+				ctx.cur_vars <- PMap.empty;
+				{e with eexpr = TReturn eo}
+			| TBlock el ->
+				let rec loop2 el = match el with
+					| [] ->
+						[]
+					| ({eexpr = TThrow _ | TReturn _ | TBreak | TContinue } as e1) :: _ :: _ ->
+						ctx.com.warning "Unreachable code after this expression" e1.epos;
+						[loop ctx e1]
+					| e :: el ->
+						let e = loop ctx e in
+						e :: (loop2 el)
+				in
+				{e with eexpr = TBlock(loop2 el)}
 			| _ ->
 				begin match ctx.exception_stack with
 					| join :: _ when can_throw e -> add_vars join ctx.cur_vars e.epos

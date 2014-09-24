@@ -1,4 +1,5 @@
 -cp src
 -main TestAnalyzer
 -D static-analyzer
+-D dump=pretty
 --interp
