@@ -51,6 +51,9 @@ class TestBaseMacro {
 						Context.warning('$e2 should be $e1', e.pos);
 				}
 			case TCall({ expr: TField(_, FInstance(_, _.get() => {name: "assertEquals"}))}, el):
+				for (e in el) {
+					checkExpr(e);
+				}
 				switch (el[1].expr) {
 					case (TConst(tc)):
 						Context.warning("Unexpected constant in assertEquals, use assertEqualsConst if this is intended", e.pos);

@@ -508,15 +508,17 @@ module Ssa = struct
 				let _ = assign_var ctx v e2 e1.epos in
 				{e with eexpr = TBinop(OpAssign,e1,e2)}
 			| TBinop(OpAssignOp op,({eexpr = TLocal v} as e1),e2) ->
+				let e1 = loop ctx e1 in
 				let e_op = mk (TBinop(op,e1,e2)) e.etype e.epos in
-				ignore(assign_var ctx v e_op e1.epos);
+				assign_var ctx v e_op e1.epos;
 				let e2 = loop ctx e2 in
 				{e with eexpr = TBinop(OpAssignOp op,e1,e2)}
 			| TUnop((Increment | Decrement as op),flag,({eexpr = TLocal v} as e1)) ->
 				let op = match op with Increment -> OpAdd | Decrement -> OpSub | _ -> assert false in
 				let e_one = mk (TConst (TInt (Int32.of_int 1))) com.basic.tint e.epos in
+				let e1 = loop ctx e1 in
 				let e_op = mk (TBinop(op,e1,e_one)) e.etype e.epos in
-				ignore(assign_var ctx v e_op e1.epos);
+				assign_var ctx v e_op e1.epos;
 				e
 			(* var user *)
 			| TLocal v ->
@@ -686,15 +688,23 @@ module ConstPropagation = struct
 		| TBinop(OpAssignOp _,_,_)
 		| TBinop(OpAssign,_,_) ->
 			raise Not_found
-(* 		| TBinop(op,e1,e2) ->
+ 		| TBinop(op,e1,e2) ->
 			let e1 = value ssa e1 in
 			let e2 = value ssa e2 in
 			let e = {e with eexpr = TBinop(op,e1,e2)} in
 			let e' = Optimizer.optimize_binop e op e1 e2 in
-			e'
+			if e == e' then
+				raise Not_found
+			else
+				value ssa e'
 		| TUnop(op,flag,e1) ->
 			let e1 = value ssa e1 in
-			Optimizer.optimize_unop {e with eexpr = TUnop(op,flag,e1)} op flag e1 *)
+			let e = {e with eexpr = TUnop(op,flag,e1)} in
+			let e' = Optimizer.optimize_unop e op flag e1 in
+			if e == e' then
+				raise Not_found
+			else
+				value ssa e'
 		| TCall ({eexpr = TLocal {v_name = "__ssa_phi__"}},el) ->
 			let el = List.map (value ssa) el in
 			begin match el with
