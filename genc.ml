@@ -1968,10 +1968,10 @@ module GC = struct
 	type gc_ctx = { gc_con : context; gc_c : tclass; gc_cf : tclass_field; gc_isstatic : bool; gc_iscon : bool }
 
 	let make_instance = function
-		| TClassDecl c -> TInst (c,List.map snd c.cl_types)
-		| TEnumDecl e -> TEnum (e,List.map snd e.e_types)
-		| TTypeDecl t -> TType (t,List.map snd t.t_types)
-		| TAbstractDecl a -> TAbstract (a,List.map snd a.a_types)
+		| TClassDecl c -> TInst (c,List.map snd c.cl_params)
+		| TEnumDecl e -> TEnum (e,List.map snd e.e_params)
+		| TTypeDecl t -> TType (t,List.map snd t.t_params)
+		| TAbstractDecl a -> TAbstract (a,List.map snd a.a_params)
 
 	let s_ctx_id ctx = Tid.id (make_instance (TClassDecl ctx.gc_c)) ^ "." ^ ctx.gc_cf.cf_name
 
@@ -2051,7 +2051,7 @@ module GC = struct
 		in
 		let mk_field c ethis n =
 				let cf = (PMap.find n c.cl_fields) in
-				mk (TField (ethis,(FInstance (c,cf)))) cf.cf_type null_pos
+				mk (TField (ethis,(FInstance (c,List.map (fun (_,t) -> t) c.cl_params,cf)))) cf.cf_type null_pos
 		in
 		let mk_call c ethis n el =
 			let ef = mk_field c ethis n in
@@ -2211,7 +2211,7 @@ module GC = struct
 
 		| TAbstract ( {a_this = a_this},_) when a_this == tp -> assert false;
 		| TAbstract (ta,tp) ->
-			get_field_info hxc (Codegen.Abstract.get_underlying_type ta tp)
+			get_field_info hxc (Abstract.get_underlying_type ta tp)
 		| TInst ({cl_kind=KTypeParameter _},_) ->
 			FI_TParm 8
 		| TType (_,_) ->
@@ -2321,8 +2321,8 @@ module GC = struct
 			| FI_TParm  v,0 ->
 					let idx = PMap.find (Tid.id t) pos_by_tp in
 					RT_tp(offs,idx) :: acc
-			| FI_Struct(s,a),_ -> RT_val(offs,0)  :: acc(*TODO make struct mambers known to the gc*)
-			| FI_CSArr(f,n,b,a),_ -> RT_val(offs,0)  :: acc  (*TODO make array mambers known to the gc*)
+			| FI_Struct(s,a),_ -> RT_val(offs,0)  :: acc(*TODO make struct members known to the gc*)
+			| FI_CSArr(f,n,b,a),_ -> RT_val(offs,0)  :: acc  (*TODO make array members known to the gc*)
 			| FI_Val    v,_ -> acc
 			| _ ->
 				Printf.printf "non-val field not 8 byte aligned.. bad\n";
@@ -2337,11 +2337,11 @@ module GC = struct
 	let type_to_runtime_info ctx t anon_tps_opt = match t with
 		| TInst(c,tps) ->
 			let types =  get_xs_types (get_class_var_fields c) in
-			_types_to_runtime_info ctx t types (types_of_tparams c.cl_types)
+			_types_to_runtime_info ctx t types (types_of_tparams c.cl_params)
 
 		| TEnum(e,tps) ->
 			()
-			(*_types_to_runtime_info ctx (types_of_tparams e.e_types)*)
+			(*_types_to_runtime_info ctx (types_of_tparams e.e_params)*)
 		| TAnon(a) ->
 			let types =  get_xs_types (get_anon_fields a) in
 			(match anon_tps_opt with
@@ -2499,7 +2499,7 @@ module GC = struct
 			else if not ctx.gc_isstatic then
 				CTPI_not_found
 			else
-				let idx = find_tp st ctx.gc_c.cl_types in
+				let idx = find_tp st ctx.gc_c.cl_params in
 				if idx > -1 then
 					CTPI_class idx
 				else
@@ -2638,7 +2638,7 @@ module GC = struct
 				| TEnum(_,[])  -> te
 				| TEnum(_,tps) ->
 					p_info ctx ("add enum info, calling " ^ ef.ef_name ^ " of " ^ (s_type_path et.e_path));
-					let sr_l = get_tp_pos_info_from_callee ef.ef_type (List.map snd et.e_types) in
+					let sr_l = get_tp_pos_info_from_callee ef.ef_type (List.map snd et.e_params) in
 					(* the following is essentially the same as _add_tp_info_arg_known, but
 					   in case the constructor doesn't have any type parameter arguments we don't add info *)
 					if not (sr_has_any sr_l) then
@@ -2656,10 +2656,10 @@ module GC = struct
 				| _ -> assert false
 
 			)
-		| TCall(({eexpr=TField(_,(FStatic(({cl_extern = false} as c),cf) | FInstance(c,cf)))} as e1),el) ->
+		| TCall(({eexpr=TField(_,(FStatic(({cl_extern = false} as c),cf) | FInstance(c,_,cf)))} as e1),el) ->
 			(* c.gc.Memory allocation *)
 			(match c with
-				| {cl_kind = KAbstractImpl { a_path=["c";"gc"],"Memory"; a_types=[(s,t)]}}
+				| {cl_kind = KAbstractImpl { a_path=["c";"gc"],"Memory"; a_params=[(s,t)]}}
 					->  p_info ctx ("MEMCALL" ^ cf.cf_name ^ " " ^ (Tid.id te.etype));
 						let tp = (match te.etype with
 							| TAbstract(_,[t]) -> t
@@ -2678,7 +2678,7 @@ module GC = struct
 			let clo_t = ctx.gc_con.hxc.t_closure (mk_mono()) in
 			let clo_class = get_class clo_t in
 			let _has_tp = (PMap.find "_has_tp" clo_class.cl_fields) in
-			let econd = mk (TField(e1,FInstance(clo_class,_has_tp))) ctx.gc_con.com.basic.tbool null_pos in
+			let econd = mk (TField(e1,FInstance(clo_class,List.map (fun (_,t) -> t) clo_class.cl_params,_has_tp))) ctx.gc_con.com.basic.tbool null_pos in
 			{ te with eexpr = TIf(econd,_add_tp_info_arg_callsite ctx te e1 el None, Some te) }
 		| TNew(c,ctps,el) ->
 			(* for now we pass both class TPs and constructor TPs in the same argument,
@@ -2737,7 +2737,7 @@ module GC = struct
 		| _ -> assert false
 
 	let add_tp_info_enum_con con et ef =
-		let sr_l = get_tp_pos_info_from_callee ef.ef_type (List.map snd et.e_types) in
+		let sr_l = get_tp_pos_info_from_callee ef.ef_type (List.map snd et.e_params) in
 		if not (sr_has_any sr_l) then
 			ef.ef_type
 		else
@@ -2792,7 +2792,7 @@ module GC = struct
 	let run con td = (match td with
 		| TClassDecl tc ->
 			let cons = match tc.cl_constructor with
-				| Some cf->	let _ = match tc.cl_types,cf.cf_params with
+				| Some cf->	let _ = match tc.cl_params,cf.cf_params with
 							| ([],[]) -> ()
 							| _       ->
 								if debug then Printf.printf "class con add arg %s\n" (s_type_path tc.cl_path) else ();
@@ -2819,7 +2819,7 @@ module GC = struct
 			map_fields con tc add_tp_info_callsite no_filter both false;
 			map_fields con tc add_tp_info_callsite no_filter cons true;
 		| TEnumDecl et ->
-			if (List.length et.e_types) > 0 then begin
+			if (List.length et.e_params) > 0 then begin
 				let set_type n =
 					let ef = PMap.find n et.e_constrs in
 					let ef = { ef with ef_type = (prepend_arg_type con ef.ef_type) } in
@@ -2851,10 +2851,10 @@ module GC = struct
 			| TInst(c,_) ->
 				let cfields = get_class_var_fields c in
 				let types = get_xs_types cfields in
-				["x", (get_info hxc types)]
+				[Tid.id t, (get_info hxc types)]
 			| TEnum(e,_) ->
-				List.map (fun l -> "x",(get_info hxc l)) (get_enum_fields e)
-			| TAnon(a) -> ["x",(get_info hxc (get_xs_types (get_anon_fields a)))]
+				List.map (fun l -> (Tid.id t),(get_info hxc l)) (get_enum_fields e)
+			| TAnon(a) -> [(Tid.id t),(get_info hxc (get_xs_types (get_anon_fields a)))]
 			| _ -> [])
 		in
 
@@ -2875,7 +2875,7 @@ module GC = struct
 	let collect_info con =
 		List.iter (type_decl_info con) con.com.types;
 		List.iter (run con) con.com.types;
-		(*p_alignment con.hxc;*)
+		(* p_alignment con.hxc; *)
 		()
 		(*TDB.p_classes ()*)
 
@@ -3757,7 +3757,7 @@ let generate_enum ctx en =
 	newline ctx;
 
 	ctx.buf <- ctx.buf_c;
-	(* spr ctx (generate_typedef_declaration ctx (TEnum(en,List.map snd en.e_types))); *)
+	(* spr ctx (generate_typedef_declaration ctx (TEnum(en,List.map snd en.e_params))); *)
 	(* newline ctx; *)
 
 	(* generate constructor functions *)
