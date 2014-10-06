@@ -1093,7 +1093,7 @@ let run_ssa com config e =
 			alloc_var name t
 	in
 	let do_simplify = match com.platform with
-		| Cpp | Flash8 | Python -> true
+		| Cpp | Flash8 | Python | C -> true
 		| _ -> false
 	in
 	let with_timer s f =

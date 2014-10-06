@@ -986,7 +986,7 @@ let run com tctx main =
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			blockify_ast;
 			(match com.platform with
-				| Cpp | Flash8 -> (fun e ->
+				| Cpp | Flash8 | C -> (fun e ->
 					let save = save_locals tctx in
 					let e = try Analyzer.Simplifier.apply com (Typecore.gen_local tctx) e with Exit -> e in
 					save();

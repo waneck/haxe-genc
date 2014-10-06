@@ -1,4 +1,6 @@
 import c.ConstSizeArray;
+
+@:analyzer(no_simplification)
 class ArrayStruct
 {
 	public var _count:Int; //hack so _count can be sorted first
