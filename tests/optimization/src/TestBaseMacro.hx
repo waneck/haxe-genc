@@ -56,7 +56,7 @@ class TestBaseMacro {
 				}
 				switch (el[1].expr) {
 					case (TConst(tc)):
-						Context.warning("Unexpected constant in assertEquals, use assertEqualsConst if this is intended", e.pos);
+						Context.warning('Unexpected constant $tc in assertEquals, use assertEqualsConst if this is intended', e.pos);
 					case _:
 				}
 			case _:

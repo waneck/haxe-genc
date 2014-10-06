@@ -12,6 +12,7 @@ class InlineCtor {
 	var A = "a";
 }
 
+@:analyzer(no_local_dce)
 class Test {
 	#if !static_analyzer
 
@@ -35,10 +36,10 @@ class Test {
 	@:js('
 		var c_x = 12;
 		var c_y = "foo";
-		var x = c_x;
+		var x = 12;
 		c_x = 13;
-		x = c_x;
-		var y = c_y;
+		x = 13;
+		var y = "foo";
 	')
 	static function testInlineCtor1() {
 		var c = new InlineCtor(12, "foo");
@@ -54,7 +55,7 @@ class Test {
 		a = 2;
 		var c_x = 12;
 		var c_y = "foo";
-		a = c_x;
+		a = 12;
 	')
 	static function testInlineCtor2() {
 		var a = 0;
@@ -73,7 +74,7 @@ class Test {
 		a = 1;
 		var b_x = 2;
 		var b_y = "b";
-		b_x = a;
+		b_x = 1;
 	')
 	static function testInlineCtor3() {
 		var a = 0;
@@ -88,8 +89,8 @@ class Test {
 	@:js('
 		var x_foo = 1;
 		var x_bar = 2;
-		var y = x_foo;
-		var z = x_bar;
+		var y = 1;
+		var z = 2;
 	')
 	static function testStructureInline1() {
 		var x = {

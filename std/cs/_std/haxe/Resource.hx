@@ -19,39 +19,44 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+package haxe;
 
-package haxe.rtti;
-import haxe.rtti.CType;
+@:coreApi class Resource {
 
-/**
-	Rtti is a helper class which supplements the `@:rtti` metadata.
-**/
-class Rtti {
+	@:keep static var content : Array<String>;
+	static var paths : Map<String,String>;
 
-	/**
-		Returns the `haxe.rtti.CType.Classdef` corresponding to class `c`.
+	@:keep static function getPaths():Map<String,String> {
+		if (paths != null)
+			return paths;
 
-		If `c` has no runtime type information, e.g. because no `@:rtti@` was
-		added, `null` is returned.
-
-		If `c` is null, the result is unspecified.
-	**/
-	static public function getRtti<T>(c:Class<T>):Classdef {
-		var rtti = Reflect.field(c, "__rtti");
-		var x = Xml.parse(rtti).firstElement();
-		var infos = new haxe.rtti.XmlParser().processElement(x);
-		switch (infos) {
-			case TClassdecl(c): return c;
-			case t: throw 'Enum mismatch: expected TClassDecl but found $t';
+		var p = new Map();
+		var all = cs.Lib.toNativeType(haxe.Resource).Assembly.GetManifestResourceNames();
+		for (i in 0...all.Length) {
+			var path = all[i];
+			var name = path.substr(path.indexOf("Resources.") + 10);
+			p.set(name, path);
 		}
+		return paths = p;
 	}
 
-	/**
-		Tells if `c` has runtime type information.
+	public static inline function listNames() : Array<String> {
+		return content.copy();
+	}
 
-		If `c` is null, the result is unspecified.
-	**/
-	static public function hasRtti<T>(c:Class<T>):Bool {
-		return Lambda.has(Type.getClassFields(c), "__rtti");
+	public static function getString( name : String ) : String {
+		var path = getPaths().get(name);
+		var str = cs.Lib.toNativeType(haxe.Resource).Assembly.GetManifestResourceStream(path);
+		if (str != null)
+			return new cs.io.NativeInput(str).readAll().toString();
+		return null;
+	}
+
+	public static function getBytes( name : String ) : haxe.io.Bytes {
+		var path = getPaths().get(name);
+		var str = cs.Lib.toNativeType(haxe.Resource).Assembly.GetManifestResourceStream(path);
+		if (str != null)
+			return new cs.io.NativeInput(str).readAll();
+		return null;
 	}
 }

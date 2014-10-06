@@ -950,34 +950,69 @@ let run com tctx main =
 	end;
 	if not (Common.defined com Define.NoDeprecationWarnings) then
 		Codegen.DeprecationCheck.run com;
-	(* PASS 1: general expression filters *)
- 	let filters = [
- 		Codegen.UnificationCallback.run (check_unification com);
-		Codegen.AbstractCast.handle_abstract_casts tctx;
-		blockify_ast;
-		if com.foptimize then Optimizer.inline_constructors tctx else (fun e -> e);
-		captured_vars com;
-		(* check_local_vars_init; *)
-	] in
-	List.iter (post_process tctx filters) com.types;
-	post_process_end();
-	Analyzer.apply com;
-	List.iter (fun f -> f()) (List.rev com.filters);
-	(* save class state *)
-	List.iter (save_class_state tctx) com.types;
-	(* PASS 2: destructive type and expression filters *)
-	let filters = [
-		Optimizer.sanitize com;
-		(* if (Common.defined com Define.StaticAnalyzer) then (fun e -> e) else promote_complex_rhs com; *)
-		promote_complex_rhs com;
-		if com.config.pf_add_final_return then add_final_return else (fun e -> e);
-		rename_local_vars com;
-	] in
-	List.iter (fun t ->
-		remove_generic_base tctx t;
-		remove_extern_fields tctx t;
-		run_expression_filters tctx filters t;
-	) com.types;
+	let use_static_analyzer = Common.defined com Define.Analyzer in
+	(* this part will be a bit messy until we make the analyzer the default *)
+	if use_static_analyzer then begin
+		(* PASS 1: general expression filters *)
+	 	let filters = [
+	 		Codegen.UnificationCallback.run (check_unification com);
+			Codegen.AbstractCast.handle_abstract_casts tctx;
+			Optimizer.inline_constructors tctx;
+			Optimizer.reduce_expression tctx;
+			blockify_ast;
+			captured_vars com;
+		] in
+		List.iter (post_process tctx filters) com.types;
+		Analyzer.apply com;
+		post_process_end();
+		List.iter (fun f -> f()) (List.rev com.filters);
+		(* save class state *)
+		List.iter (save_class_state tctx) com.types;
+		(* PASS 2: destructive type and expression filters *)
+		let filters = [
+			Optimizer.sanitize com;
+			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
+			rename_local_vars com;
+		] in
+		List.iter (fun t ->
+			remove_generic_base tctx t;
+			remove_extern_fields tctx t;
+			run_expression_filters tctx filters t;
+		) com.types;
+	end else begin
+		(* PASS 1: general expression filters *)
+	 	let filters = [
+	 		Codegen.UnificationCallback.run (check_unification com);
+			Codegen.AbstractCast.handle_abstract_casts tctx;
+			blockify_ast;
+			(match com.platform with
+				| Cpp | Flash8 -> (fun e ->
+					let save = save_locals tctx in
+					let e = try Analyzer.Simplifier.apply com (Typecore.gen_local tctx) e with Exit -> e in
+					save();
+					e)
+				| _ -> fun e -> e);
+			if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else Optimizer.sanitize com;
+			check_local_vars_init;
+			captured_vars com;
+		] in
+		List.iter (post_process tctx filters) com.types;
+		post_process_end();
+		List.iter (fun f -> f()) (List.rev com.filters);
+		(* save class state *)
+		List.iter (save_class_state tctx) com.types;
+		(* PASS 2: destructive type and expression filters *)
+		let filters = [
+			promote_complex_rhs com;
+			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
+			rename_local_vars com;
+		] in
+		List.iter (fun t ->
+			remove_generic_base tctx t;
+			remove_extern_fields tctx t;
+			run_expression_filters tctx filters t;
+		) com.types;
+	end;
 	(* update cache dependencies before DCE is run *)
 	Codegen.update_cache_dependencies com;
 	(* check @:remove metadata before DCE so it is ignored there (issue #2923) *)

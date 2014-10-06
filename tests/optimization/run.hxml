@@ -1,9 +1,16 @@
-analyzer.hxml
-#--next
+-cp src
+-D analyzer
+--each
 
-#-cp src
-#-js testopt.js
-#--macro Macro.register('Test')
-#--macro Macro.register('TestJs')
-#-D static-analyzer
-#-dce std
+-main TestAnalyzer
+--interp
+
+--next
+-main TestNullChecker
+--interp
+
+--next
+-js testopt.js
+--macro Macro.register('Test')
+--macro Macro.register('TestJs')
+-dce std

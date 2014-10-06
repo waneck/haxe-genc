@@ -742,7 +742,7 @@ let connecting_string = "?" (* ? see list here http://www.fileformat.info/info/u
 let default_package = "java"
 let strict_mode = ref false (* strict mode is so we can check for unexpected information *)
 
-(* reserved c# words *)
+(* reserved java words *)
 let reserved = let res = Hashtbl.create 120 in
 	List.iter (fun lst -> Hashtbl.add res lst ("_" ^ lst)) ["abstract"; "assert"; "boolean"; "break"; "byte"; "case"; "catch"; "char"; "class";
 		"const"; "continue"; "default"; "do"; "double"; "else"; "enum"; "extends"; "final";
@@ -1431,7 +1431,7 @@ let configure gen =
 					(match eelse with
 						| None -> ()
 						| Some e ->
-							write w " else ";
+							write w "else";
 							in_value := false;
 							expr_s w (mk_block e)
 					)
@@ -1465,8 +1465,8 @@ let configure gen =
 								| _ ->
 									expr_s w e);
 							write w ":";
+							newline w;
 						) el;
-						newline w;
 						in_value := false;
 						expr_s w (mk_block e);
 						newline w;
@@ -1541,6 +1541,11 @@ let configure gen =
 				(params, String.concat " " params_extends)
 	in
 
+	let write_parts w parts =
+		let parts = List.filter (fun s -> s <> "") parts in
+		write w (String.concat " " parts)
+	in
+
 	let rec gen_class_field w ?(is_overload=false) is_static cl is_final cf =
 		let is_interface = cl.cl_interface in
 		let name, is_new, is_explicit_iface = match cf.cf_name with
@@ -1557,7 +1562,7 @@ let configure gen =
 					gen.gcon.error "Only normal (non-dynamic) methods can be overloaded" cf.cf_pos);
 				if not is_interface then begin
 					let access, modifiers = get_fun_modifiers cf.cf_meta "public" [] in
-					print w "%s %s%s %s %s" access (if is_static then "static " else "") (String.concat " " modifiers) (t_s cf.cf_pos (run_follow gen cf.cf_type)) (change_field name);
+					write_parts w (access :: (if is_static then "static" else "") :: modifiers @ [(t_s cf.cf_pos (run_follow gen cf.cf_type)); (change_field name)]);
 					(match cf.cf_expr with
 						| Some e ->
 								write w " = ";
@@ -1615,7 +1620,7 @@ let configure gen =
 
 				let visibility, modifiers = get_fun_modifiers cf.cf_meta visibility [] in
 				let visibility, is_virtual = if is_explicit_iface then "",false else visibility, is_virtual in
-				let v_n = if is_static then "static " else if is_override && not is_interface then "" else if not is_virtual then "final " else "" in
+				let v_n = if is_static then "static" else if is_override && not is_interface then "" else if not is_virtual then "final" else "" in
 				let cf_type = if is_override && not is_overload && not (Meta.has Meta.Overload cf.cf_meta) then match field_access gen (TInst(cl, List.map snd cl.cl_params)) cf.cf_name with | FClassField(_,_,_,_,_,actual_t,_) -> actual_t | _ -> assert false else cf.cf_type in
 
 				let params = List.map snd cl.cl_params in
@@ -1628,7 +1633,8 @@ let configure gen =
 				(if is_override && not is_interface then write w "@Override ");
 				(* public static void funcName *)
 				let params, _ = get_string_params cf.cf_params in
-				print w "%s %s%s %s %s %s" (visibility) v_n (String.concat " " modifiers) params (if is_new then "" else rett_s cf.cf_pos (run_follow gen ret_type)) (change_field name);
+
+				write_parts w (visibility :: v_n :: modifiers @ [params; (if is_new then "" else rett_s cf.cf_pos (run_follow gen ret_type)); (change_field name)]);
 
 				(* <T>(string arg1, object arg2) with T : object *)
 				(match cf.cf_expr with
@@ -1691,6 +1697,7 @@ let configure gen =
 			| ns ->
 				print w "package %s;" (String.concat "." (change_ns ns));
 				newline w;
+				newline w;
 				false
 		in
 
@@ -1733,7 +1740,8 @@ let configure gen =
 		let clt, access, modifiers = get_class_modifiers cl.cl_meta (if cl.cl_interface then "interface" else "class") "public" [] in
 		let is_final = Meta.has Meta.Final cl.cl_meta in
 
-		print w "%s %s %s %s" access (String.concat " " modifiers) clt (change_clname (snd cl.cl_path));
+		write_parts w (access :: modifiers @ [clt; (change_clname (snd cl.cl_path))]);
+
 		(* type parameters *)
 		let params, _ = get_string_params cl.cl_params in
 		let cl_p_to_string (c,p) =
@@ -1786,31 +1794,35 @@ let configure gen =
 				with | Not_found -> ()
 				);
 				write w "main();";
-				end_block w
+				end_block w;
+				newline w
 			| _ -> ()
 		);
 
 		(match cl.cl_init with
 			| None -> ()
 			| Some init ->
-				write w "static ";
-				expr_s w (mk_block init));
-				(if is_some cl.cl_constructor then gen_class_field w false cl is_final (get cl.cl_constructor));
-				(if not cl.cl_interface then
-				List.iter (gen_class_field w true cl is_final) cl.cl_ordered_statics);
-				List.iter (gen_class_field w false cl is_final) cl.cl_ordered_fields;
-				end_block w;
-				if should_close then end_block w;
+				write w "static";
+				expr_s w (mk_block init);
+				newline w
+		);
 
-				(* add imports *)
-				List.iter (function
-					| ["haxe";"root"], _ | [], _ -> ()
-					| path ->
-							write w_header "import ";
-							write w_header (path_s path []);
-							write w_header ";\n"
-				) !imports;
-				add_writer w w_header
+		(if is_some cl.cl_constructor then gen_class_field w false cl is_final (get cl.cl_constructor));
+		(if not cl.cl_interface then List.iter (gen_class_field w true cl is_final) cl.cl_ordered_statics);
+		List.iter (gen_class_field w false cl is_final) cl.cl_ordered_fields;
+
+		end_block w;
+		if should_close then end_block w;
+
+		(* add imports *)
+		List.iter (function
+			| ["haxe";"root"], _ | [], _ -> ()
+			| path ->
+					write w_header "import ";
+					write w_header (path_s path []);
+					write w_header ";\n"
+		) !imports;
+		add_writer w w_header
 	in
 
 
@@ -1819,6 +1831,7 @@ let configure gen =
 			| [] -> false
 			| ns ->
 				print w "package %s;" (String.concat "." (change_ns ns));
+				newline w;
 				newline w;
 				false
 		in

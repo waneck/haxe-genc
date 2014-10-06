@@ -19,39 +19,29 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+package haxe;
 
-package haxe.rtti;
-import haxe.rtti.CType;
+@:coreApi class Resource {
 
-/**
-	Rtti is a helper class which supplements the `@:rtti` metadata.
-**/
-class Rtti {
+	@:keep static var content : Array<String>;
 
-	/**
-		Returns the `haxe.rtti.CType.Classdef` corresponding to class `c`.
-
-		If `c` has no runtime type information, e.g. because no `@:rtti@` was
-		added, `null` is returned.
-
-		If `c` is null, the result is unspecified.
-	**/
-	static public function getRtti<T>(c:Class<T>):Classdef {
-		var rtti = Reflect.field(c, "__rtti");
-		var x = Xml.parse(rtti).firstElement();
-		var infos = new haxe.rtti.XmlParser().processElement(x);
-		switch (infos) {
-			case TClassdecl(c): return c;
-			case t: throw 'Enum mismatch: expected TClassDecl but found $t';
-		}
+	public static inline function listNames() : Array<String> {
+		return content.copy();
 	}
 
-	/**
-		Tells if `c` has runtime type information.
+	public static function getString( name : String ) : String {
+		var stream = cast(Resource, java.lang.Class<Dynamic>).getResourceAsStream("/" + name);
+		if (stream == null)
+			return null;
+		var stream = new java.io.NativeInput(stream);
+		return stream.readAll().toString();
+	}
 
-		If `c` is null, the result is unspecified.
-	**/
-	static public function hasRtti<T>(c:Class<T>):Bool {
-		return Lambda.has(Type.getClassFields(c), "__rtti");
+	public static function getBytes( name : String ) : haxe.io.Bytes {
+		var stream = cast(Resource, java.lang.Class<Dynamic>).getResourceAsStream("/" + name);
+		if (stream == null)
+			return null;
+		var stream = new java.io.NativeInput(stream);
+		return stream.readAll();
 	}
 }

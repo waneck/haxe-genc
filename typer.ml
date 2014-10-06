@@ -271,9 +271,12 @@ let rec can_access ctx ?(in_overload=false) c cf stat =
 	in
 	let has m c f path =
 		let rec loop = function
-			| (m2,[e],_) :: l when m = m2 ->
-				let p = expr_path [] e in
-				(p <> [] && chk_path p path) || loop l
+			| (m2,el,_) :: l when m = m2 ->
+				List.exists (fun e ->
+					let p = expr_path [] e in
+					(p <> [] && chk_path p path)
+				) el
+				|| loop l
 			| _ :: l -> loop l
 			| [] -> false
 		in
@@ -343,7 +346,7 @@ let parse_string com s p inlined =
 		Lexer.restore old;
 		Parser.display_error := old_de
 	in
-	Lexer.init p.pfile (ExtString.String.ends_with p.pfile ".hx");
+	Lexer.init p.pfile true;
 	Parser.display_error := (fun e p -> raise (Parser.Error (e,p)));
 	if not inlined then Parser.resume_display := null_pos;
 	let pack, decls = try
@@ -768,23 +771,32 @@ let unify_field_call ctx fa el args ret p inline =
 	in
 	let is_forced_inline = is_forced_inline co cf in
 	let is_overload = Meta.has Meta.Overload cf.cf_meta in
-	let candidates,failures = List.fold_left (fun (candidates,failures) (t,cf) ->
-		begin try
-			begin match follow t with
-				| TFun(args,ret) ->
-					let el,tf = unify_call_args' ctx el args ret p inline is_forced_inline in
-					let mk_call ethis =
-						let ef = mk (TField(ethis,mk_fa cf)) tf p in
-						make_call ctx ef (List.map fst el) ret p
-					in
-					(el,tf,mk_call)	:: candidates,failures
-				| _ ->
-					assert false
+	let rec loop candidates = match candidates with
+		| [] -> [],[]
+		| (t,cf) :: candidates ->
+			begin try
+				begin match follow t with
+					| TFun(args,ret) ->
+						let el,tf = unify_call_args' ctx el args ret p inline is_forced_inline in
+						let mk_call ethis =
+							let ef = mk (TField(ethis,mk_fa cf)) tf p in
+							make_call ctx ef (List.map fst el) ret p
+						in
+						let candidate = (el,tf,mk_call) in
+						if ctx.com.config.pf_overload && is_overload then begin
+							let candidates,failures = loop candidates in
+							candidate :: candidates,failures
+						end else
+							[candidate],[]
+					| _ ->
+						assert false
+				end
+			with Error (Call_error _,_) as err ->
+				let candidates,failures = loop candidates in
+				candidates,err :: failures
 			end
-		with Error (Call_error _,_) as err ->
-			candidates,err :: failures
-		end
-	) ([],[]) candidates in
+	in
+	let candidates,failures = loop candidates in
 	let fail () = match List.rev failures with
 		| err :: _ -> raise err
 		| _ -> assert false
@@ -3432,6 +3444,9 @@ and type_expr ctx (e,p) (with_type:with_type) =
 					| _ -> Type.map_expr loop e
 				in
 				loop e
+			| (Meta.Analyzer,_,_) ->
+				let e = e() in
+				{e with eexpr = TMeta(m,e)}
 			| _ -> e()
 		in
 		ctx.meta <- old;

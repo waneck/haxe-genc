@@ -19,39 +19,43 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+package haxe;
 
-package haxe.rtti;
-import haxe.rtti.CType;
+import haxe.io.Bytes;
+import haxe.io.BytesData;
 
-/**
-	Rtti is a helper class which supplements the `@:rtti` metadata.
-**/
-class Rtti {
+@:coreApi class Resource {
 
-	/**
-		Returns the `haxe.rtti.CType.Classdef` corresponding to class `c`.
+	static var content : python.lib.Dict<String, BytesData> = untyped _hx_resources__();
 
-		If `c` has no runtime type information, e.g. because no `@:rtti@` was
-		added, `null` is returned.
-
-		If `c` is null, the result is unspecified.
-	**/
-	static public function getRtti<T>(c:Class<T>):Classdef {
-		var rtti = Reflect.field(c, "__rtti");
-		var x = Xml.parse(rtti).firstElement();
-		var infos = new haxe.rtti.XmlParser().processElement(x);
-		switch (infos) {
-			case TClassdecl(c): return c;
-			case t: throw 'Enum mismatch: expected TClassDecl but found $t';
-		}
+	public static inline function listNames() : Array<String> {
+		return python.lib.Builtin.list(content.keys());
 	}
 
-	/**
-		Tells if `c` has runtime type information.
+	public static function getString( name : String ) : String {
+        #if embed_resources
+		for (k in content.keys().iter()) {
+			if (k == name) {
+				var b : haxe.io.Bytes = haxe.crypto.Base64.decode(content.get(k, null));
+				return b.toString();
+			}
+		}
+		return null;
+        #else
+        return content.hasKey(name) ? Bytes.ofData(content.get(name, null)).toString() : null;
+        #end
+	}
 
-		If `c` is null, the result is unspecified.
-	**/
-	static public function hasRtti<T>(c:Class<T>):Bool {
-		return Lambda.has(Type.getClassFields(c), "__rtti");
+	public static function getBytes( name : String ) : haxe.io.Bytes {
+        #if embed_resources
+		for( k in content.keys().iter() )
+			if( k == name ) {
+				var b : haxe.io.Bytes = haxe.crypto.Base64.decode(content.get(k, null));
+				return b;
+
+			}
+        #else
+        return Bytes.ofData(content.get(name,null));
+        #end
 	}
 }

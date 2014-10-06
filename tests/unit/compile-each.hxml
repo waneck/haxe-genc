@@ -5,4 +5,4 @@
 -resource res1.txt
 -resource res2.bin
 -dce full
--D static-analyzer
+-D analyzer

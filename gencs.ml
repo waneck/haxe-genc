@@ -1909,6 +1909,51 @@ let configure gen =
 												mk_block (tf.tf_expr)
 											| _ -> assert false (* FIXME *)
 								in
+
+								let needs_unchecked e =
+									let rec loop e = match e.eexpr with
+									(* a non-zero integer constant means that we want unchecked context *)
+									| TConst (TInt i) when i <> Int32.zero ->
+										raise Exit
+
+									(* don't recurse into explicit checked blocks *)
+									| TCall ({ eexpr = TLocal({ v_name = "__checked__" }) }, _) ->
+										()
+
+									(* skip reflection field hashes as they are safe *)
+									| TNew ({ cl_path = (["haxe"; "lang"],"DynamicObject") }, [], [_; e1; _; e2]) ->
+										loop e1;
+										loop e2
+									| TNew ({ cl_path = (["haxe"; "lang"],"Closure") }, [], [eo; _; _]) ->
+										loop eo
+									| TCall ({ eexpr = TField (_, FStatic ({ cl_path = ["haxe"; "lang"],"Runtime" },
+											 { cf_name = "getField" | "setField" | "getField_f" | "setField_f" | "callField" })) },
+											 eo :: _ :: _ :: rest) ->
+										loop eo;
+										List.iter loop rest
+
+									| _ ->
+										Type.iter loop e
+									in
+									try (loop e; false) with Exit -> true
+								in
+								let write_method_expr e =
+									match e.eexpr with
+									| TBlock [] ->
+										begin_block w;
+										end_block w
+									| TBlock _ ->
+										let unchecked = needs_unchecked e in
+										if unchecked then (begin_block w; write w "unchecked ");
+										let t = Common.timer "expression to string" in
+										expr_s w e;
+										t();
+										if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
+										if unchecked then end_block w
+									| _ ->
+										assert false
+								in
+
 								(if is_new then begin
 									let rec get_super_call el =
 										match el with
@@ -1932,27 +1977,11 @@ let configure gen =
 													write w " ";
 													t()
 											);
-											begin_block w;
-											if rest <> [] then begin
-												write w "unchecked ";
-												let t = Common.timer "expression to string" in
-												expr_s w { expr with eexpr = TBlock(rest) };
-												t();
-												if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
-											end;
-											end_block w;
+											write_method_expr { expr with eexpr = TBlock(rest) }
 										| _ -> assert false
-								end else begin
-									begin_block w;
-									if expr.eexpr <> TBlock [] then begin
-										write w "unchecked ";
-										let t = Common.timer "expression to string" in
-										expr_s w expr;
-										t();
-										if not (Common.defined gen.gcon Define.RealPosition) then write w "#line default";
-									end;
-									end_block w;
-								end)
+								end else
+									write_method_expr expr
+								)
 							| (Meta.FunctionCode, [Ast.EConst (Ast.String contents),_],_) :: tl ->
 								begin_block w;
 								write w contents;

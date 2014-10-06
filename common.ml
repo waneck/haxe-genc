@@ -167,6 +167,7 @@ module Define = struct
 	type strict_defined =
 		| AbsolutePath
 		| AdvancedTelemetry
+		| Analyzer
 		| As3
 		| CheckXmlProxy
 		| CoreApi
@@ -243,6 +244,7 @@ module Define = struct
 	let infos = function
 		| AbsolutePath -> ("absolute_path","Print absolute file path in trace output")
 		| AdvancedTelemetry -> ("advanced-telemetry","Allow the SWF to be measured with Monocle tool")
+		| Analyzer -> ("analyzer","Use static analyzer for optimization (experimental)")
 		| As3 -> ("as3","Defined when outputing flash9 as3 source code")
 		| CheckXmlProxy -> ("check_xml_proxy","Check the used fields of the xml proxy")
 		| CoreApi -> ("core_api","Defined in the core api context")

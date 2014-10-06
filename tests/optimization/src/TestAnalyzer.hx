@@ -347,7 +347,7 @@ class TestAnalyzer extends TestBase {
 
 	function testLoop3() {
 		var a = 1;
-		while (true) {
+		while (cond1()) {
 			a = 2;
 			if (getInt() == 1) {
 				break;
@@ -392,13 +392,12 @@ class TestAnalyzer extends TestBase {
 			} else {
 				break;
 			}
-			a = 1;
 		}
 	}
 
 	function testLoop7() {
 		var a = 1;
-		while (true) {
+		while (cond1()) {
 			a = 2;
 			assertEqualsConst(2, a);
 			while (true) {
@@ -605,7 +604,7 @@ class TestAnalyzer extends TestBase {
 
 	function testBreak1() {
 		var a = 1;
-		while (true) {
+		while (cond1()) {
 			if (cond1()) {
 				a = 2;
 				break;
@@ -628,6 +627,21 @@ class TestAnalyzer extends TestBase {
 			assertEquals(2, a);
 		}
 		assertEquals(2, a);
+	}
+
+	function testContinue2() {
+		var a = 1;
+		while (true) {
+			if (a == 4) {
+				break;
+			}
+			if (a > 3) {
+				a = 4;
+				continue;
+			}
+			++a;
+		}
+		assertEquals(4, a);
 	}
 
 	//function testMisc() {
