@@ -57,17 +57,18 @@ class Lib
 
 		If equalLengthRequired is true, the result might be a copy of an array with the correct size.
 	**/
-	inline public static function nativeArray<T>(arr:Array<T>, equalLengthRequired:Bool):NativeArray<T>
+	@:extern inline public static function nativeArray<T>(arr:Array<T>, equalLengthRequired:Bool):NativeArray<T>
 	{
-		return p_nativeArray(arr,new cs.NativeArray(arr.length));
+		var ret = new cs.NativeArray(arr.length);
+		p_nativeArray(arr,ret);
+		return ret;
 	}
 
-	static function p_nativeArray<T>(arr:Array<T>, ret:NativeArray<T>):NativeArray<T>
+	static function p_nativeArray<T>(arr:Array<T>, ret:cs.system.Array):Void
 	{
 		var native:NativeArray<T> = untyped arr.__a;
 		var len = arr.length;
 		cs.system.Array.Copy(native, 0, ret, 0, len);
-		return ret;
 	}
 
 	/**
@@ -267,7 +268,7 @@ class Lib
 	**/
 	@:extern public static inline function pointerOfArray<T>(array:cs.NativeArray<T>):cs.Pointer<T>
 	{
-		return untyped __arrptr__(array);
+		return untyped __ptr__(array);
 	}
 
 	/**

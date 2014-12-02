@@ -38,6 +38,8 @@ package haxe.io;
 	typedef BytesData = c.FixedArray<c.Types.UInt8>
 #elseif python
 	typedef BytesData = python.lib.ByteArray;
+#elseif js
+	typedef BytesData = js.html.Uint8Array;
 #else
 	typedef BytesData = Array<Int>;
 #end

@@ -21,10 +21,9 @@
  */
 package haxe.ds;
 
-@:generic
-abstract HashMap<K:{ function hashCode():Int; }, V >({keys:IntMap<K>, values:IntMap<V>}) {
-	public function new() {
-		this = { keys:new IntMap<K>(), values: new IntMap<V>() };
+abstract HashMap<K:{ function hashCode():Int; }, V >(HashMapData<K,V>) {
+	public inline function new() {
+		this = new HashMapData();
 	}
 	public inline function set(k:K, v:V) {
 		this.keys.set(k.hashCode(), k);
@@ -45,5 +44,14 @@ abstract HashMap<K:{ function hashCode():Int; }, V >({keys:IntMap<K>, values:Int
 	}
 	public inline function iterator() {
 		return this.values.iterator();
+	}
+}
+
+private class HashMapData<K:{ function hashCode():Int; },V> {
+	public var keys:IntMap<K>;
+	public var values:IntMap<V>;
+	public inline function new() {
+		keys = new IntMap();
+		values = new IntMap();
 	}
 }

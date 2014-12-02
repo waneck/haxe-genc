@@ -282,11 +282,23 @@ and field dce c n stat =
 	with Not_found ->
 		if dce.debug then prerr_endline ("[DCE] Field " ^ n ^ " not found on " ^ (s_type_path c.cl_path)) else ())
 
+and mark_really_used_class c =
+	if not (Meta.has Meta.ReallyUsed c.cl_meta) then
+		c.cl_meta <- (Meta.ReallyUsed,[],c.cl_pos) :: c.cl_meta
+
+and mark_really_used_mt mt =
+	match mt with
+	| TClassDecl c ->
+		mark_really_used_class c
+	| _ ->
+		()
+
 and expr dce e =
 	mark_t dce e.epos e.etype;
 	match e.eexpr with
 	| TNew(c,pl,el) ->
 		mark_class dce c;
+		mark_really_used_class c;
 		field dce c "new" false;
 		List.iter (expr dce) el;
 		List.iter (mark_t dce e.epos) pl;
@@ -296,9 +308,11 @@ and expr dce e =
 	| TCast(e, Some mt) ->
 		check_feature dce "typed_cast";
 		mark_mt dce mt;
+		mark_really_used_mt mt;
 		expr dce e;
 	| TTypeExpr mt ->
-		mark_mt dce mt
+		mark_mt dce mt;
+		mark_really_used_mt mt;
 	| TTry(e, vl) ->
 		expr dce e;
 		List.iter (fun (v,e) ->
@@ -434,7 +448,7 @@ let run com main full =
 			List.iter (fun (c,cf,stat) -> mark_dependent_fields dce c cf.cf_name stat) cfl;
 			(* mark fields as used *)
 			List.iter (fun (c,cf,stat) ->
-				mark_class dce c;
+				if not (is_extern_field cf) then mark_class dce c;
 				mark_field dce c cf stat;
 				mark_t dce cf.cf_pos cf.cf_type
 			) cfl;
@@ -498,8 +512,10 @@ let run com main full =
 				b
 			) c.cl_ordered_fields;
 			(match c.cl_constructor with Some cf when not (keep_field dce cf) -> c.cl_constructor <- None | _ -> ());
+			let inef cf = not (is_extern_field cf) in
+			let has_non_extern_fields = List.exists inef c.cl_ordered_fields || List.exists inef c.cl_ordered_statics in
 			(* we keep a class if it was used or has a used field *)
-			if Meta.has Meta.Used c.cl_meta || c.cl_ordered_statics <> [] || c.cl_ordered_fields <> [] then loop (mt :: acc) l else begin
+			if Meta.has Meta.Used c.cl_meta || has_non_extern_fields then loop (mt :: acc) l else begin
 				(match c.cl_init with
 				| Some f when Meta.has Meta.KeepInit c.cl_meta ->
 					(* it means that we only need the __init__ block *)
@@ -557,6 +573,15 @@ let run com main full =
 				in
 				loop c
 			) c.cl_overrides;
+		| _ -> ()
+	) com.types;
+
+	(* mark extern classes as really used if they are extended by non-extern ones *)
+	List.iter (function
+		| TClassDecl ({cl_extern = false; cl_super = Some ({cl_extern = true} as csup, _)}) ->
+			mark_really_used_class csup
+		| TClassDecl ({cl_extern = false} as c) when c.cl_implements <> [] ->
+			List.iter (fun (iface,_) -> if (iface.cl_extern) then mark_really_used_class iface) c.cl_implements;
 		| _ -> ()
 	) com.types;
 

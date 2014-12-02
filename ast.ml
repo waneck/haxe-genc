@@ -126,6 +126,7 @@ module Meta = struct
 		| Public
 		| PublicFields
 		| ReadOnly
+		| ReallyUsed
 		| RealPath
 		| Remove
 		| Require
@@ -134,6 +135,7 @@ module Meta = struct
 		| Rtti
 		| Runtime
 		| RuntimeValue
+		| SelfCall
 		| Setter
 		| SkipCtor
 		| SkipReflection

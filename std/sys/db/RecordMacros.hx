@@ -574,7 +574,6 @@ class RecordMacros {
 									if( c == null ) {
 										if( n == "null" )
 											return { sql : sqlAddString(r1.sql, eq ? " IS NULL" : " IS NOT NULL"), t : DBool, n : false };
-										error("Unknown constructor " + n, e2.pos);
 									} else {
 										return { sql : makeOp(eq?" = ":" != ", r1.sql, { expr : EConst(CInt(Std.string(c.index))), pos : e2.pos }, pos), t : DBool, n : r1.n };
 									}
@@ -585,7 +584,13 @@ class RecordMacros {
 						default:
 						}
 						if( !ok )
-							error("Should be a constant constructor", e2.pos);
+						{
+							var epath = e.split('.');
+							var ename = epath.pop();
+							var etype = TPath({ name:ename, pack:epath });
+							var expr = macro std.Type.enumIndex( @:pos(e2.pos) ( $e2 : $etype ) ); //make sure we have the correct type
+							return { sql: makeOp(eq?" = ":" != ", r1.sql, expr, pos), t : DBool, n : r1.n };
+						}
 					default:
 					}
 				}
@@ -1166,7 +1171,7 @@ class RecordMacros {
 
 	static var isNeko = Context.defined("neko");
 
-	static function buildField( f : Field, fields : Array<Field>, ft : ComplexType, rt : ComplexType ) {
+	static function buildField( f : Field, fields : Array<Field>, ft : ComplexType, rt : ComplexType, isNull=false ) {
 		var p = switch( ft ) {
 		case TPath(p): p;
 		default: return;
@@ -1231,13 +1236,15 @@ class RecordMacros {
 				args : [{ name : "_v", opt : false, type : t, value : null }],
 				params : [],
 				ret : t,
-				expr : macro { $efield = _v == null ? null : cast Type.enumIndex(_v); return _v; },
+				expr : (Context.defined('cs') && !isNull) ?
+					macro { $efield = cast Type.enumIndex(_v); return _v; } :
+					macro { $efield = _v == null ? null : cast Type.enumIndex(_v); return _v; },
 			};
 			fields.push( { name : "get_" + f.name, pos : pos, meta : meta, access : [APrivate], doc : null, kind : FFun(get) } );
 			fields.push( { name : "set_" + f.name, pos : pos, meta : meta, access : [APrivate], doc : null, kind : FFun(set) } );
 			fields.push( { name : dataName, pos : pos, meta : [meta[0], { name:":skip", params:[], pos:pos } ], access : [APrivate], doc : null, kind : FVar(macro : Null<Int>, null) } );
 		case "SNull", "Null":
-			buildField(f, fields, t, rt);
+			buildField(f, fields, t, rt,true);
 		}
 	}
 
@@ -1326,7 +1333,7 @@ class RecordMacros {
 			if( skip )
 				continue;
 			switch( f.kind ) {
-			case FVar(t, _):
+			case FVar(t, _) | FProp('default',_,t,_):
 				if( t != null )
 					buildField(f,fields,t,t);
 			default:

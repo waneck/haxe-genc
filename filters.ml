@@ -278,9 +278,15 @@ type usage =
 	| Function of ((usage -> unit) -> unit)
 	| Declare of tvar
 	| Use of tvar
+	| Assign of tvar
 
 let rec local_usage f e =
 	match e.eexpr with
+	| TBinop ((OpAssign | OpAssignOp _), { eexpr = TLocal v }, e2) ->
+		local_usage f e2;
+		f (Assign v)
+	| TUnop ((Increment | Decrement), _, { eexpr = TLocal v }) ->
+		f (Assign v)
 	| TLocal v ->
 		f (Use v)
 	| TVar (v,eo) ->
@@ -319,37 +325,79 @@ let captured_vars com e =
 
 	let t = com.basic in
 
-	let rec mk_init av v pos =
-		mk (TVar (av,Some (mk (TArrayDecl [mk (TLocal v) v.v_type pos]) av.v_type pos))) t.tvoid pos
+	let impl = match com.platform with
+	(* optimized version for C#/Java - use native arrays *)
+	| Cs | Java ->
+		let cnativearray =
+			match (List.find (fun md -> match md with
+					| TClassDecl ({ cl_path = ["cs"|"java"],"NativeArray" }) -> true
+					| _ -> false
+				) com.types)
+			with TClassDecl cl -> cl | _ -> assert false
+		in
 
-	and mk_var v used =
+		object
+			method captured_type t = TInst (cnativearray,[t])
+
+			method mk_ref v ve p =
+				let earg = match ve with
+					| None ->
+						let t = match v.v_type with TInst (_, [t]) -> t | _ -> assert false in
+						mk (TConst TNull) t p (* generator will do the right thing for the non-nullable types *)
+					| Some e -> e
+				in
+				{ (Optimizer.mk_untyped_call "__array__" p [earg]) with etype = v.v_type }
+
+			method mk_ref_access e v =
+				mk (TArray ({ e with etype = v.v_type }, mk (TConst (TInt 0l)) t.tint e.epos)) e.etype e.epos
+
+			method mk_init av v pos =
+				let elocal = mk (TLocal v) v.v_type pos in
+				let earray = { (Optimizer.mk_untyped_call "__array__" pos [elocal]) with etype = av.v_type } in
+				mk (TVar (av,Some earray)) t.tvoid pos
+		end
+	(* default implementation - use haxe array *)
+	| _ ->
+		object
+			method captured_type = t.tarray
+			method mk_ref v ve p =
+				mk (TArrayDecl (match ve with None -> [] | Some e -> [e])) v.v_type p
+			method mk_ref_access e v =
+				mk (TArray ({ e with etype = v.v_type }, mk (TConst (TInt 0l)) t.tint e.epos)) e.etype e.epos
+			method mk_init av v pos =
+				mk (TVar (av,Some (mk (TArrayDecl [mk (TLocal v) v.v_type pos]) av.v_type pos))) t.tvoid pos
+		end
+	in
+
+	let mk_var v used =
 		let v2 = alloc_var v.v_name (PMap.find v.v_id used) in
 		v2.v_meta <- v.v_meta;
 		v2
+	in
 
-	and wrap used e =
+	let rec wrap used e =
 		match e.eexpr with
 		| TVar (v,ve) ->
 			let v,ve =
 				if PMap.mem v.v_id used then
-					v, Some (mk (TArrayDecl (match ve with None -> [] | Some e -> [wrap used e])) v.v_type e.epos)
+					v, Some (impl#mk_ref v (Option.map (wrap used) ve) e.epos)
 				else
 					v, (match ve with None -> None | Some e -> Some (wrap used e))
 			 in
 			{ e with eexpr = TVar (v,ve) }
 		| TLocal v when PMap.mem v.v_id used ->
-			mk (TArray ({ e with etype = v.v_type },mk (TConst (TInt 0l)) t.tint e.epos)) e.etype e.epos
+			impl#mk_ref_access e v
 		| TFor (v,it,expr) when PMap.mem v.v_id used ->
 			let vtmp = mk_var v used in
 			let it = wrap used it in
 			let expr = wrap used expr in
-			mk (TFor (vtmp,it,Type.concat (mk_init v vtmp e.epos) expr)) e.etype e.epos
+			mk (TFor (vtmp,it,Type.concat (impl#mk_init v vtmp e.epos) expr)) e.etype e.epos
 		| TTry (expr,catchs) ->
 			let catchs = List.map (fun (v,e) ->
 				let e = wrap used e in
 				try
 					let vtmp = mk_var v used in
-					vtmp, Type.concat (mk_init v vtmp e.epos) e
+					vtmp, Type.concat (impl#mk_init v vtmp e.epos) e
 				with Not_found ->
 					v, e
 			) catchs in
@@ -363,7 +411,7 @@ let captured_vars com e =
 			let tmp_used = ref used in
 			let rec browse = function
 				| Block f | Loop f | Function f -> f browse
-				| Use v ->
+				| Use v | Assign v ->
 					if PMap.mem v.v_id !tmp_used then fused := PMap.add v.v_id v !fused;
 				| Declare v ->
 					tmp_used := PMap.remove v.v_id !tmp_used
@@ -376,7 +424,7 @@ let captured_vars com e =
 			let fargs = List.map (fun (v,o) ->
 				if PMap.mem v.v_id used then
 					let vtmp = mk_var v used in
-					fexpr := Type.concat (mk_init v vtmp e.epos) !fexpr;
+					fexpr := Type.concat (impl#mk_init v vtmp e.epos) !fexpr;
 					vtmp, o
 				else
 					v, o
@@ -406,7 +454,7 @@ let captured_vars com e =
 		else
 			let used = PMap.map (fun v ->
 				let vt = v.v_type in
-				v.v_type <- t.tarray vt;
+				v.v_type <- impl#captured_type vt;
 				v.v_capture <- true;
 				vt
 			) used in
@@ -436,7 +484,7 @@ let captured_vars com e =
 					decr depth;
 				| Declare v ->
 					if in_loop then vars := PMap.add v.v_id !depth !vars;
-				| Use v ->
+				| Use v | Assign v ->
 					try
 						let d = PMap.find v.v_id !vars in
 						if d <> !depth then used := PMap.add v.v_id v !used;
@@ -450,6 +498,7 @@ let captured_vars com e =
 	and all_vars e =
 		let vars = ref PMap.empty in
 		let used = ref PMap.empty in
+		let assigned = ref PMap.empty in
 		let depth = ref 0 in
 		let rec collect_vars = function
 		| Block f ->
@@ -467,17 +516,31 @@ let captured_vars com e =
 		| Declare v ->
 			vars := PMap.add v.v_id !depth !vars;
 		| Use v ->
-			try
+			(try
 				let d = PMap.find v.v_id !vars in
 				if d <> !depth then used := PMap.add v.v_id v !used;
-			with Not_found -> ()
+			with Not_found -> ())
+		| Assign v ->
+			(try
+				let d = PMap.find v.v_id !vars in
+				(* different depth - needs wrap *)
+				if d <> !depth then begin
+					used := PMap.add v.v_id v !used;
+					assigned := PMap.add v.v_id v !assigned;
+				end
+				(* same depth but assigned after being used on a different depth - needs wrap *)
+				else if PMap.mem v.v_id !used then
+					assigned := PMap.add v.v_id v !assigned;
+			with Not_found -> ())
 		in
 		local_usage collect_vars e;
-		!used
+
+		(* mark all capture variables - also used in rename_local_vars at later stage *)
+		PMap.iter (fun _ v -> v.v_capture <- true) !used;
+
+		!assigned
 	in
-	(* mark all capture variables - also used in rename_local_vars at later stage *)
 	let captured = all_vars e in
-	PMap.iter (fun _ v -> v.v_capture <- true) captured;
 	match com.config.pf_capture_policy with
 	| CPNone -> e
 	| CPWrapRef -> do_wrap captured e
@@ -486,8 +549,8 @@ let captured_vars com e =
 (* -------------------------------------------------------------------------- *)
 (* RENAME LOCAL VARS *)
 
-let rename_local_vars com e =
-	let cfg = com.config in
+let rename_local_vars ctx e =
+	let cfg = ctx.com.config in
 	let all_scope = (not cfg.pf_captured_scope) || (not cfg.pf_locals_scope) in
 	let vars = ref PMap.empty in
 	let all_vars = ref PMap.empty in
@@ -568,7 +631,7 @@ let rename_local_vars com e =
 		| TBlock el ->
 			let old = save() in
 			(* we have to look ahead for vars on these targets (issue #3344) *)
-			begin match com.platform with
+			begin match ctx.com.platform with
 				| Js | Flash8 ->
 					let rec check_var e = match e.eexpr with
 						| TVar (v,eo) ->
@@ -614,6 +677,9 @@ let rename_local_vars com e =
 			Type.iter loop e
 	in
 	declare (alloc_var "this" t_dynamic) Ast.null_pos; (* force renaming of 'this' vars in abstract *)
+	begin match ctx.curclass.cl_path with
+		| s :: _,_ | [],s -> declare (alloc_var s t_dynamic) Ast.null_pos
+	end;
 	loop e;
 	e
 
@@ -902,12 +968,12 @@ let check_void_field ctx t = match t with
 
 let run_expression_filters ctx filters t =
 	let run e =
-		verify_ast e;
 		List.fold_left (fun e f -> f e) e filters
 	in
 	match t with
 	| TClassDecl c when is_removable_class c -> ()
 	| TClassDecl c ->
+		ctx.curclass <- c;
 		let process_field f =
 			match f.cf_expr with
 			| Some e when not (is_removable_field ctx f) ->
@@ -941,6 +1007,20 @@ let post_process ctx filters t =
 let post_process_end() =
 	incr pp_counter
 
+let iter_expressions com fl =
+	List.iter (fun mt -> match mt with
+		| TClassDecl c ->
+			let field cf = match cf.cf_expr with
+				| None -> ()
+				| Some e -> List.iter (fun f -> f e) fl
+			in
+			List.iter field c.cl_ordered_statics;
+			List.iter field c.cl_ordered_fields;
+			(match c.cl_constructor with None -> () | Some cf -> field cf)
+		| _ ->
+			()
+	) com.types
+
 let run com tctx main =
 	begin match com.display with
 		| DMUsage | DMPosition ->
@@ -954,8 +1034,8 @@ let run com tctx main =
 	(* this part will be a bit messy until we make the analyzer the default *)
 	if use_static_analyzer then begin
 		(* PASS 1: general expression filters *)
-	 	let filters = [
-	 		Codegen.UnificationCallback.run (check_unification com);
+		let filters = [
+			Codegen.UnificationCallback.run (check_unification com);
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			Optimizer.inline_constructors tctx;
 			Optimizer.reduce_expression tctx;
@@ -965,6 +1045,7 @@ let run com tctx main =
 		List.iter (post_process tctx filters) com.types;
 		Analyzer.apply com;
 		post_process_end();
+		iter_expressions com [verify_ast];
 		List.iter (fun f -> f()) (List.rev com.filters);
 		(* save class state *)
 		List.iter (save_class_state tctx) com.types;
@@ -972,7 +1053,7 @@ let run com tctx main =
 		let filters = [
 			Optimizer.sanitize com;
 			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
-			rename_local_vars com;
+			rename_local_vars tctx;
 		] in
 		List.iter (fun t ->
 			remove_generic_base tctx t;
@@ -981,14 +1062,14 @@ let run com tctx main =
 		) com.types;
 	end else begin
 		(* PASS 1: general expression filters *)
-	 	let filters = [
-	 		Codegen.UnificationCallback.run (check_unification com);
+		let filters = [
+			Codegen.UnificationCallback.run (check_unification com);
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			blockify_ast;
 			(match com.platform with
 				| Cpp | Flash8 | C -> (fun e ->
 					let save = save_locals tctx in
-					let e = try Analyzer.Simplifier.apply com (Typecore.gen_local tctx) e with Exit -> e in
+					let e = try snd (Analyzer.Simplifier.apply com (Typecore.gen_local tctx) e) with Exit -> e in
 					save();
 					e)
 				| _ -> fun e -> e);
@@ -998,6 +1079,7 @@ let run com tctx main =
 		] in
 		List.iter (post_process tctx filters) com.types;
 		post_process_end();
+		iter_expressions com [verify_ast];
 		List.iter (fun f -> f()) (List.rev com.filters);
 		(* save class state *)
 		List.iter (save_class_state tctx) com.types;
@@ -1005,7 +1087,7 @@ let run com tctx main =
 		let filters = [
 			promote_complex_rhs com;
 			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
-			rename_local_vars com;
+			rename_local_vars tctx;
 		] in
 		List.iter (fun t ->
 			remove_generic_base tctx t;

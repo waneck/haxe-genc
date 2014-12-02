@@ -152,10 +152,10 @@ let rec is_null t =
 			is_null (!f())
 		| _ -> false
 
-let rec get_arrptr e = match e.eexpr with
+let rec get_ptr e = match e.eexpr with
 	| TParenthesis e | TMeta(_,e)
-	| TCast(e,_) -> get_arrptr e
-	| TCall( { eexpr = TLocal({ v_name = "__arrptr__" }) }, [ e ] ) ->
+	| TCast(e,_) -> get_ptr e
+	| TCall( { eexpr = TLocal({ v_name = "__ptr__" }) }, [ e ] ) ->
 		Some e
 	| _ -> None
 
@@ -465,7 +465,7 @@ struct
 					let expr = run expr in
 					mk_cast e.etype (mk_cast ti64 expr)
 				| TCast(expr, _) when is_dynamic gen expr.etype && is_pointer gen e.etype ->
-					(match get_arrptr expr with
+					(match get_ptr expr with
 						| None ->
 							(* unboxing *)
 							let expr = run expr in
@@ -473,7 +473,7 @@ struct
 						| Some e ->
 							run e)
 				| TCast(expr, _) when is_pointer gen expr.etype && is_dynamic gen e.etype ->
-					(match get_arrptr expr with
+					(match get_ptr expr with
 						| None ->
 							(* boxing *)
 							let expr = run expr in
@@ -717,13 +717,9 @@ let configure gen =
 	let basic = gen.gcon.basic in
 
 	let fn_cl = get_cl (get_type gen (["haxe";"lang"],"Function")) in
-
 	let null_t = (get_cl (get_type gen (["haxe";"lang"],"Null")) ) in
-
 	let runtime_cl = get_cl (get_type gen (["haxe";"lang"],"Runtime")) in
-
 	let no_root = Common.defined gen.gcon Define.NoRoot in
-
 	let change_id name = try
 			Hashtbl.find reserved name
 		with | Not_found ->
@@ -733,20 +729,55 @@ let configure gen =
 
 	let change_clname n = change_id n in
 
-	let change_ns md = if no_root then
-		function
-			| [] when is_hxgen md -> ["haxe";"root"]
+	let change_ns_params_root md ns params =
+		let ns,params = List.fold_left (fun (ns,params) nspart -> try
+			let part, nparams = String.split nspart "`" in
+			let nparams = int_of_string nparams in
+			let rec loop i needed params =
+				if i = nparams then
+					(List.rev needed,params)
+				else
+					loop (i+1) (List.hd params :: needed) (List.tl params)
+			in
+			let needed,params = loop 0 [] params in
+			let part = change_id part in
+			(part ^ "<" ^ (String.concat ", " needed) ^ ">")::ns, params
+		with _ ->
+			(change_id nspart)::ns, params
+		) ([],params) ns
+		in
+		List.rev ns,params
+	in
+
+	let change_ns_params md params ns = if no_root then match ns with
+			| [] when is_hxgen md -> ["haxe";"root"], params
 			| [] -> (match md with
-				| TClassDecl { cl_path = ([],"Std" | [],"Math") } -> ["haxe";"root"]
-				| _ -> [])
-			| ns -> List.map change_id ns
-	else List.map change_id in
+				| TClassDecl { cl_path = ([],"Std" | [],"Math") } -> ["haxe";"root"], params
+				| _ -> [], params)
+			| ns when params = [] -> List.map change_id ns, params
+			| ns ->
+				change_ns_params_root md ns params
+		else if params = [] then
+			List.map change_id ns, params
+		else
+			change_ns_params_root md ns params
+	in
+
+	let change_ns md ns =
+		let ns, _ = change_ns_params md [] ns in
+		ns
+	in
 
 	let change_field = change_id in
-
 	let write_id w name = write w (change_id name) in
-
 	let write_field w name = write w (change_field name) in
+
+	let ptr =
+		if Common.defined gen.gcon Define.Unsafe then
+			get_abstract (get_type gen (["cs"],"Pointer"))
+		else
+			null_abstract
+	in
 
 	gen.gfollow#add ~name:"follow_basic" (fun t -> match t with
 			| TEnum ({ e_path = ([], "Bool") }, [])
@@ -779,20 +810,29 @@ let configure gen =
 			| TAbstract ({ a_path = ["cs"],"Out" },_)
 			| TType ({ t_path = [],"Single" },[])
 			| TAbstract ({ a_path = [],"Single" },[]) -> Some t
-			| TType ({ t_path = [],"Null" },[_]) -> Some t
+			| TType (({ t_path = [],"Null" } as tdef),[t2]) ->
+					Some (TType(tdef,[follow (gen.gfollow#run_f t2)]))
+			| TAbstract({ a_path = ["cs"],"PointerAccess" },[t]) ->
+					Some (TAbstract(ptr,[t]))
 			| TAbstract (a, pl) when not (Meta.has Meta.CoreType a.a_meta) ->
 					Some (gen.gfollow#run_f ( Abstract.get_underlying_type a pl) )
 			| TAbstract( { a_path = ([], "EnumValue") }, _	)
 			| TInst( { cl_path = ([], "EnumValue") }, _  ) -> Some t_dynamic
 			| _ -> None);
 
-	let module_s md =
+	let module_s_params md params =
 		let md = change_md md in
 		let path = (t_infos md).mt_path in
 		match path with
-		| ([], "String") -> "string"
-		| ([], "Null") -> path_s (change_ns md ["haxe"; "lang"], change_clname "Null")
-		| (ns,clname) -> path_s (change_ns md ns, change_clname clname)
+			| ([], "String") -> "string", params
+			| ([], "Null") -> path_s (change_ns md ["haxe"; "lang"], change_clname "Null"), params
+			| (ns,clname) ->
+				let ns, params = change_ns_params md params ns in
+				path_s (ns, change_clname clname), params
+	in
+
+	let module_s md =
+		fst (module_s_params md [])
 	in
 
 	let ifaces = Hashtbl.create 1 in
@@ -973,7 +1013,13 @@ let configure gen =
 	and path_param_s md path params =
 			match params with
 				| [] -> "global::" ^ module_s md
-				| _ -> sprintf "%s<%s>" ("global::" ^ module_s md) (String.concat ", " (List.map (fun t -> t_s t) (change_param_type md params)))
+				| _ ->
+					let params = (List.map (fun t -> t_s t) (change_param_type md params)) in
+					let str,params = module_s_params md params in
+					if params = [] then
+						"global::" ^ str
+					else
+						sprintf "global::%s<%s>" str (String.concat ", " params)
 	in
 
 	let rett_s t =
@@ -1053,13 +1099,6 @@ let configure gen =
 			| TParenthesis e | TMeta(_,e) -> ensure_refout e explain
 			| _ -> gen.gcon.error ("This function argument " ^ explain ^ " must be a local variable.") e.epos; e
 	in
-
-	let is_pointer t = match follow t with
-		| TInst({ cl_path = (["cs"], "Pointer") }, _)
-		| TAbstract ({ a_path = (["cs"], "Pointer") },_) ->
-				true
-		| _ ->
-				false in
 
 	let last_line = ref (-1) in
 	let begin_block w = write w "{"; push_indent w; newline w; last_line := -1 in
@@ -1238,6 +1277,14 @@ let configure gen =
 					);
 					write w ".";
 					write_field w (field_name s)
+				| TField (e, s) when is_pointer gen e.etype ->
+					(* take off the extra cast if possible *)
+					let e = match e.eexpr with
+						| TCast(e1,_) when Gencommon.CastDetect.type_iseq gen e.etype e1.etype ->
+							e1
+						| _ -> e
+					in
+					expr_s w e; write w "->"; write_field w (field_name s)
 				| TField (e, s) ->
 					expr_s w e; write w "."; write_field w (field_name s)
 				| TTypeExpr mt ->
@@ -1285,6 +1332,12 @@ let configure gen =
 					write w " )";
 				| TCall ({ eexpr = TLocal( { v_name = "__cs__" } ) }, [ { eexpr = TConst(TString(s)) } ] ) ->
 					write w s
+				| TCall ({ eexpr = TLocal( { v_name = "__cs__" } ) }, { eexpr = TConst(TString(s)) } :: tl ) ->
+					Codegen.interpolate_code gen.gcon s tl (write w) (expr_s w) e.epos
+				| TCall ({ eexpr = TLocal( { v_name = "__stackalloc__" } ) }, [ e ] ) ->
+					write w "stackalloc byte[";
+					expr_s w e;
+					write w "]"
 				| TCall ({ eexpr = TLocal( { v_name = "__unsafe__" } ) }, [ e ] ) ->
 					write w "unsafe";
 					expr_s w (mk_block e)
@@ -1299,27 +1352,22 @@ let configure gen =
 				| TCall ({ eexpr = TLocal( { v_name = "__fixed__" } ) }, [ e ] ) ->
 					let fixeds = ref [] in
 					let rec loop = function
-						| ({ eexpr = TVar(v, Some(e) ) } as expr) :: tl when is_pointer v.v_type ->
-							let e = match get_arrptr e with
+						| ({ eexpr = TVar(v, Some(e) ) } as expr) :: tl when is_pointer gen v.v_type ->
+							let e = match get_ptr e with
 								| None -> e
 								| Some e -> e
 							in
 							fixeds := (v,e,expr) :: !fixeds;
 							loop tl;
 						| el when !fixeds <> [] ->
-							write w "fixed(";
 							let rec loop fx acc = match fx with
 								| (v,e,expr) :: tl ->
+									write w "fixed(";
 									let vf = mk_temp gen "fixed" v.v_type in
 									expr_s w { expr with eexpr = TVar(vf, Some e) };
 									let acc = (expr,v,vf) :: acc in
-									if tl = [] then begin
-										write w ")";
-										acc
-									end else begin
-										write w ", ";
-										loop tl acc
-									end
+									write w ") ";
+									if tl = [] then acc else loop tl acc
 								| _ -> assert false
 							in
 							let vars = loop (List.rev !fixeds) [] in
@@ -2103,6 +2151,28 @@ let configure gen =
 				| _ -> ()
 			)
 		with | Not_found -> ());
+		(try
+			if cl.cl_interface then raise Not_found;
+			let cf = PMap.find "finalize" cl.cl_fields in
+			(if List.exists (fun c -> c.cf_name = "finalize") cl.cl_overrides then raise Not_found);
+			(match cf.cf_type with
+				| TFun([], ret) ->
+					(match real_type ret with
+						| TAbstract( { a_path = ([], "Void") }, []) ->
+							write w "~";
+							write w (snd cl.cl_path);
+							write w "()";
+							begin_block w;
+							write w "this.finalize();";
+							end_block w;
+							newline w;
+							newline w
+						| _ ->
+							gen.gcon.error "A finalize() function should be Void->Void!" cf.cf_pos
+					)
+				| _ -> ()
+			)
+		with | Not_found -> ());
 		(* properties *)
 		let handle_prop static f =
 			match f.cf_kind with
@@ -2358,10 +2428,11 @@ let configure gen =
 	Hashtbl.add gen.gspecial_vars "__addressOf__" true;
 	Hashtbl.add gen.gspecial_vars "__valueOf__" true;
 	Hashtbl.add gen.gspecial_vars "__sizeof__" true;
+	Hashtbl.add gen.gspecial_vars "__stackalloc__" true;
 
 	Hashtbl.add gen.gspecial_vars "__delegate__" true;
 	Hashtbl.add gen.gspecial_vars "__array__" true;
-	Hashtbl.add gen.gspecial_vars "__arrptr__" true;
+	Hashtbl.add gen.gspecial_vars "__ptr__" true;
 
 	Hashtbl.add gen.gsupported_conversions (["haxe"; "lang"], "Null") (fun t1 t2 -> true);
 	let last_needs_box = gen.gneeds_box in
@@ -2592,7 +2663,7 @@ let configure gen =
 
 	ObjectDeclMap.configure gen (ObjectDeclMap.traverse gen objdecl_fn);
 
-	InitFunction.configure gen true;
+	InitFunction.configure gen true true;
 	TArrayTransform.configure gen (TArrayTransform.default_implementation gen (
 	fun e binop ->
 		match e.eexpr with
@@ -2680,6 +2751,8 @@ let configure gen =
 					| TConst(TNull), _ when is_null_expr e2 ->
 						false
 					| _, TConst(TNull) when is_null_expr e1 ->
+						false
+					| _, TLocal { v_name = "__undefined__" } ->
 						false
 					| _ ->
 						should_handle_opeq e1.etype || should_handle_opeq e2.etype
@@ -2840,6 +2913,8 @@ let configure gen =
 	CSharpSpecificSynf.configure gen (CSharpSpecificSynf.traverse gen runtime_cl);
 	CSharpSpecificESynf.configure gen (CSharpSpecificESynf.traverse gen runtime_cl);
 
+	let out_files = ref [] in
+
 	(* copy resource files *)
 	if Hashtbl.length gen.gcon.resources > 0 then begin
 		let src =
@@ -2854,7 +2929,9 @@ let configure gen =
 
 			let f = open_out full_path in
 			output_string f v;
-			close_out f
+			close_out f;
+
+			out_files := (unique_full_path full_path) :: !out_files
 		) gen.gcon.resources;
 	end;
 	(* add resources array *)
@@ -2909,10 +2986,15 @@ let configure gen =
 
 	let t = Common.timer "code generation" in
 
-	generate_modules gen "cs" "src" module_gen;
+	let parts = Str.split_delim (Str.regexp "[\\/]+") gen.gcon.file in
+	mkdir_recursive "" parts;
+	generate_modules gen "cs" "src" module_gen out_files;
 
+	if not (Common.defined gen.gcon Define.KeepOldOutput ||  Common.defined gen.gcon Define.UnityStdTarget) then
+		clean_files (gen.gcon.file ^ "/src") !out_files gen.gcon.verbose;
+
+	dump_descriptor gen ("hxcs_build.txt") path_s module_s;
 	if ( not (Common.defined gen.gcon Define.NoCompilation || Common.defined gen.gcon Define.UnityStdTarget) ) then begin
-		dump_descriptor gen ("hxcs_build.txt") path_s module_s;
 		let old_dir = Sys.getcwd() in
 		Sys.chdir gen.gcon.file;
 		let cmd = "haxelib run hxcs hxcs_build.txt --haxe-version " ^ (string_of_int gen.gcon.version) in
@@ -3087,18 +3169,24 @@ let convert_ilenum ctx p ilcls =
 	List.iter (fun f -> match f.fname with
 		| "value__" -> ()
 		| _ ->
-			let meta = match f.fconstant with
+			let meta, const = match f.fconstant with
 				| Some IChar i
 				| Some IByte i
 				| Some IShort i ->
-					[Meta.CsNative, [EConst (Int (string_of_int i) ), p], p ]
+					[Meta.CsNative, [EConst (Int (string_of_int i) ), p], p ], Int64.of_int i
 				| Some IInt i ->
-					[Meta.CsNative, [EConst (Int (Int32.to_string i) ), p], p ]
+					[Meta.CsNative, [EConst (Int (Int32.to_string i) ), p], p ], Int64.of_int32 i
+				| Some IFloat32 f | Some IFloat64 f ->
+					[], Int64.of_float f
+				| Some IInt64 i ->
+					[], i
 				| _ ->
-					[]
+					[], Int64.zero
 			in
-			data := { ec_name = f.fname; ec_doc = None; ec_meta = meta; ec_args = []; ec_pos = p; ec_params = []; ec_type = None; } :: !data;
+			data := ( { ec_name = f.fname; ec_doc = None; ec_meta = meta; ec_args = []; ec_pos = p; ec_params = []; ec_type = None; }, const) :: !data;
 	) ilcls.cfields;
+	let data = List.stable_sort (fun (_,i1) (_,i2) -> Int64.compare i1 i2) (List.rev !data) in
+
 	let _, c = netpath_to_hx ctx.nstd ilcls.cpath in
 	EEnum {
 		d_name = netname_to_hx c;
@@ -3106,7 +3194,7 @@ let convert_ilenum ctx p ilcls =
 		d_params = []; (* enums never have type parameters *)
 		d_meta = !meta;
 		d_flags = [EExtern];
-		d_data = List.rev !data;
+		d_data = List.map fst data;
 	}
 
 let rec has_unmanaged = function
@@ -3209,6 +3297,8 @@ let convert_ilmethod ctx p m is_explicit_impl =
 	let acc = match m.mflags.mf_access with
 		| FAFamily | FAFamOrAssem -> APrivate
 		(* | FAPrivate -> APrivate *)
+		| FAPublic when List.mem SGetter m.msemantics || List.mem SSetter m.msemantics ->
+			APrivate
 		| FAPublic -> APublic
 		| _ ->
 			raise Exit
@@ -3267,7 +3357,9 @@ let convert_ilmethod ctx p m is_explicit_impl =
 		let args = List.map (fun (name,flag,s) ->
 			let t = match s.snorm with
 				| LManagedPointer s ->
-					mk_type_path ctx (["cs"],[],"Ref") [ TPType (convert_signature ctx p s) ]
+					let is_out = List.mem POut flag.pf_io && not (List.mem PIn flag.pf_io) in
+					let name = if is_out then "Out" else "Ref" in
+					mk_type_path ctx (["cs"],[],name) [ TPType (convert_signature ctx p s) ]
 				| _ ->
 					convert_signature ctx p (change_sig s.snorm)
 			in
@@ -3557,17 +3649,23 @@ let convert_ilclass ctx p ?(delegate=false) ilcls = match ilcls.csuper with
 				flags := HExtends (get_type_path ctx (convert_signature ctx p s.snorm)) :: !flags
 			| _ -> ());
 
+			let has_explicit_ifaces = ref false in
 			List.iter (fun i ->
 				match i.snorm with
 				| LClass ( (["haxe";"lang"],[], "IHxObject"), _ ) ->
 					meta := (Meta.HxGen,[],p) :: !meta
-				| i when is_explicit ctx ilcls i -> ()
-				| i -> flags :=
-					if !is_interface then
+				(* | i when is_explicit ctx ilcls i -> () *)
+				| i ->
+					if is_explicit ctx ilcls i then has_explicit_ifaces := true;
+					flags := if !is_interface then
 						HExtends (get_type_path ctx (convert_signature ctx p i)) :: !flags
 					else
 						HImplements (get_type_path ctx (convert_signature ctx p i)) :: !flags
 			) ilcls.cimplements;
+			(* this is needed because of explicit interfaces. see http://msdn.microsoft.com/en-us/library/aa288461(v=vs.71).aspx *)
+			(* explicit interfaces can't be mapped into Haxe in any way - since their fields can't be accessed directly, but they still implement that interface *)
+			if !has_explicit_ifaces then
+				meta := (Meta.Custom "$do_not_check_interf",[],p) :: !meta;
 
 			(* ArrayAccess *)
 			ignore (List.exists (function

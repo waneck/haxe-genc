@@ -419,6 +419,25 @@ let null_class =
 
 let null_field = mk_field "" t_dynamic Ast.null_pos
 
+let null_abstract = {
+	a_path = ([],"");
+	a_module = null_module;
+	a_pos = null_pos;
+	a_private = true;
+	a_doc = None;
+	a_meta = [];
+	a_params = [];
+	a_ops = [];
+	a_unops = [];
+	a_impl = None;
+	a_this = t_dynamic;
+	a_from = [];
+	a_from_field = [];
+	a_to = [];
+	a_to_field = [];
+	a_array = [];
+}
+
 let add_dependency m mdep =
 	if m != null_module && m != mdep then m.m_extra.m_deps <- PMap.add mdep.m_id mdep m.m_extra.m_deps
 
@@ -556,13 +575,13 @@ let rec follow t =
 		follow (apply_params t.t_params tl t.t_type)
 	| _ -> t
 
-let rec is_nullable ?(no_lazy=false) = function
+let rec is_nullable = function
 	| TMono r ->
 		(match !r with None -> false | Some t -> is_nullable t)
 	| TType ({ t_path = ([],"Null") },[_]) ->
 		true
 	| TLazy f ->
-		if no_lazy then raise Exit else is_nullable (!f())
+		is_nullable (!f())
 	| TType (t,tl) ->
 		is_nullable (apply_params t.t_params tl t.t_type)
 	| TFun _ ->
@@ -583,13 +602,13 @@ let rec is_nullable ?(no_lazy=false) = function
 	| _ ->
 		true
 
-let rec is_null = function
+let rec is_null ?(no_lazy=false) = function
 	| TMono r ->
 		(match !r with None -> false | Some t -> is_null t)
 	| TType ({ t_path = ([],"Null") },[t]) ->
 		not (is_nullable (follow t))
 	| TLazy f ->
-		is_null (!f())
+		if no_lazy then raise Exit else is_null (!f())
 	| TType (t,tl) ->
 		is_null (apply_params t.t_params tl t.t_type)
 	| _ ->
@@ -860,7 +879,7 @@ let s_expr_kind e =
 
 let s_const = function
 	| TInt i -> Int32.to_string i
-	| TFloat s -> s ^ "f"
+	| TFloat s -> s
 	| TString s -> Printf.sprintf "\"%s\"" (Ast.s_escape s)
 	| TBool b -> if b then "true" else "false"
 	| TNull -> "null"
@@ -1175,8 +1194,14 @@ type eq_kind =
 	| EqCoreType
 	| EqRightDynamic
 	| EqBothDynamic
+	| EqDoNotFollowNull (* like EqStrict, but does not follow Null<T> *)
 
 let rec type_eq param a b =
+	let can_follow t = match param with
+		| EqCoreType -> false
+		| EqDoNotFollowNull -> not (is_null t)
+		| _ -> true
+	in
 	if a == b then
 		()
 	else match a , b with
@@ -1192,9 +1217,9 @@ let rec type_eq param a b =
 		| Some t -> type_eq param a t)
 	| TType (t1,tl1), TType (t2,tl2) when (t1 == t2 || (param = EqCoreType && t1.t_path = t2.t_path)) && List.length tl1 = List.length tl2 ->
 		List.iter2 (type_eq param) tl1 tl2
-	| TType (t,tl) , _ when param <> EqCoreType ->
+	| TType (t,tl) , _ when can_follow a ->
 		type_eq param (apply_params t.t_params tl t.t_type) b
-	| _ , TType (t,tl) when param <> EqCoreType ->
+	| _ , TType (t,tl) when can_follow b ->
 		if List.exists (fun (a2,b2) -> fast_eq a a2 && fast_eq b b2) (!eq_stack) then
 			()
 		else begin
@@ -1310,20 +1335,21 @@ let rec unify a b =
 		if ea != eb then error [cannot_unify a b];
 		unify_type_params a b tl1 tl2
 	| TAbstract (a1,tl1) , TAbstract (a2,tl2) when a1 == a2 ->
-		unify_type_params a b tl1 tl2
+		begin try
+			unify_type_params a b tl1 tl2
+		with Unify_error _ as err ->
+			(* the type could still have a from/to relation to itself (issue #3494) *)
+			begin try
+				unify_abstracts a b a1 tl1 a2 tl2
+			with Unify_error _ ->
+				raise err
+			end
+		end
 	| TAbstract ({a_path=[],"Void"},_) , _
 	| _ , TAbstract ({a_path=[],"Void"},_) ->
 		error [cannot_unify a b]
 	| TAbstract (a1,tl1) , TAbstract (a2,tl2) ->
-		let f1 = unify_to a1 tl1 b in
-		let f2 = unify_from a2 tl2 a b in
-		if (List.exists (f1 ~allow_transitive_cast:false) a1.a_to)
-		|| (List.exists (f2 ~allow_transitive_cast:false) a2.a_from)
-		|| (((Meta.has Meta.CoreType a1.a_meta) || (Meta.has Meta.CoreType a2.a_meta))
-			&& ((List.exists f1 a1.a_to) || (List.exists f2 a2.a_from))) then
-			()
-		else
-			error [cannot_unify a b]
+		unify_abstracts a b a1 tl1 a2 tl2
 	| TInst (c1,tl1) , TInst (c2,tl2) ->
 		let rec loop c tl =
 			if c == c2 then begin
@@ -1360,7 +1386,7 @@ let rec unify a b =
 		if PMap.is_empty an.a_fields then (match c.cl_kind with
 			| KTypeParameter pl ->
 				(* one of the constraints must unify with { } *)
-				if not (List.exists (fun t -> match t with TInst _ | TAnon _ -> true | _ -> false) pl) then error [cannot_unify a b]
+				if not (List.exists (fun t -> match follow t with TInst _ | TAnon _ -> true | _ -> false) pl) then error [cannot_unify a b]
 			| _ -> ());
 		(try
 			PMap.iter (fun n f2 ->
@@ -1414,6 +1440,8 @@ let rec unify a b =
 					type_eq EqRightDynamic t t2
 				with
 					Unify_error l -> error (cannot_unify a b :: l));
+		| TAbstract(bb,tl) when (List.exists (unify_from bb tl a b) bb.a_from) ->
+			()
 		| _ ->
 			error [cannot_unify a b])
 	| _ , TDynamic t ->
@@ -1440,6 +1468,8 @@ let rec unify a b =
 				) an.a_fields
 			with Unify_error l ->
 				error (cannot_unify a b :: l))
+		| TAbstract(aa,tl) when (List.exists (unify_to aa tl b) aa.a_to) ->
+			()
 		| _ ->
 			error [cannot_unify a b])
 	| TAbstract (aa,tl), _  ->
@@ -1454,6 +1484,17 @@ let rec unify a b =
 		if not (List.exists (unify_from bb tl a b) bb.a_from) then error [cannot_unify a b]
 	| _ , _ ->
 		error [cannot_unify a b]
+
+and unify_abstracts a b a1 tl1 a2 tl2 =
+	let f1 = unify_to a1 tl1 b in
+		let f2 = unify_from a2 tl2 a b in
+		if (List.exists (f1 ~allow_transitive_cast:false) a1.a_to)
+		|| (List.exists (f2 ~allow_transitive_cast:false) a2.a_from)
+		|| (((Meta.has Meta.CoreType a1.a_meta) || (Meta.has Meta.CoreType a2.a_meta))
+			&& ((List.exists f1 a1.a_to) || (List.exists f2 a2.a_from))) then
+			()
+		else
+			error [cannot_unify a b]
 
 and unify_anons a b a1 a2 =
 	(try

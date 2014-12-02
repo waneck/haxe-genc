@@ -508,7 +508,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 					| TAbstract ({ a_path = [],"Void" },_) -> e
 					| _ -> raise (Unify_error []))
 				| _ -> try
-					type_eq EqStrict etype tret;
+					type_eq (if ctx.com.config.pf_static then EqDoNotFollowNull else EqStrict) etype tret;
 					e
 				with Unify_error _ when (match ctx.com.platform with Cpp -> true | Flash when Common.defined ctx.com Define.As3 -> true | _ -> false) ->
 					(* try to detect upcasts: in that case we may use a safe cast *)
@@ -618,7 +618,7 @@ let rec optimize_for_loop ctx i e1 e2 p =
 	match e1.eexpr, follow e1.etype with
 	| TNew ({ cl_path = ([],"IntIterator") },[],[i1;i2]) , _ ->
 		let max = (match i1.eexpr , i2.eexpr with
-			| TConst (TInt a), TConst (TInt b) when Int32.compare b a < 0 -> error "Range operate can't iterate backwards" p
+			| TConst (TInt a), TConst (TInt b) when Int32.compare b a < 0 -> error "Range operator can't iterate backwards" p
 			| _, TConst _ | _ , TLocal _ -> None
 			| _ -> Some (gen_local ctx t_int)
 		) in
@@ -1142,7 +1142,7 @@ let rec make_constant_expression ctx ?(concat_strings=false) e =
 *)
 
 type inline_kind =
-	| IKCtor of tfunc * tclass_field * tclass * texpr list * texpr list
+	| IKCtor of tfunc * tclass_field * tclass * t list * texpr list * texpr list
 	| IKArray of texpr list * t
 	| IKStructure of (string * texpr) list
 	| IKNone
@@ -1167,8 +1167,8 @@ let inline_constructors ctx e =
 			false
 	in
 	let rec get_inline_ctor_info e = match e.eexpr with
-		| TNew ({ cl_constructor = Some ({ cf_kind = Method MethInline; cf_expr = Some { eexpr = TFunction f } } as cst) } as c,_,pl) ->
-			IKCtor (f,cst,c,pl,[])
+		| TNew ({ cl_constructor = Some ({ cf_kind = Method MethInline; cf_expr = Some { eexpr = TFunction f } } as cst) } as c,tl,pl) ->
+			IKCtor (f,cst,c,tl,pl,[])
 		| TObjectDecl [] | TArrayDecl [] ->
 			IKNone
 		| TArrayDecl el ->
@@ -1189,8 +1189,8 @@ let inline_constructors ctx e =
 			begin match List.rev el with
 				| e :: el ->
 					begin match get_inline_ctor_info e with
-						| IKCtor(f,cst,c,pl,e_init) ->
-							IKCtor(f,cst,c,pl,(List.rev el) @ e_init)
+						| IKCtor(f,cst,c,tl,pl,e_init) ->
+							IKCtor(f,cst,c,tl,pl,(List.rev el) @ e_init)
 						| _ ->
 							IKNone
 					end
@@ -1200,12 +1200,10 @@ let inline_constructors ctx e =
 		| _ ->
 			IKNone
 	in
-	let is_valid_field v s =
-		try
-			let (_,_,fields,_,_) = PMap.find (-v.v_id) !vars in
-			List.exists (fun (s2,_,_) -> s = s2) fields
-		with Not_found ->
-			false
+	let check_field v s e t =
+		let (a,b,fields,c,d) = PMap.find (-v.v_id) !vars in
+		if not (List.exists (fun (s2,_,_) -> s = s2) fields) then
+			vars := PMap.add (-v.v_id) (a,b,(s,e,t) :: fields,c,d) !vars
 	in
 	let cancel v =
 		v.v_id <- -v.v_id;
@@ -1224,9 +1222,9 @@ let inline_constructors ctx e =
 			begin match eo with
 				| Some n ->
 					begin match get_inline_ctor_info n with
-					| IKCtor (f,cst,c,pl,el_init) ->
+					| IKCtor (f,cst,c,tl,pl,el_init) ->
 						(* inline the constructor *)
-						(match (try type_inline ctx cst f (mk (TLocal v) v.v_type n.epos) pl ctx.t.tvoid None n.epos true with Error (Custom _,_) -> None) with
+						(match (try type_inline ctx cst f (mk (TLocal v) (TInst (c,tl)) n.epos) pl ctx.t.tvoid None n.epos true with Error (Custom _,_) -> None) with
 						| None -> ()
 						| Some ecst ->
 							let assigns = ref [] in
@@ -1273,10 +1271,10 @@ let inline_constructors ctx e =
 			if i < 0 || i >= List.length fields then cancel v
 		| TBinop((OpAssign | OpAssignOp _),e1,e2) ->
 			begin match e1.eexpr with
-				| TArray ({eexpr = TLocal v},{eexpr = TConst (TInt i)}) when v.v_id < 0 && not (is_valid_field v (Int32.to_string i)) ->
-					cancel v
-				| TField({eexpr = TLocal v}, (FInstance(_, _, {cf_kind = Var _; cf_name = s}) | FAnon({cf_kind = Var _; cf_name = s}))) when v.v_id < 0 && not (is_valid_field v s) ->
-					cancel v
+	 			| TArray ({eexpr = TLocal v},{eexpr = TConst (TInt i)}) when v.v_id < 0 ->
+					check_field v (Int32.to_string i) e2 e2.etype
+				| TField({eexpr = TLocal v}, (FInstance(_, _, {cf_kind = Var _; cf_name = s}) | FAnon({cf_kind = Var _; cf_name = s}))) when v.v_id < 0 ->
+					check_field v s e2 e2.etype
 				| _ ->
 					find_locals e1
 			end;
