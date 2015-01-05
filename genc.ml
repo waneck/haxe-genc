@@ -52,6 +52,12 @@ type hxc = {
 	c_vtable : tclass;
 	c_gc     : tclass;
 	c_gc_alloc : tclass;
+	c_gc_pool : tclass;
+
+	c_gc_classheader : tclass;
+	c_gc_enumheader : tclass;
+	c_gc_anonheader : tclass;
+	c_gc_templates  : tclass;
 
 	cf_deref : tclass_field;
 	cf_addressof : tclass_field;
@@ -122,6 +128,7 @@ let rec follow t =
 		follow (!f())
 	| TType (t,tl) ->
 		follow (apply_params t.t_params tl t.t_type)
+	| TAbstract({a_path= (["c"],"Struct")},_) -> t
 	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
 		follow (Abstract.get_underlying_type a pl)
 	| _ -> t
@@ -216,20 +223,57 @@ module Tid = struct
 
 	let id t = s_type (print_context()) t
 
-	(*let fid e = function | *)
+	(* returns a string, normalizes type parameters
+	   TInst, TAbstract TType & TEnum -> return Ast.s_type_path
+	   TAnon                          -> map unique type-parameter names in order of occurence to TN with N = 0 ... N-1
+	                                     so e.g. { v:A, x:func.B, y:Array<A> } becomes { v:T0, x:T1, y:Array<T0> }
+	   we cant just ignore TPs here because for our purposes here a {x:T,y:V} doesn't equal {x:T,y:T}, and that's bc
+	   we have to assign
+	*)
+
+	let tp_normalized_id t = (match t with
+		| TInst ({cl_path = path},_)
+		| TType ({t_path = path},_)
+		| TEnum ({e_path = path},_)
+		| TAbstract ({a_path = path},_) -> Ast.s_type_path path
+		| TAnon (_) ->
+			let m : (string,(string list*string)) PMap.t ref  = ref PMap.empty in
+			let cur : int ref = ref (1-2) in
+			let normalized_tp t =
+				let key = (id t) in
+				if PMap.mem key !m
+					then (PMap.find key !m)
+				else begin
+					cur :=  !cur + 1;
+					let value  = ([],"T" ^ (string_of_int !cur)) in
+					m := PMap.add key value !m;
+					value
+				end in
+			let rec loop t = (match t with
+				| TInst({cl_kind = KTypeParameter _} as c,tps) ->
+					let npath = normalized_tp t in
+					TInst({c with cl_path = npath },tps)
+				| _ -> Type.map loop t)
+			in id (loop t)
+		| _ ->
+		Printf.printf "assertion 257 failed for %s.\n" (id t);
+		(* we use the normal id for everything else for now*)
+		id t
+		(* assert false  *)
+	)
 
 end
 
 module TDB = struct
 
-	let tdb_anons    : (string, t) PMap.t ref = ref PMap.empty
-	let tdb_enums    : (string, t) PMap.t ref = ref PMap.empty
-	let tdb_classes  : (string, t) PMap.t ref = ref PMap.empty
-	let tdb_defs     : (string, t) PMap.t ref = ref PMap.empty
-	let tdb_funcs    : (string, t) PMap.t ref = ref PMap.empty
-	let tdb_abstracts: (string, t) PMap.t ref = ref PMap.empty
-	let tdb_tparms   : (string, t) PMap.t ref = ref PMap.empty
-	let tdb_types    : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_anons     : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_enums     : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_classes   : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_defs      : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_funcs     : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_abstracts : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_tparms    : (string, t) PMap.t ref = ref PMap.empty
+	let tdb_types     : (string, t) PMap.t ref = ref PMap.empty
 
 	let rec add t =
 		let tid = (Tid.id t) in
@@ -282,6 +326,9 @@ module TDB = struct
 	let map f =
 		let acc = PMap.fold (fun t acc -> (f t) :: acc) !tdb_types [] in
 		List.rev acc
+
+
+	let tp_arg_name = mk_runtime_prefix "tpinfo"
 
 end
 
@@ -394,6 +441,13 @@ module Expr = struct
 				(m,el,p)
 		) hxc.c_boot.cl_meta
 
+	let prepend_tp_arg_type hxc t =
+		let tp_arg_t = hxc.t_int64 in
+		(match t with
+		| 	TFun(tl, r) ->
+			TFun(((TDB.tp_arg_name,false,tp_arg_t) :: tl), r)
+		| _  -> t)
+
 end
 
 module Wrap = struct
@@ -447,6 +501,16 @@ module Wrap = struct
 		let c,t = match hxc.t_closure efunc.etype with TInst(c,_) as t -> c,t | _ -> assert false in
 		let cf_func = PMap.find "_func" c.cl_fields in
 		mk (TNew(c,[efunc.etype],[Expr.mk_cast efunc cf_func.cf_type;ethis])) t efunc.epos
+		(*
+		let efunc = { efunc with etype = Expr.prepend_tp_arg_type hxc efunc.etype } in
+		(match c.cl_constructor with
+		| Some tcf ->
+			tcf.cf_type <-(match tcf.cf_type with
+				|TFun([a,b,c],_) -> tcf.cf_type
+				|_               -> Expr.prepend_tp_arg_type hxc tcf.cf_type
+				);
+
+		|_ -> assert false)*)
 
 	let wrap_static_function hxc efunc =
 		wrap_function hxc (mk (TConst TNull) (mk_mono()) efunc.epos) efunc
@@ -936,6 +1000,9 @@ module TypeChecker = struct
 			| [],_ ->
 				(* should not happen due to padded nulls *)
 				assert false
+			(*| [x], [] ->
+				 TODO: remove and fix closure_news constructors first argument type
+				loop acc [] [] *)
 			| _, [] ->
 				(* not sure about this one *)
 				assert false
@@ -1666,6 +1733,7 @@ let add_type_dependency ctx t = match follow t with
 		add_enum_dependency ctx en
 	| TAnon an ->
 		add_dependency ctx DFull (["c"],ctx.con.get_anon_signature an.a_fields);
+	| TAbstract({a_path = ["c"],"Struct"},_) -> ()
 	| TAbstract(a,_) ->
 		add_abstract_dependency ctx a
 	| TDynamic _ ->
@@ -1887,9 +1955,10 @@ module GC = struct
 		| FI_TParm  of int          (*bytes == alignment *)
 		| FI_Ref    of int          (*bytes == alignment *)
 		| FI_Val    of int          (*bytes == alignment *)
-		| FI_Struct of int * int    (*bytes *  alignment TODO : flatten structs (just add the field info list here) *)
+		| FI_Struct of int * int * field_info list (*bytes *  alignment * fields TODO : flatten structs (just add the field info list here) *)
 		| FI_CSArr  of field_info * int * int * int (* info * size * bytes * alignment *)
 		(*                                *)
+
 
 	type search_result =
 		| SR_self
@@ -1908,9 +1977,10 @@ module GC = struct
 		| SR_tp(sr,idx,t)  -> Printf.sprintf "sr_tp %d %s " idx (s_sr sr)
 
 	type caller_tpi =
-		| CTPI_known of int (* value *)
-		| CTPI_func  of int (* pos in func  tpinfo *)
-		| CTPI_class of int (* pos in class tpinfo *)
+		| CTPI_known  of int (* value *)
+		| CTPI_func   of int (* pos in func  tpinfo *)
+		| CTPI_class  of int (* pos in class tpinfo *)
+		(*| CTPI_parent*)
 		| CTPI_not_found
 
 	let rec s_ctpi v = match v with
@@ -1944,7 +2014,7 @@ module GC = struct
 		| FI_Val   2 -> TP_Val16
 		| FI_Val   4 -> TP_Val32
 		| FI_Val   8 -> TP_Val64
-		| FI_Struct(_,_)    -> Printf.printf "fatal: can't use Struct<T> as type parameter";
+		| FI_Struct(_,_,_)    -> Printf.printf "fatal: can't use Struct<T> as type parameter";
 		  assert false
 		| FI_CSArr(_,_,_,_) -> Printf.printf "fatal: can't use ConstSizeArray<T> as type parameter";
 		  assert false
@@ -1960,12 +2030,297 @@ module GC = struct
 		| TP_Tp      ->
 			Printf.printf "Bzzzt. Value for TP_Tp is a runtime thing.";
 			assert false
-		| _ -> assert false
+		(* | _ -> assert false *)
+
+	type rt_info =
+		| RT_ref  of int        (* pos *)
+		| RT_vref of int        (* pos *)
+		| RT_tp   of int * int  (* pos idx *)
+		| RT_val  of int * int  (* pos skips *)
+
+	let s_rti = function
+		| RT_ref o ->  Printf.sprintf "rt_ref %d " o
+		| RT_vref o ->  Printf.sprintf "rt_vref %d " o
+		| RT_tp(o,idx) -> Printf.sprintf "rt_tp %d  idx: %d " o idx
+		| RT_val(o,s) -> Printf.sprintf "rt_val %d  " o
+
+	let s_rti_l l = String.concat ", " (List.map s_rti l)
+
+    (* physical type info
+		TODO: split ptype_info up when initialization order is clear
+    *)
+
+    type 'a ptype =
+		| PClass of 'a
+		| PEnum  of 'a list
+		| PAnon  of 'a
 
 
-	let tp_arg_name = mk_runtime_prefix "tpinfo"
+    type ptype_info = {
+    	pt_key         : string;
+	    pt_type        : t;
+	    pt_id          : int;
 
-	type gc_ctx = { gc_con : context; gc_c : tclass; gc_cf : tclass_field; gc_isstatic : bool; gc_iscon : bool }
+		mutable pt_no_header   : bool;
+
+	    mutable pt_has_tps     : bool;
+
+	    mutable pt_size        : int;
+
+	    mutable pt_field_names : string list;
+	    mutable pt_field_types : ptype_info list;
+	    mutable pt_field_info  : field_info list;
+
+		mutable pt_header_field_names : string list;
+	    mutable pt_header_field_types : ptype_info list;
+	    mutable pt_header_field_info  : field_info list;
+
+		mutable pt_field_offsets: int list;
+	    mutable pt_rt_info     : rt_info list;
+
+		mutable pt_required_tps: ( int ) list;
+
+	    mutable pt_ifaces      : ptype_info list;
+	    mutable pt_s_types     : ptype_info list;
+
+	    mutable pt_s_id        : int; (* struct id *)
+	    mutable pt_i_id        : int; (* iface id *)
+	    mutable pt_s_group     : int; (* struct group *)
+	    mutable pt_i_group     : int; (* iface  group *)
+
+	    mutable pt_is_valref   : bool; (* is a type with exclusively value type var fields *)
+	    mutable pt_is_baseclass: bool; (* is a baseclass (cancels is_valref) *)
+	    mutable pt_has_vtable  : bool; (* has a vtable (affects object size ) *)
+	    mutable pt_has_ifaces  : bool; (* implements interfaces - affects object size if has_vtable == false *)
+
+	    mutable pt_n_refs      : int;  (* references *)
+	    mutable pt_n_vrefs     : int;  (* references to types with exclusively valtype var fields *)
+	    mutable pt_n_tps       : int;  (* type parameter var fields *)
+	    mutable pt_n_rawrefs   : int;  (* raw memory pointers, for array and string, have to be annotated, eg. @:gc_rawref *)
+
+	    mutable pt_refs        : int list; (* skips in 8 byte steps *)
+	    mutable pt_vrefs       : int list;
+        mutable pt_tps         : int list;
+        mutable pt_rawrefs     : int list;
+
+        mutable pt_super       : ptype_info option;
+        mutable pt_constrs     : ptype_info list;
+    }
+
+    let ptinfo key t ptid = {
+
+    	pt_key          = key;
+    	pt_type         = t;
+    	pt_id           = ptid;
+
+		pt_no_header    = false;
+
+    	pt_has_tps      = false;
+    	pt_is_valref    = false;
+    	pt_is_baseclass = false;
+    	pt_has_vtable   = false;
+    	pt_has_ifaces   = false;
+
+    	pt_size         = 0;
+
+    	pt_field_names  = [];
+    	pt_field_types  = [];
+    	pt_field_info   = [];
+
+		pt_header_field_names = [];
+		pt_header_field_info  = [];
+		pt_header_field_types = [];
+
+		pt_field_offsets= [];
+    	pt_rt_info      = [];
+
+		pt_required_tps = [];
+
+        pt_s_id         = 0;
+        pt_s_group      = 0;
+        pt_i_id         = 0;
+        pt_i_group      = 0;
+
+    	pt_ifaces       = [];
+    	pt_s_types      = [];
+
+    	pt_n_refs       = 0;
+    	pt_n_vrefs      = 0;
+    	pt_n_tps        = 0;
+    	pt_n_rawrefs    = 0;
+
+    	pt_refs         = [];
+    	pt_vrefs        = [];
+    	pt_tps          = [];
+    	pt_rawrefs      = [];
+
+    	pt_super        = None;
+    	pt_constrs      = [];
+    }
+
+
+	let tp_arg_name = TDB.tp_arg_name
+
+	(* the various contexts required for the GC module, split into
+	   - gc_types_ctx    : stores/exposes required info about types
+	   - gc_gen_ctx      : provides convenience functions for building expressions
+	   - gc_field_ctx    : provides field specific info during rewriting
+	*)
+
+	type gc_types_ctx = {
+		(*mutable ptypes : (int,ptype_info) PMap.t;*)
+
+		mutable cur_ptid  : int;
+
+		m_pt_types    : (string,ptype_info) Hashtbl.t;
+
+		m_pt_classes  : (string,ptype_info) Hashtbl.t;
+		m_pt_closures : (string,ptype_info) Hashtbl.t;
+		m_pt_enums    : (string,ptype_info) Hashtbl.t;
+		m_pt_anons    : (string,ptype_info) Hashtbl.t;
+	}
+
+	let init_gc_types_ctx () = {
+		cur_ptid      = 0;
+		m_pt_types    = Hashtbl.create 1000;
+		m_pt_classes  = Hashtbl.create  500;
+		m_pt_closures = Hashtbl.create  500;
+		m_pt_enums    = Hashtbl.create  500;
+		m_pt_anons    = Hashtbl.create  500;
+	}
+
+	type _gc_field_ctx = {
+		gc_con      : context;
+		gc_c        : tclass;
+		gc_cf       : tclass_field;
+		gc_isstatic : bool;
+		gc_iscon    : bool;
+	}
+
+	type gc_field_ctx =
+		| GC_F_init
+		| GC_F_static_var   of tclass_field
+		| GC_F_static_func  of tclass_field
+		| GC_F_constructor  of tclass_field
+		| GC_F_method       of tclass_field
+		| GC_F_instance_var of tclass_field
+
+	let gc_map_field_expressions ctx tctx ectx c f =
+		let _ = begin
+		(match c.cl_init with
+			| Some te 			-> c.cl_init <- Some (f ctx tctx ectx c GC_F_init te)
+			| None    			-> ()
+		);
+		List.iter (fun cf ->
+			(match cf.cf_kind,cf.cf_expr with
+				| Var _,(Some te) -> cf.cf_expr <- Some (f ctx tctx ectx c (GC_F_static_var cf) te)
+				| _,(Some te)     -> cf.cf_expr <- Some (f ctx tctx ectx c (GC_F_static_func cf) te)
+				| _,_ -> ()
+			)) c.cl_ordered_statics;
+		(match c.cl_constructor with
+			| Some ( {cf_expr = Some(te)} as cf)
+								-> cf.cf_expr <- Some (f ctx tctx ectx c (GC_F_constructor cf) te)
+			| _   -> ()
+		);
+		List.iter (fun cf ->
+			(match cf.cf_kind,cf.cf_expr with
+				| Var _,(Some te) -> cf.cf_expr <- Some (f ctx tctx ectx c (GC_F_instance_var cf) te)
+				| _,(Some te)   -> cf.cf_expr <- Some (f ctx tctx ectx c (GC_F_method cf) te)
+				| _,_ -> ()
+			)) c.cl_ordered_fields;
+		end
+		in ()
+
+	let pt_ctx_next_id ctx =
+		let nid = ctx.cur_ptid + 1 in
+		let _ = ctx.cur_ptid <- nid in
+		nid
+
+	let pt_ctx_add_econ ctx t ef =
+		let t = follow t in
+		let key  = (Tid.tp_normalized_id t) ^ "." ^ ef.ef_name in
+		if not (Hashtbl.mem ctx.m_pt_enums key) then
+			begin
+				let ptid = pt_ctx_next_id ctx in
+				let pt = ptinfo key t ptid in
+				Hashtbl.add ctx.m_pt_enums key pt;
+				pt
+			end
+		else
+			Hashtbl.find ctx.m_pt_enums key
+
+	let pt_ctx_get_econ ctx t ef =
+		let t = follow t in
+		let key  = (Tid.tp_normalized_id t) ^ "." ^ ef.ef_name in
+		Hashtbl.find ctx.m_pt_enums key
+
+	let pt_ctx_add_type ctx t =
+		let t = follow t in
+		let key  = (Tid.tp_normalized_id t) in
+		if not (Hashtbl.mem ctx.m_pt_types key) then
+			begin
+				let ptid = pt_ctx_next_id ctx in
+				let pt = ptinfo key t ptid in
+				Hashtbl.add ctx.m_pt_types key pt;
+				pt
+			end
+		else
+			Hashtbl.find ctx.m_pt_types key
+
+	let pt_ctx_add_anon ctx t =
+		let t = follow t in
+		let key  = (Tid.tp_normalized_id t) in
+		if not (Hashtbl.mem ctx.m_pt_anons key) then
+			begin
+				let ptid = pt_ctx_next_id ctx in
+				let pt = ptinfo key t ptid in
+				Hashtbl.add ctx.m_pt_anons key pt;
+				pt
+			end
+		else
+			Hashtbl.find ctx.m_pt_anons key
+
+	let pt_ctx_get_anon ctx t =
+		let t = follow t in
+		let key  = (Tid.tp_normalized_id t) in
+		Hashtbl.find ctx.m_pt_anons key
+
+	let pt_ctx_get_type ctx t =
+		let t = follow t in
+		let key  = (Tid.tp_normalized_id t) in
+		Hashtbl.find ctx.m_pt_types key
+
+	let pt_ctx_get_type_by_string ctx key =
+		Hashtbl.find ctx.m_pt_types key
+
+
+
+	type gc_gen_ctx = {
+
+		mutable gc_obj_tp_info : (texpr -> texpr);
+		mutable gc_func_tp_info : (unit -> texpr);
+		mutable or_expr : (texpr list -> texpr);
+
+		mutable gc_pool_alloc : (int -> texpr);
+		mutable gc_area_alloc : (texpr -> texpr);
+
+		mutable gc_alloc_ptype : (ptype_info -> texpr -> texpr);
+		mutable gc_alloc_ptype_tps : (ptype_info -> texpr -> texpr -> texpr);
+
+		mutable gc_tp_known_expr : (int (*TODO:int64*)-> int -> texpr);
+
+		mutable gc_tp_by_pos_lt_expr : (texpr -> int -> int -> texpr);
+		mutable gc_tp_by_pos_gt_expr : (texpr -> int -> int -> texpr);
+		mutable gc_tp_by_pos_eq_expr : (texpr -> int -> int -> texpr);
+
+		(*mutable gc_field_ctx : gc_field_ctx;*)
+
+	}
+
+	let par_filter xs ys f =
+		List.rev
+			(List.fold_left2 (fun xs b c -> if (f b c) then b :: xs else xs ) xs ys [])
+
 
 	let make_instance = function
 		| TClassDecl c -> TInst (c,List.map snd c.cl_params)
@@ -1975,7 +2330,7 @@ module GC = struct
 
 	let s_ctx_id ctx = Tid.id (make_instance (TClassDecl ctx.gc_c)) ^ "." ^ ctx.gc_cf.cf_name
 
-	let debug = false
+	let debug = true
 
 	let p_info ctx s = if debug then Printf.printf "%s : %s\n" s (s_ctx_id ctx) else ()
 
@@ -2014,6 +2369,8 @@ module GC = struct
 	let get_class t = match t with TInst(c,_) -> c | _ -> assert false
 	let get_anon t = match t with TAnon(a) -> a | _ -> assert false
 
+
+
 	let gc_tp_known_expr : (int (*TODO:int64*)-> int -> texpr) ref = ref (fun v p -> assert false)
 	let gc_tp_by_pos_lt_expr : (texpr -> int -> int -> texpr) ref = ref (fun v sp dp -> assert false)
 	let gc_tp_by_pos_gt_expr : (texpr -> int -> int -> texpr) ref = ref (fun v sp dp -> assert false)
@@ -2036,6 +2393,8 @@ module GC = struct
 		in loop el
 
 	let gc_initialized : bool ref = ref false
+
+
 
 	let init_gc_funcs ctx =
 		if !gc_initialized then () else
@@ -2061,9 +2420,9 @@ module GC = struct
 		let get_address te =
 			Expr.mk_static_call_2 hxc.c_lib "getAddress" [te] null_pos
 		in
-		let by_pos_call te source_pos dest_pos n =
+		(* let by_pos_call te source_pos dest_pos n =
 			Expr.mk_static_call_2 c_gc n [te;(mk_int source_pos);(mk_int dest_pos)] null_pos
-		in
+		in *)
 		let mk_parens te = mk (TParenthesis(te)) te.etype null_pos in
 		let mask_pos pos =
 			mk_binop OpShl (mk_int64 7) (mk_int (pos*3))
@@ -2108,6 +2467,94 @@ module GC = struct
 		gc_initialized := true;
 		()
 
+	(* TODO sync this reliably with Allocator implementation(s) *)
+
+	let log2 x =
+		let log = Pervasives.log in
+		int_of_float ((log (float_of_int x)) /. (log 2.0))
+
+	let next_pow_2 v =
+		let r = 1 lsl (log2 v) in
+		if  v > r then r lsl 1 else r
+
+	let get_pool_idx (size : int) =
+		let shift =  log2 (next_pow_2 size) in
+		if shift < 5 then 0 else shift - 4
+
+	(*let gc_pool_alloc_ptype ctx tctx ectx pt =
+		let size,algn = type_to_size_alignment hxc t None in
+		!gc_pool_alloc (get_pool_idx size)
+		ectx.gc_all*)
+
+	let init_gc_gen_ctx ctx =
+		let hxc       = ctx.hxc in
+		let com       = ctx.com in
+		let t_int64   = hxc.t_int64 in
+		let t_int64_p = hxc.t_pointer t_int64 in
+		let mk_int    = fun v -> Expr.mk_int com v null_pos in
+		let mk_int64  = fun v -> Expr.mk_int64 hxc v null_pos in
+		let c_gc      = hxc.c_gc in
+		let mk_binop op e1 e2 =
+			Expr.mk_binop op e1 e2 t_int64 null_pos
+		in
+		let mk_field c ethis n =
+				let cf = (PMap.find n c.cl_fields) in
+				mk (TField (ethis,(FInstance (c,List.map (fun (_,t) -> t) c.cl_params,cf)))) cf.cf_type null_pos
+		in
+		let mk_call c ethis n el =
+			let ef = mk_field c ethis n in
+			let rt = match ef.etype with | TFun(_,r) -> r | _ -> assert false in
+			mk (TCall(ef,el)) rt null_pos
+		in
+
+		let get_address te =
+			Expr.mk_static_call_2 hxc.c_lib "getAddress" [te] null_pos
+		in
+		let mk_parens te = mk (TParenthesis(te)) te.etype null_pos in
+		let mask_pos pos =
+			mk_binop OpShl (mk_int64 7) (mk_int (pos*3))
+		in
+		let by_pos te s d =
+			mk_parens (
+				if      s < d then  mk_binop OpAnd (mk_parens(mask_pos d)) (mk_parens(mk_binop OpShl te (mk_int((d-s)*3))))
+				else if s = d then  mk_binop OpAnd (mk_parens(mask_pos d)) (mk_parens te)
+				else                mk_binop OpAnd (mk_parens(mask_pos d)) (mk_parens (mk_binop OpShr te (mk_int((s-d)*3))))
+			)
+		in
+		let known_tp v d =
+			mk_parens (mk_binop OpShl (mk_int64 v) (mk_int(d*3)))
+		in
+		let area = (Expr.mk_static_field_2 c_gc "main_area" null_pos) in
+
+		let c_area = get_class area.etype in
+
+		let pools = (mk_field c_area area "pools") in
+
+		let c_pool       = hxc.c_gc_pool in
+		let t_pool       = make_instance (TClassDecl c_pool) in
+		let get_pool idx = get_address (mk (TArray(pools,mk_int idx)) t_pool null_pos)
+
+		in {
+
+			gc_obj_tp_info   = (fun te -> Expr.mk_static_call_2 c_gc "obj_tp_info" [Expr.mk_cast te t_int64_p] null_pos );
+			gc_func_tp_info  = (fun () -> Expr.mk_local (mk_var (tp_arg_name) t_int64) null_pos);
+			or_expr          = (fun el -> _or_expr t_int64 el);
+
+			gc_pool_alloc    = (fun idx -> mk_call c_pool (get_pool idx) "alloc" [] );
+			gc_area_alloc    = (fun te -> mk_call c_area area "alloc" [te] );
+
+			gc_alloc_ptype   =  (fun pt te_header ->
+				mk_call c_pool (get_pool (get_pool_idx pt.pt_size)) "alloc_w_header" [te_header]);
+			gc_alloc_ptype_tps = (fun pt te_header te_tps ->
+				mk_call c_pool (get_pool (get_pool_idx pt.pt_size)) "alloc_w_header_tps" [te_header;te_tps]);
+
+			gc_tp_known_expr = (fun v dest_pos -> known_tp v dest_pos);
+
+			gc_tp_by_pos_lt_expr = (fun te s d -> by_pos te s d);
+			gc_tp_by_pos_gt_expr = (fun te s d -> by_pos te s d);
+			gc_tp_by_pos_eq_expr = (fun te s d -> by_pos te s d);
+
+		}
 
 	let tp_info_to_expr ctx dpos tpi =
 		init_gc_funcs ctx;
@@ -2152,12 +2599,19 @@ module GC = struct
 
 	let get_anon_fields a = (List.rev (pmap_to_list a.a_fields))
 
+	let get_enum_xs_names t = match t with
+		| TEnum(_,_)    -> []
+		| TFun (args,_) -> List.map  (fun (n,_,_) -> n ) args
+		| _ -> assert false
+
 	let get_enum_xs t = match t with
 		| TEnum(_,_)    -> []
 		| TFun (args,_) -> List.map  (fun (_,_,t) -> t ) args
 		| _ -> assert false
 
 	let get_enum_fields e = (List.map (fun f -> get_enum_xs f.ef_type ) (pmap_to_list e.e_constrs))
+
+	let get_enum_names e  = (List.map (fun f -> get_enum_xs_names f.ef_type ) (pmap_to_list e.e_constrs))
 
 	let rec get_const_size_arr_size t = (match t with
 		| TAbstract({a_path = ["c"],"ConstSizeArray"},[t;const]) ->
@@ -2169,6 +2623,12 @@ module GC = struct
 			in int_of_string size
 		| _ -> assert false)
 
+
+	(*
+		get_field_info:
+      	obtain info about kind and size of a field
+      	TODO: parameterize for 32 bit platforms
+	 *)
 
 	and get_field_info hxc tp = (match tp with
 
@@ -2192,21 +2652,24 @@ module GC = struct
 			let finfo = get_field_info hxc t in
 			(match finfo with
 			| FI_Val v
-			| FI_TParm v (*I don't think this is valid*)
+			| FI_TParm v (*I don't think this is valid TODO*)
 			| FI_Ref v ->
 				FI_CSArr(finfo, arrsz, arrsz*v, v)
-			| FI_Struct (sz,algn) ->
+			| FI_Struct (sz,algn,fil) ->
 				FI_CSArr(finfo, arrsz, arrsz*sz, algn)
 			| FI_CSArr  (fi,sz,bytes,algn) ->
 				FI_CSArr(finfo, arrsz, arrsz*bytes, algn))
 
 		| TAbstract({a_path=(["c"],("Struct"))},[t]) -> (match t with
 			| TInst (tc,tp) ->
-				let size,algn = get_fields_size_algn hxc (get_class_var_fields tc) in
-				FI_Struct(size,algn)
+				let fields = (get_class_var_fields tc) in
+				let size,algn = get_fields_size_algn hxc fields in
+
+				FI_Struct(size,algn, get_struct_fields_info hxc fields)
 			| TAnon (a) ->
-				let size,algn = get_fields_size_algn hxc (get_anon_fields a) in
-				FI_Struct(size,algn)
+				let fields = (get_anon_fields a) in
+				let size,algn = get_fields_size_algn hxc fields in
+				FI_Struct(size,algn, get_struct_fields_info hxc fields)
 			| _ -> assert false )
 
 		| TAbstract ( {a_this = a_this},_) when a_this == tp -> assert false;
@@ -2219,6 +2682,15 @@ module GC = struct
 		| _ ->
 			FI_Ref 8 )
 
+
+	(*
+		for a list of fields, follow C alignment rules to determine offsets of fields in a struct
+		returns
+			- the total size (including padding)
+			- the max alignment used (e.g. for a struct consisting of uint16_t's only that'd be 2 bytes
+				(this is somewhat redundant, because the max alignment will always be 8 bytes due to the header)
+			- the list of offsets of the respective fields
+	 *)
 	and struct_alignment l =
 		let next (cur_pos,max_algn,acc) (sz,algn) =
 			let         r = cur_pos mod algn in
@@ -2231,12 +2703,34 @@ module GC = struct
 		let size =  end_pos + if r = 0 then 0 else (max_algn - r) in
 		size,max_algn, List.rev offsets
 
+
+	(*
+		field_info_to_size_algn
+	*)
+
 	and field_info_to_size_algn f = match f with
 		| FI_Val v
 		| FI_TParm v
 		| FI_Ref v              -> v,v
 		| FI_CSArr(f,n,bytes,a) -> bytes,a
-		| FI_Struct(sz,algn)    -> sz,algn
+		| FI_Struct(sz,algn,_)  -> sz,algn
+
+	and field_info_has_refs xs = List.exists (fun fi -> match fi with
+		| FI_Ref _            -> true
+		| FI_Struct(_,_,xs)   -> field_info_has_refs xs
+		| FI_CSArr (fi,_,_,_) -> field_info_has_refs [fi]
+		| _ -> false
+	) xs
+
+	(* 	only use for anons - for classes, even if no field has a TP type, we need storage for them.
+ 		for enums this could be used if we decide to add TP storage on a per-constructor basis *)
+
+	and field_info_has_tps xs = List.exists (fun fi -> match fi with
+		| FI_TParm _          -> true
+		(* | FI_Struct(_,_,xs)   -> field_info_has_tps xs - hm what do we do with Struct<T<A,B,C>>  ?? TODO *)
+		(*| FI_CSArr (fi,_,_,_) ->  assert false *) (* -> field_info_has_tps [fi] /// we could make this work, but not now TODO *)
+		| _ -> false
+	) xs
 
 	and get_xs_types xs = List.map (fun f -> f.cf_type) xs
 
@@ -2246,11 +2740,13 @@ module GC = struct
 		let size,max_algn,offsets = struct_alignment sz_algn_xs in
 		size,max_algn
 
+	and get_struct_fields_info hxc cfields = List.map (get_field_info hxc) (get_xs_types cfields)
+
 	let s_field_info f = match f with
 		| FI_Ref v          ->  " ref"
 		| FI_TParm v        ->  " tp"
 		| FI_Val v          ->  " val("^ (string_of_int v) ^ ")"
-		| FI_Struct(s,a)    ->  " struct("^ (string_of_int s) ^ ")"
+		| FI_Struct(s,a,fil)    ->  " struct("^ (string_of_int s) ^ ")"
 		| FI_CSArr(f,n,b,a) ->  " csarr("^ (string_of_int b) ^ ")"
 
 	let get_info hxc xs = List.map (get_field_info hxc) xs
@@ -2262,6 +2758,7 @@ module GC = struct
 		(xs,offsets,size)
 
 
+
 	(* takes a type - either a class, an enum or an anon
 
 		we're skipping type ids, to be able to obtain any types info with a single array access
@@ -2269,21 +2766,8 @@ module GC = struct
 		the first set of N tpinfo is e.g. 16 bytes, we give them the first N ids, then if the second set
 		is e.g. max 32 bytes we skip each second id, for 64 bytes we skip each 2nd third and fourth id, etc.
 
-
-
 	*)
 
-	type rt_info =
-	| RT_ref of int       (* pos *)
-	| RT_tp  of int * int (* pos idx*)
-	| RT_val of int * int (* pos skips *)
-
-	let s_rti = function
-		| RT_ref o ->  Printf.sprintf "rt_ref %d " o
-		| RT_tp(o,idx) -> Printf.sprintf "rt_tp offs: %d  idx: %d " o idx
-		| RT_val(o,s) -> Printf.sprintf "rt_val offs: %d  skips: %d " o s
-
-	let s_rti_l l = String.concat ", " (List.map s_rti l)
 
 	(* TODO add val ref *)
 
@@ -2296,34 +2780,36 @@ module GC = struct
 
 	let is_tp = function TInst({cl_kind=KTypeParameter _},_) -> true | _ -> false
 
-	let _types_to_runtime_info ctx t types tps =
 
-		let hxc = ctx.gc_con.hxc in
+	let _types_to_runtime_info hxc t types tps offset_start =
+		(* let hxc = ctx.gc_con.hxc in *)
 
 		let pos_by_tp =
 			let indices = map_i ( fun idx _ -> idx ) tps in
-			let m = List.fold_left2 ( 
-				fun m idx t -> 
-					let tid = (Tid.id t) in 
+			let m = List.fold_left2 (
+				fun m idx t ->
+					let tid = (Tid.id t) in
 					if not (PMap.exists tid m) then
-						PMap.add (Tid.id t) idx m 
+						PMap.add (Tid.id t) idx m
 					else
 						m
 				) PMap.empty indices tps in m
 		in
 
 		let field_info, offsets, size =  get_alignment hxc (List.map (get_field_info hxc) types) in
-
-		let acc = List.rev (List.fold_left2 ( fun acc t (offs,fi) ->
+		let offsets = List.map (fun i -> i + offset_start) offsets in
+		let acc = List.rev ( List.fold_left2 ( fun acc t (offs,fi) ->
 			(match fi,(offs mod 8) with
 			| FI_Val    v,0 -> RT_val(offs,0) :: acc
 			| FI_Ref    v,0 -> (RT_ref offs) :: acc
 			| FI_TParm  v,0 ->
 					let idx = PMap.find (Tid.id t) pos_by_tp in
 					RT_tp(offs,idx) :: acc
-			| FI_Struct(s,a),_ -> RT_val(offs,0)  :: acc(*TODO make struct members known to the gc*)
-			| FI_CSArr(f,n,b,a),_ -> RT_val(offs,0)  :: acc  (*TODO make array members known to the gc*)
-			| FI_Val    v,_ -> acc
+			| FI_Struct(s,a,fil),_ ->
+				RT_val(offs,0)  :: acc(*TODO make struct members known to the gc*)
+			| FI_CSArr(f,n,b,a),_ ->
+				RT_val(offs,0)  :: acc  (*TODO make array members known to the gc*)
+			| FI_Val    v,_ -> RT_val(offs,0) :: acc
 			| _ ->
 				Printf.printf "non-val field not 8 byte aligned.. bad\n";
 				acc
@@ -2331,31 +2817,57 @@ module GC = struct
 
 		) [] types (List.map2 (fun o f -> o,f ) offsets field_info))
 		in
-		Printf.printf "RTI :: %s :: %s \n" (Tid.id t) (s_rti_l acc)
+		Printf.printf "RTI :: %s :: %s \n" (Tid.id t) (s_rti_l acc);
+		acc
+
+	let types_to_runtime_info hxc t types tps = _types_to_runtime_info hxc t types tps 0
 
 
-	let type_to_runtime_info ctx t anon_tps_opt = match t with
+	(*
+	    return the types of all fields, prepend the fields of respective headers,
+
+	 *)
+
+	let prepend_header_fields hxc t = (match follow t with
 		| TInst(c,tps) ->
-			let types =  get_xs_types (get_class_var_fields c) in
-			_types_to_runtime_info ctx t types (types_of_tparams c.cl_params)
+			let hfields = get_class_var_fields hxc.c_gc_classheader in
+			Printf.printf "hfl %d \n" (List.length hfields);
+			let cfields = get_class_var_fields c in
+			hfields @ cfields
+		| TEnum(e,tps) ->
+			(* let hfields = get_class_var_fields hxc.c_gc_enumheader in *)
+			[]
+		| TAnon(a) ->
+			let hfields = get_class_var_fields hxc.c_gc_anonheader in
+			Printf.printf "hfl %d \n" (List.length hfields);
+			let cfields = get_anon_fields a in
+			hfields @ cfields
+		| _ -> assert false
+	)
+
+	let type_to_runtime_info hxc t anon_tps_opt = match t with
+		| TInst(c,tps) ->
+			(* let types =  get_xs_types (get_class_var_fields c) in *)
+			let types =  get_xs_types (prepend_header_fields hxc t) in
+			types_to_runtime_info hxc t types (types_of_tparams c.cl_params)
 
 		| TEnum(e,tps) ->
-			()
+			[]
 			(*_types_to_runtime_info ctx (types_of_tparams e.e_params)*)
 		| TAnon(a) ->
-			let types =  get_xs_types (get_anon_fields a) in
+			let types =  get_xs_types (prepend_header_fields hxc t) in
 			(match anon_tps_opt with
 				| Some(tps) ->
-				  _types_to_runtime_info ctx t types (tps)
+				  types_to_runtime_info hxc t types (tps)
 				| None ->
-				  _types_to_runtime_info ctx t types []
+				  types_to_runtime_info hxc t types []
 			)
-		| _ -> ()
+		| _ -> []
 
 
 	(* TODO deal with prepending header fields better *)
-	let type_to_size_alignment ctx t efopt =
-		let hxc = ctx.gc_con.hxc in
+	let type_to_size_alignment hxc t efopt =
+		(*let hxc = ctx.gc_con.hxc in *)
 		let f t = (match t,efopt with
 			| TInst(c,_),None ->
 				let cfields = get_class_var_fields c in
@@ -2378,6 +2890,26 @@ module GC = struct
 		size,algn
 
 	(*  end struct size,alignment and field info *)
+
+
+	(* TODO sync this reliably with Allocator implementation(s) *)
+
+	let log2 x =
+		let log = Pervasives.log in
+		int_of_float ((log (float_of_int x)) /. (log 2.0))
+
+	let next_pow_2 v =
+		let r = 1 lsl (log2 v) in
+		if  v > r then r lsl 1 else r
+
+	let get_pool_idx (size : int) =
+		let shift =  log2 (next_pow_2 size) in
+		if shift < 5 then 0 else shift - 4
+
+	let gc_pool_alloc_type hxc t =
+		let size,algn = type_to_size_alignment hxc t None in
+		!gc_pool_alloc (get_pool_idx size)
+
 
 	(* instantiations - anything that allocates memory. *)
 	let instantiations ctx te = match te with
@@ -2412,8 +2944,6 @@ module GC = struct
 		in (loop te);
 		!types
 
-
-
 	let get_field_expressions c =
 		let rec loop xs acc = (match xs with
 			x :: xs -> (match x.cf_expr with
@@ -2422,18 +2952,18 @@ module GC = struct
 			| _ -> acc)
 		in loop ( c.cl_ordered_fields @ c.cl_ordered_statics ) []
 
-	let get_class_instance_fields c =
-		let rec loop c = (match c.cl_super with
+	let get_class_instance_fields c = c.cl_ordered_fields
+		(* let rec loop c = (match c.cl_super with
 				| Some (sc,stp) -> loop sc @ c.cl_ordered_fields
 				| _ -> c.cl_ordered_fields)
-		in loop c
+		in loop c *)
 
 
-	let get_class_static_fields c =
-		let rec loop c = (match c.cl_super with
+	let get_class_static_fields c = c.cl_ordered_statics
+		(* let rec loop c = (match c.cl_super with
 				| Some (sc,stp) -> loop sc @ c.cl_ordered_statics
 				| _ -> c.cl_ordered_statics)
-		in loop c
+		in loop c *)
 
 
 	(*let smethod_filter = and_filter method_filter (fun cf -> cf)*)
@@ -2445,6 +2975,24 @@ module GC = struct
 
 
 	let get_func t = match t with TFun(args,r) -> (List.map(fun (_,_,t) -> t) args) ,r | _ -> assert false
+
+
+	(* The following are the functions that deal with looking up type parameter information *)
+
+	let type_to_callsite_tp_info c fctx t =
+		match fctx with
+		(* in __init__ and static var initialization, there cannot be any type parameters from an outer frame *)
+		| GC_F_init            -> ()
+		| GC_F_static_var   cf -> ()
+		(* in an instance var initialization there can only be class type parameters *)
+		| GC_F_instance_var cf -> ()
+		(* in a static function there can only be type parameters passed to the function as argument *)
+		| GC_F_static_func  cf -> ()
+		(* in both constructor and method there can be both class and function type parameters *)
+		| GC_F_constructor  cf
+		| GC_F_method       cf -> ()
+
+
 
 	(* for every callees type parameter, return the first search_result found or SR_none *)
 	let get_tp_pos_info_from_callee in_t tps =
@@ -2512,8 +3060,6 @@ module GC = struct
 			CTPI_known v
 	)
 
-
-
 	let sr_to_ctpi ctx rtype eargs_ctx sr =
 		let rec extract_type t sr =
 			(match (Type.follow t),sr with
@@ -2527,7 +3073,7 @@ module GC = struct
 
 			| TFun(xs,_),          SR_f_arg(sr,idx) -> (try let (_,_,t) = List.nth xs idx
 														in extract_type t sr
-														with  _ -> CTPI_not_found | _ -> assert false)
+														with  _ -> CTPI_not_found (* | _ -> assert false *))
 														(*with ExtList.List.Invalid_index _ -> CTPI_not_found | _ -> assert false)*)
 			| TFun(_,r),           SR_f_ret(sr)     -> extract_type r sr
 
@@ -2536,7 +3082,7 @@ module GC = struct
 			| TAbstract(_,xs)
 			| TType(_,xs)),        SR_tp(sr,idx,t)  -> (try let t = List.nth xs idx
 														in extract_type t sr
-														with _ -> CTPI_not_found | _ -> assert false)
+														with _ -> CTPI_not_found (* | _ -> assert false *))
 			| _ -> assert false
 		) in
 		extract_type
@@ -2546,14 +3092,7 @@ module GC = struct
 	let sr_has_any xs =
 		(List.length (List.filter (fun sr -> match sr with SR_none -> false | _ -> true ) xs)) > 0
 
-	let prepend_arg_type con t =
-		let tp_arg_t = con.hxc.t_int64 in
-		(match t with
-		| 	TFun(tl, r) ->
-			(*p_info ctx "added arg type";*)
-			TFun(((tp_arg_name,false,tp_arg_t) :: tl), r)
-		| _  -> t)
-
+	let prepend_arg_type con t = Expr.prepend_tp_arg_type con.hxc t
 
 	(* if we're in a constructor, our source func parameters have an offset *)
 	let adjust_callsite_tpi_positions ctx callsite_tpi =
@@ -2618,19 +3157,6 @@ module GC = struct
 			e_tpinfo :: el
 		)}
 
-	(* TODO sync this reliably with Allocator implementation(s) *)
-	let log2 x =
-		let log = Pervasives.log in
-		int_of_float ((log (float_of_int x)) /. (log 2.0))
-
-	let next_pow_2 v =
-		let r = 1 lsl (log2 v) in
-		if  v > r then r lsl 1 else r
-
-	let get_pool_idx (size : int) =
-		let shift =  log2 (next_pow_2 size) in
-		if shift < 5 then 0 else shift - 4
-
 	let add_tp_info_callsite ctx te =
 		let rec loop te = match te.eexpr with
 		| TCall({eexpr=TField(eenum,FEnum(et,ef))} as efield, el) ->
@@ -2664,7 +3190,7 @@ module GC = struct
 						let tp = (match te.etype with
 							| TAbstract(_,[t]) -> t
 							| _ -> assert false ) in
-						let size,algn = type_to_size_alignment ctx tp None in
+						let size,algn = type_to_size_alignment ctx.gc_con.hxc tp None in
 						!gc_pool_alloc (get_pool_idx size)
 			| _ ->
 			(match cf.cf_params with
@@ -2692,7 +3218,7 @@ module GC = struct
 					{ te with eexpr = TNew(c,ctps, (e_tpinfo :: el) ) }
 			)
 		| TObjectDecl(el) ->
-
+			let te = {te with eexpr = TObjectDecl (List.map (fun (n,e) -> n,loop e) el) } in
 			let a = get_anon te.etype in
 			let tfields = get_anon_fields a in
 
@@ -2704,7 +3230,7 @@ module GC = struct
 				| _ -> List.rev acc ) in
 			(match loop tfields [] with
 				| [] ->
-					type_to_runtime_info ctx (TAnon(a)) (Some []);
+					type_to_runtime_info ctx.gc_con.hxc (TAnon(a)) (Some []);
 					te
 				| tp_fields ->
 					let tps = get_xs_types tp_fields in
@@ -2716,7 +3242,7 @@ module GC = struct
 					let nfield = Type.mk_field tp_arg_name ctx.gc_con.hxc.t_int64 null_pos in
 					a.a_fields <- PMap.add tp_arg_name nfield a.a_fields;
 
-					type_to_runtime_info ctx (TAnon(a)) (Some tps);
+					type_to_runtime_info ctx.gc_con.hxc (TAnon(a)) (Some tps);
 
 					{ te with
 						eexpr = TObjectDecl( (tp_arg_name,e_tpinfo) :: el );
@@ -2726,7 +3252,7 @@ module GC = struct
 		| _ -> Type.map_expr loop te
 		in loop te
 
-	let add_tp_info_arg ctx te = match te.eexpr with
+	let add_tp_info_to_function ctx te = match te.eexpr with
 		| TFunction f ->
 			p_info ctx "add arg info";
 			let tp_arg_t = ctx.gc_con.hxc.t_int64 in
@@ -2763,40 +3289,45 @@ module GC = struct
 	let fields_b b l = List.map (fun f -> (f,b)) l
 
 	let type_decl_info con t =
-	let ct = (make_instance t) in
-	let _ = TDB.add ct in (match t with
-	| TClassDecl    tc ->
-		if debug then Printf.printf "CLASS:::%s\n" (Tid.id ct);
-		List.iter (fun t -> TDB.add t) (List.flatten (List.map get_types (get_field_expressions tc)));
-		let all_fields = ((get_class_instance_fields tc) @ (get_class_static_fields tc)) in
-		List.iter  (fun t -> TDB.add t) (List.map ( fun f -> f.cf_type) all_fields );
-		(*
-		Printf.printf "\n anons: %d" (pm_length !TDB.tdb_anons);
-		Printf.printf "\n classes: %d" (pm_length !TDB.tdb_classes);
-		Printf.printf "\n abs: %d" (pm_length !TDB.tdb_abstracts);
-		Printf.printf "\n enums: %d" (pm_length !TDB.tdb_enums);
-		Printf.printf "\n tdefs: %d" (pm_length !TDB.tdb_defs);
-		Printf.printf "\n funcs: %d" (pm_length !TDB.tdb_funcs);
-		Printf.printf "\n all: %d" (pm_length !TDB.tdb_types);
-		Printf.printf "\nclass %s fields: %s"
-			(s_type_path tc.cl_path)
-			(String.concat ", " (List.map (fun f -> f.cf_name) (get_class_instance_fields tc) ));
-			()
-		*)
-	| TEnumDecl te -> ()
-	| TTypeDecl td ->
-		TDB.add td.t_type
-	| TAbstractDecl ta ->
-		TDB.add ta.a_this)
 
-	let run con td = (match td with
+		let ct = (make_instance t) in
+
+		let _ = TDB.add ct in (match t with
+		| TClassDecl    tc ->
+			if debug then Printf.printf "CLASS:::%s\n" (Tid.id ct);
+			type_to_runtime_info con.hxc ct None;
+			List.iter (fun t -> TDB.add t) (List.flatten (List.map get_types (get_field_expressions tc)));
+			let all_fields = ((get_class_instance_fields tc) @ (get_class_static_fields tc)) in
+			List.iter  (fun t -> TDB.add t) (List.map ( fun f -> f.cf_type) all_fields );
+			(*
+			Printf.printf "\n anons: %d" (pm_length !TDB.tdb_anons);
+			Printf.printf "\n classes: %d" (pm_length !TDB.tdb_classes);
+			Printf.printf "\n abs: %d" (pm_length !TDB.tdb_abstracts);
+			Printf.printf "\n enums: %d" (pm_length !TDB.tdb_enums);
+			Printf.printf "\n tdefs: %d" (pm_length !TDB.tdb_defs);
+			Printf.printf "\n funcs: %d" (pm_length !TDB.tdb_funcs);
+			Printf.printf "\n all: %d" (pm_length !TDB.tdb_types);
+			Printf.printf "\nclass %s fields: %s"
+				(s_type_path tc.cl_path)
+				(String.concat ", " (List.map (fun f -> f.cf_name) (get_class_instance_fields tc) ));
+				()
+			*)
+		| TEnumDecl te -> ()
+		| TTypeDecl td ->
+			TDB.add td.t_type
+		| TAbstractDecl ta ->
+			TDB.add ta.a_this)
+
+
+
+	let run_snd con td = (match td with
 		| TClassDecl tc ->
 			let cons = match tc.cl_constructor with
 				| Some cf->	let _ = match tc.cl_params,cf.cf_params with
 							| ([],[]) -> ()
 							| _       ->
 								if debug then Printf.printf "class con add arg %s\n" (s_type_path tc.cl_path) else ();
-								map_fields con tc add_tp_info_arg no_filter [cf,false] true
+								map_fields con tc add_tp_info_to_function no_filter [cf,false] true
 							in [(cf,false)]
 				| _ -> []
 			in
@@ -2815,9 +3346,10 @@ module GC = struct
 			let insts = ( fields_b false tc.cl_ordered_fields ) in
 			let both  = insts @ stats in
 
-			map_fields con tc add_tp_info_arg gmethod_filter both false;
+			map_fields con tc add_tp_info_to_function gmethod_filter both false;
 			map_fields con tc add_tp_info_callsite no_filter both false;
 			map_fields con tc add_tp_info_callsite no_filter cons true;
+
 		| TEnumDecl et ->
 			if (List.length et.e_params) > 0 then begin
 				let set_type n =
@@ -2829,6 +3361,10 @@ module GC = struct
 			else ()
 		| _ -> ())
 
+
+
+		(* 2.1 *)
+		let match_caller_tp_with_callsite_type = ()
 
 	type k_info = string * field_info list
 
@@ -2872,12 +3408,623 @@ module GC = struct
 		Printf.printf "\n%d unique types \n" (pm_length !TDB.tdb_types);
 		Printf.printf "\n%d unique types WRT to GC marking\n" (pm_length !k_map)
 
+	let ptypes_types pts = List.map (fun pt -> pt.pt_type) pts
+
+	(*
+		returns:
+		rtinfo for all fields, flattening Struct<T> T's fields into the rt_info.
+		notes:
+		ConstSizeArray<T> should be handled the same, but figuring out more space efficient encoding is a TODO.
+		For now, GC considers ConstSizeArray as one big value, so using val-only types should be OK.
+		This has to be thoroughly tested with various C compilers, 32 bit also is a TODO.
+	*)
+
+	let rec _ptypes_to_runtime_info hxc t ptypes pos_by_tp offset_start =
+		(* let hxc = ctx.gc_con.hxc in *)
+		let types = ptypes_types ptypes in
+		let field_info, offsets, size =  get_alignment hxc (List.map (get_field_info hxc) types) in
+		let offsets = List.map (fun i -> i + offset_start) offsets in
+		let acc = List.rev ( List.fold_left2 ( fun acc pt (offs,fi) ->
+			(match fi,(offs mod 8) with
+			| FI_Val    v,0 -> RT_val(offs,0) :: acc
+			| FI_Ref    v,0 -> if pt.pt_is_valref
+				then
+					(RT_vref offs) :: acc
+				else
+					(RT_ref offs) :: acc
+			| FI_TParm  v,0 ->
+					(try
+					let idx =
+						PMap.find (Tid.id pt.pt_type) pos_by_tp
+					in
+					RT_tp(offs,idx) :: acc
+					 with Not_found ->
+					 (Printf.printf "error: didn't find %s in %s\n"
+						(Tid.id pt.pt_type)
+						(String.concat "," ( PMap.foldi (fun a b xs -> a :: xs ) pos_by_tp [] )) );
+					 assert false
+					)
+			| FI_Struct(s,a,fil),_ -> begin
+				if pt.pt_has_tps then
+					( Printf.printf "error: Struct<T> where T has type parameters isnt supported yet"; (*TODO*)
+					assert false )
+				else
+					let acc_struct,_ = (_ptypes_to_runtime_info hxc pt pt.pt_field_types pos_by_tp offs) in
+					acc_struct @ acc
+				end
+			| FI_CSArr(f,n,b,a),_ ->
+				Printf.printf "warning: ConstSizeArray<T> isnt supported by GC yet";
+				RT_val(offs,0)  :: acc  (*TODO make array members known to the gc*)
+			| FI_Val    v,_ -> RT_val(offs,0) :: acc
+			| _ ->
+				Printf.printf "non-val field not 8 byte aligned.. bad\n";
+				acc
+			)
+
+		) [] ptypes (List.map2 (fun o f -> o,f ) offsets field_info))
+		in
+		Printf.printf "GCRTI::%s SZ:%d::TPS:%s::fields:%s\n"
+			(t.pt_key) (size) (if t.pt_has_tps then "Y" else "N") (s_rti_l acc);
+		acc,size
+
+	let pt_super_chain pt =
+    	let rec loop pt acc = (match pt.pt_super with
+    		| Some(pt) -> loop pt (pt :: acc)
+    		| _        -> acc)
+    	in pt :: List.rev (loop pt [])
+
+    let pt_has_tps pt =
+    	List.exists (fun pts -> pts.pt_has_tps ) (pt_super_chain pt)
+
+    let pt_interfaces pt =
+    	let xxs = List.map ( fun pt -> pt.pt_ifaces ) ( pt :: (pt_super_chain pt) ) in
+    	List.flatten xxs
+
+    let pt_tps pt = (match pt.pt_type with
+		| TInst(c,_) -> (types_of_tparams c.cl_params)
+		| TEnum(e,_) -> (types_of_tparams e.e_params)
+		| TAnon(a)   ->
+				List.rev ( List.fold_left (fun acc pt ->
+					(match pt.pt_type with
+						| TInst({cl_kind = KTypeParameter _},_) -> pt.pt_type :: acc
+						| _ -> acc ) )
+					[] pt.pt_field_types )
+		| _ -> []
+	)
+
+    let pt_all_tps pt = (match pt.pt_type with
+		| TInst(c,_) ->
+			List.fold_left
+				(fun xs pt -> (pt_tps pt) @ xs) [] (pt :: (pt_super_chain pt))
+		| _ -> pt_tps pt )
+
+    let pt_pos_by_tp pt =
+		let tps = pt_all_tps pt in
+		let indices = map_i ( fun idx _ -> idx ) tps in
+		let m = List.fold_left2 (
+			fun m idx t ->
+				let tid = (Tid.id t) in
+				if not (PMap.exists tid m) then
+					PMap.add (Tid.id t) idx m
+				else
+					m
+			) PMap.empty indices tps
+		in m
+
+	let pt_prepend_header_fields tctx pt =
+		if pt.pt_no_header then
+			pt.pt_field_types
+		else
+			let pt_head = (match pt.pt_type with
+			| TInst _ -> pt_ctx_get_type_by_string tctx "c.gc.ClassHeader"
+			| TEnum _ -> pt_ctx_get_type_by_string tctx "c.gc.EnumHeader"
+			| TAnon _ -> pt_ctx_get_type_by_string tctx "c.gc.AnonHeader" | _ -> assert false )
+			in pt_head.pt_field_types @ pt.pt_field_types
+
+	let pt_ptypes_to_runtime_info ctx tctx pt =
+		let pos_by_tp = pt_pos_by_tp pt in
+		let ptypes    = pt_prepend_header_fields tctx pt in
+		_ptypes_to_runtime_info ctx.hxc pt ptypes pos_by_tp 0
+
+
+	(* - - - *)
+
+
+	let m_ptypes : (string,int) Hashtbl.t = Hashtbl.create 1000
+
+    let ptypes : ptype_info DynArray.t = DynArray.create ()
+
+    let pt_add m_ptypes ptypes key t isecon =
+		if Hashtbl.mem m_ptypes key then
+			let ptidx = Hashtbl.find m_ptypes key in
+			(DynArray.get ptypes ptidx),false
+		else
+			let ptid = DynArray.length ptypes in
+			Hashtbl.add m_ptypes key ptid;
+			let pt = (ptinfo key t ptid) in
+			DynArray.add ptypes pt;
+			pt,true
+
+    let pt_add_econ m_ptypes ptypes t ef =
+    	let t = follow t in
+    	let key  = (Tid.tp_normalized_id t) ^ "." ^ ef.ef_name in
+    		pt_add m_ptypes ptypes key t true
+
+	let pt_add_type m_ptypes ptypes t =
+		let t = follow t in
+		let key  = (Tid.tp_normalized_id t) in
+			pt_add m_ptypes ptypes key t false
+
+
+	(* ************************************************* *)
+
+
+	(* let pt_init t =  *)
+
+	let s_tkind t = (match t with
+		| TInst _ -> "TInst"
+		| TEnum _ -> "TEnum"
+		| TAbstract _ -> "TAbstract"
+		| TAnon _ -> "TAnon"
+		| TLazy _ -> "TLazy"
+		| TType _ -> "TType"
+		| TMono _ -> "TMono"
+		| TFun  _ -> "TFun"
+		| TDynamic _ -> "TDynamic"
+	)
+
+	let expressions_pass_0 ctx tctx ectx c fctx te =
+		let rec loop te = match te with
+			| { eexpr = TObjectDecl(nvs) }
+				(* anon constructor call *) ->
+				let _ = pt_ctx_add_anon tctx te.etype in ()
+
+			(* missing : closure instatiations
+			| { eexpr = TField(_,FStatic(ct,cf)); etype = TFun(_,_) } -> ()
+			| { eexpr = TField(_,FClosure(ct,cf)) } -> ()
+			| { eexpr = TFunction(tf) } -> ()
+			*)
+			| _ -> Type.iter loop te
+		in
+		loop te;
+		te
+
+
+	(* type parameters 2. *)
+
+	let expressions_pass_1 ctx tctx ectx c fctx te =
+
+		let rec loop te = match te.eexpr with
+
+			| TCall({eexpr=TField(eenum,FEnum(et,ef))} as efield, el) ->
+				(* enum constructor call *)
+
+				(* 1. identify required TPs *)
+				(try
+					let pt = pt_ctx_get_econ tctx te.etype ef in
+					Printf.printf "Found enum %s\n" pt.pt_key;
+					(match te.etype with
+						| TEnum(et,[])  -> ()
+						| TEnum(et,tps) ->
+							(*  we have 1+ tps, now we check whether this particular constructor requires runtime
+								information about any of them:
+								for every field of the constructor that is typed as a TP, we need to know
+								1. the index of that TP
+								2. the offset of that field (8-bytes aligned index into the object for 64 bit, 4-byte-aligned for 32 bit systems)
+								3. the type corresponding to the TP at the callsite
+								however at this very place we only need 1. and 3.
+								(2. will be handled when we build the static part of the GC runtime info)	*)
+								Printf.printf "enum tps: %s\n" (s_rti_l pt.pt_rt_info);
+
+							Printf.printf "enum tps: %s %s\n" pt.pt_key (String.concat "-" (List.map Tid.id tps));
+							(*et.e_params;*)
+							()
+
+						| _ -> ()
+					);
+					te
+				with
+					| Not_found ->
+						Printf.printf "didn't find xxx enum";
+						te)
+
+				(* 2. fetch TPs from environment *)
+				(* 3. build expression and insert argument into call *)
+
+			| TObjectDecl(el) ->
+				(* anon constructor call *)
+
+				let pt = pt_ctx_get_anon tctx te.etype in
+				(*  we have 1+ tps, now we check whether this anon requires runtime
+					information about any of them:
+					for every field of the anon that is typed as a TP, we need to know
+					1. the index of that TP
+					2. the offset of that field (8-bytes aligned index into the object for 64-bit & 4-byte-aligned for 32-bit systems)
+					3. the type corresponding to the TP at the callsite (this is trivial in this case, since the anon is typed
+					   in terms of callsite types already)
+				*)
+				Printf.printf "Found anon %s\n" pt.pt_key;
+				te
+
+			| TCall(({eexpr=TField(_,(FStatic(({cl_extern = false} as c),cf) | FInstance(c,_,cf)))} as e1),el) ->
+				(* function or method call *)
+				(*  we have 1+ tps, we have to pass all of them:
+					for every TP we need to know
+					1. the index of that TP in the TP argument
+					2. the type corresponding to the TP at the callsite
+				*)
+				te
+
+			| TNew(c,ctps,el) ->
+				(* class constructor call *)
+				(*  we have 1+ tps, we have to pass all of them:
+					for every TP, we need to know
+					1. the index of that TP in the class headers TP info field
+					2. the type corresponding to the TP at the callsite
+				*)
+				(try
+					let pt = pt_ctx_get_type tctx te.etype in
+					Printf.printf "Found class %s of sz %d\n" pt.pt_key pt.pt_size;
+					te
+				with
+					| Not_found ->
+						Printf.printf "didn't find xxx class %s\n" (Tid.id te.etype);
+						te)
+
+			| TCall(e1,el) when ClosureHandler.is_closure_expr e1 ->
+				(* closure call *)
+				te
+
+			| TBinop(OpAssign,({eexpr=TField(efield,(FInstance(_,_,cf)|FStatic(_,cf)|FAnon(cf)))} as te1),te2) ->
+				(* field assignment - write barrier *)
+				te
+				(* test grey flag and if not set, test mark bit,
+					if set (black), push object on the grey stack *)
+
+			| _ -> Type.map_expr loop te
+		in
+			(*Printf.printf "expr00\n";*)
+			loop te
+
+	let run con =
+		let hxc = con.hxc in
+
+
+		let mtypes           = con.com.types in
+		(*
+		let pt_add_existed   = pt_add_type m_ptypes ptypes in
+		let pt_add t         = fst (pt_add_existed t) in
+		let pt_add_econ t ef = fst (pt_add_econ m_ptypes ptypes t ef) in
+		*)
+		let ctx  = con in
+		let tctx = init_gc_types_ctx () in
+		let ectx = init_gc_gen_ctx con in
+
+		let pt_add      = (pt_ctx_add_type tctx) in
+		let pt_get      = (pt_ctx_get_type tctx) in
+		let pt_add_econ = (pt_ctx_add_econ tctx) in
+		(* 	first pass over the types  *)
+		let pt_pass_0 pt field_types field_names =
+
+			(* fetch ptype_info for every field *)
+			let field_ptypes  =  List.map pt_add field_types in
+			pt.pt_field_types <- field_ptypes;
+
+			(* store names in order - important for potential optimizations reordering fields, not used currently *)
+			pt.pt_field_names <- field_names;
+
+			(* store field info - required for determining object size, alignment, value-refs and more *)
+			pt.pt_field_info  <- get_info hxc field_types;
+
+			(* detect whether we have an all-values type *)
+			pt.pt_is_valref   <- not (field_info_has_refs pt.pt_field_info);
+
+			(* get super class ptype_info *)
+			pt.pt_super  <- (match pt.pt_type with
+				| TInst({ cl_super =  (Some ( (c,tps) ) ) },_) ->
+					   Some ( pt_add (TInst(c,tps)) )
+				| _ -> None );
+
+			(* do we have a vtable?
+			   pass 0:
+			   if we have a superclass, set to true here and in superclass
+			   pass 1:
+			   already done, right?
+			*)
+			pt.pt_has_vtable <- (match pt.pt_super with
+				| Some pts -> pts.pt_has_vtable <- true; true
+				| _ -> pt.pt_has_vtable (* avoid changing this in case it has been modified by a child class, mutable is bad :) *)
+			);
+
+			(*  do we implement any interfaces? And if, which interfaces do we implement?
+				pass 0:
+				we fetch interfaces for this type instance here
+				pass 1:
+				- do we implement any? grab interfaces using pt_interfaces and set to true in case the returned list is non-empty
+				- which do we implement? done - we fetch all interfaces including those from superclasses using pt_interfaces
+				  when we need them
+			*)
+			pt.pt_ifaces <- (match pt.pt_type with
+				| TInst({cl_implements = ifaces},_ ) ->
+					   List.map (fun (c,tps)-> (pt_add (TInst(c,tps)))) ifaces
+				| _ -> [] );
+
+			(* do we have type parameters ?
+			   classes:
+			 	if ANY class in our inheritance tree does, we do too,
+				and EVERY class in the inheritance tree has to reserve space for type parameters
+				pass 0:
+				hence, if THIS class has type parameters, we set pt_has_tps to true
+				pass 1:
+				we check if any super class has type parameters, if yes, set pt_has_tps to true
+				for THIS and all super classes
+			   anons:
+			   	decided on an individual basis, checking field info, since in haxe the language,
+			   	there are no TPs in anons
+			   enums:
+			   	decided on an individual basis, we /could/ avoid reserving
+			   	space for type parameters for constructors that don't use them
+
+			 *)
+
+			pt.pt_has_tps <- (match pt.pt_type with
+				| TInst(c, (x :: xs) ) -> true
+				| TEnum(e, (x :: xs) ) -> true
+				| TAnon _              -> ( field_info_has_tps pt.pt_field_info )
+				| _                    -> false
+			);
+
+
+			()
+		in
+
+		(*	second pass over the types *)
+		let pt_pass_1 pt =
+			let tps = (match pt.pt_type with
+			| TInst (ct,tps) ->
+				let super_cs = (pt_super_chain pt) in
+				(* pass 1 over pt_has_tps, see pass 0 *)
+				let has_tps = (pt_has_tps pt) || pt.pt_has_tps in
+				List.iter (fun pts -> if has_tps then pts.pt_has_tps <- true else ()) super_cs;
+
+				(* does THIS implement any interfaces? *)
+				pt.pt_has_ifaces <- (match (pt_interfaces pt) with
+					| [] -> false
+					| _  -> true
+				);
+				Printf.printf "class type \n %s \n" (Tid.id pt.pt_type);
+				(*let hfields = get_class_var_fields hxc.c_gc_classheader in*)
+				(*let rtinfo = pt_ptypes_to_runtime_info hxc pt pt.pt_field_types (types_of_tparams ct.cl_params) in*)
+				let rtinfo,size = pt_ptypes_to_runtime_info ctx tctx pt in
+				pt.pt_rt_info <- rtinfo;
+				pt.pt_size    <- size;
+				tps
+			| TEnum (et,tps) ->
+				List.iter (fun pt ->
+					(*let hfields = get_class_var_fields hxc.c_gc_enumheader in*)
+					let rtinfo,size = pt_ptypes_to_runtime_info ctx tctx pt in
+					(*let rtinfo = pt_ptypes_to_runtime_info hxc pt pt.pt_field_types tps in*)
+					pt.pt_rt_info <- rtinfo;
+					pt.pt_size    <- size;
+				) pt.pt_constrs;
+				tps
+			| TAnon (a) ->
+				Printf.printf "an ANON \n %s \n" (Tid.id pt.pt_type);
+				let tps = List.fold_left
+					(fun acc pt -> (match pt.pt_type with
+						| TInst({cl_kind = KTypeParameter _},_) ->
+							pt.pt_type :: acc
+						| _ -> acc ) )
+					[] pt.pt_field_types
+				in
+				let tps = List.rev tps in
+				let rtinfo,size = pt_ptypes_to_runtime_info ctx tctx pt in
+				pt.pt_rt_info <- rtinfo;
+				pt.pt_size    <- size;
+				tps
+			| _ ->
+				Printf.printf "assertion 3313 failed for %s %s .\n" (Tid.id pt.pt_type) (s_tkind pt.pt_type);
+				assert false
+			)
+
+			in
+
+			(*  partition references into refs and vrefs
+				to do that, first build rt_info from field_info field
+				then map over rt_info and ptypes, and in case pt.pt_is_valref, turn RT_ref into RT_vref
+			*)
+
+
+			()
+		in
+
+		let pt_pass_0 t =
+			let t = follow t in (match t with
+				| TInst(c,tps)     ->
+					let pt           = pt_add t in
+					let fields       = get_class_var_fields c in
+					let field_names  = get_xs_names fields in
+					let field_types  = get_xs_types fields in
+					pt.pt_no_header <- has_meta Meta.HxCNoHeader c.cl_meta;
+					pt_pass_0 pt field_types field_names;
+					Some pt
+				| TEnum(e,tps)     ->
+					let pt = pt_add t in
+					let efields_l    = get_enum_fields e in
+					(* since the ptypes information is about physical types, we add on ptype_info for each constructor *)
+					pt.pt_constrs <- List.map ( fun ef ->
+						let pt           = pt_add_econ t ef in
+						let field_types  = get_enum_xs ef.ef_type in
+						let field_names  = get_enum_xs_names ef.ef_type in
+						pt_pass_0 pt field_types field_names;
+						pt
+					) (List.map (fun n ->  PMap.find n e.e_constrs) e.e_names );
+					(* detect whether we have an all-values type
+					   for enums this is only true if there is no ref/vref/tp type in any constructor *)
+					let field_types  = List.flatten efields_l in
+					pt_pass_0 pt field_types [];
+					Some pt
+				| TAnon(a)         ->
+					let pt           = pt_add t in
+					let fields       = get_anon_fields a in
+					let field_names  = get_xs_names fields in
+					let field_types  = get_xs_types fields in
+					pt_pass_0 pt field_types field_names;
+					Some pt
+				| TAbstract ( { a_this = a_this } as a,_) when not (Meta.has Meta.CoreType a.a_meta) ->
+					 None (* add_type a_this *)
+				| TAbstract(_,_) -> None
+					(* TODO FIXME WARNING !!!! assuming all @:coreTypes are value types, I think we have to do this because
+					ptype_info  *)
+				| _ -> None );
+		in
+		let types = List.map make_instance mtypes in
+
+		(* first add all module types
+		let ptypes = List.map pt_add types in
+		*)
+
+		let ptypes = (List.map pt_pass_0 types) in
+		let ptypes = List.fold_left ( fun acc opt -> (match opt with Some v -> v :: acc | _ -> acc)) [] ptypes in
+
+		let handle_expressions f pt  : unit =
+			match pt.pt_type with
+			| TInst(c,tps) -> gc_map_field_expressions con tctx ectx c f
+			| _ -> ()
+		in
+
+
+
+		(*gc_map_field_expressions tctx ectx expressions_pass_0;*)
+
+		(*gc_map_field_expressions tctx ectx expressions_pass_1;*)
+
+		List.iter (handle_expressions expressions_pass_0) ptypes;
+		List.iter pt_pass_1 ptypes;
+		List.iter (handle_expressions expressions_pass_1) ptypes;
+
+		()
+
+
 	let collect_info con =
+
+		let _ = run con in
+
 		List.iter (type_decl_info con) con.com.types;
-		List.iter (run con) con.com.types;
+		List.iter (run_snd con) con.com.types;
 		(* p_alignment con.hxc; *)
 		()
 		(*TDB.p_classes ()*)
+
+
+
+	(*	GC module - what it is supposed to do, and how it goes about that.
+
+		Field information
+
+		---- pass 1 ----
+
+		- collect all types that have to be instantiated. Due to anons and closures, this
+		   has to traverse all expressions.
+		-  prepend header fields to anons, classes, closures
+		-  prepend enum constructor header fields to enum constructors !(postpone this TODO)!
+		-  For all types, create provisional field information - are fields refs, values or typeparameters?
+		-  Using that field information we group types into three groups:
+		   1 reference types (types that have references)
+		   2 value types     (types that only have values as fields)
+		   3 tp types        (types that have type parameter fields)
+		   Due to inheritance, this is not entirely trivial, there might be a base class that only has value fields
+		   but derived classes have references. Since it's legal to assign a derived class instance to a field typed
+		   as baseclass, we have to consider the complete inheritance tree. This value/reftype distiction gives a
+		   significant performance advantage in the marking phase of the GC. Don't use inheritance.
+
+		---- pass 2 ----
+
+		-  Using that knowledge, in a second pass, we transform the provisional field info to the full field info,
+		   classifying fields into:
+		   1 refref types
+		   2 refval types
+		   3 reftp  types
+		   4 value  types
+		-  from the full field info, for each anon,class and enum constructor (physical type), we obtain the GC runtime information
+		   that describes at which offset which kind of reference is located.
+		-  we build a map that assigns an GC layout ID to every such unique descriptor
+		-  we build a map that assigns the respective GC layout ID to each physical type
+		   regardless of the actual types, we have groups of types that share a GC layout ID. Here we forego an obvious optimization:
+		   reordering fields to match an existing memory layout
+		   we could do that later, but have to compare the advantage in static information size (which directly translates into less
+		   cache pollution at runtime, and hence is very significant ) to that of reordering fields WRT structural type information.
+		-  for each GC layout ID we calculate the required size of the static information
+		-  now we sort the IDs by size, and assign an index to each, which will be written to the gc_idx header field on every
+		   instantiation. To be able to index into an array, we skip indices as required.
+
+		Type Parameter Information - this deserves some explanation:
+
+		we pass type parameter info as first argument to every function, method & constructor that needs them
+		the info is encoded in a 64 bit bitfield with 3 bits per type parameter
+
+		classes, anons and enums have a header field that stores the tp info that the GC is interested in.
+		classes also store tp info for passing it on, even if the class itself doesn't have a field typed as
+		a respective TP.
+
+		when we call a function that requires tp info, there are only 3 possible sources where we can get it from:
+		1. it's been passed to the current frame as tp info function argument
+		2, it's stored in the class header
+		3. it's statically known because the concrete type is known at the callsite
+		class tp info of subclasses has to be appended to the parents class tp info TODO
+		so that for a class B<Z> extends A<X,Y> the order of tp info would be: [ A_X, A_Y, B_Z]
+
+		OK -so what do we have to do precisely?
+
+		1. add tp_info argument to every
+				- function, method that has type parameters
+				- constructor function of types that have type parameters
+			this involves adding the 64 bit field to the respective function and to its type
+
+		2. add tp_info argument to every function, method & constructor call
+			2.1 - lookup the call-site types we have to pass the information for
+				in case we're calling a function
+					this requires matching the call-site argument type and the respective function argument type,
+						(e.g. if the callee arg type is { abc : T } and the caller arg type is { abc : Foo }, we know
+						 that type parameter T is Foo at the call-site )
+					that's done using the data structure of type search_result returned by
+					get_tp_pos_info_from_callee
+					which is then resolved to call-site tp info (type: caller_tpi ) by
+					sr_to_ctpi
+				in case we need callsite_tpi for constructor (class/enum/anon type parameters),
+					we know the call-site types that match the callees type parameters, and use
+					type_to_callsite_tpi to get the caller_tpi data directly.
+			2.2 - adjust the caller_tpi source positions according to the following rules:
+				in case the type parameters originate from the class header
+					add an offset for all parent classes' caller_tpi's in the inheritance chain
+				in case the type parameters originate from the tpi argument to a class constructor,
+					adjust the function arg caller_tpi offsets for the class header fields
+			2.3 - arrange the caller_tpi list according to the following rules:
+				in case we're calling an anon or enum constructor, a function or method:
+					pass the list as is (first listed type parameters first)
+				in case we're calling a class constructor
+					pass the caller_tpi list for the base class first,
+					then, down the inheritance chain the caller_tpi for the subclasses
+					then, the constructor functions type parameters
+			2.4 - build the expression according to the caller_tpi list
+				for function args and class header-originating caller_tpi
+					(CTPI_class & CTPI_func) generate the code fetching them from those sources
+				for known type parameters (CTPI_known) generate the int value, hardcoded
+				for CTPI_not_found generate a special hardcoded value indicating this unfortunate fact
+					should we generate a warning here? TODO
+
+		3. store tp_info into class, anon, enum headers
+
+		4. use tp info to dispatch functions/operations that have to be aware of the tp argument bit width
+		   (AKA Array<T> methods),
+
+		type information:
+
+
+	*)
+
+
+
 
 end
 
@@ -3222,17 +4369,21 @@ and generate_constant ctx e = function
 	| TThis ->
 		spr ctx "this"
 
+and is_c_struct_abstract t =
+	(match t with | TAbstract({a_path= ["c"],"Struct"},_) -> true | _ -> false )
+
 and generate_expr ctx need_val e = match e.eexpr with
 	| TConst c ->
 		generate_constant ctx e c;
-		(match e.etype with | TAbstract({a_path= ["c"],"Int64"},_) -> spr ctx "L" | _ -> ())
+		(match e.etype with | TAbstract({a_path= ["c"],("Int64" | "UInt64") },_) -> spr ctx "L" | _ -> ())
 	| TArray(e1, e2) ->
 		generate_expr ctx need_val e1;
 		spr ctx "[";
 		generate_expr ctx true e2;
 		spr ctx "]"
 	| TBlock([])  ->
-		if need_val then spr ctx "{ }"
+		(* if need_val then *)
+		spr ctx "{ }"
 	| TBlock el when need_val ->
 		spr ctx "(";
 		concat ctx "," (generate_expr ctx true) el;
@@ -3275,12 +4426,19 @@ and generate_expr ctx need_val e = match e.eexpr with
 		add_type_dependency ctx e.etype;
 		add_type_dependency ctx e1.etype;
 		let n = field_name fa in
+		let struct_access = (match fa with
+			| FInstance(_,_,{cf_type=TAbstract({a_path=["c"],"Struct"},_)}) -> true
+			| _ -> false)
+		in
+		if struct_access then spr ctx "(&(" else ();
 		spr ctx "(";
 		generate_expr ctx true e1;
-		if is_value_type e1.etype then
+		(if (is_value_type e1.etype) || (is_c_struct_abstract e1.etype) then
 			print ctx ").%s" (escape_name n)
 		else
-			print ctx ")->%s" (escape_name n)
+			print ctx ")->%s" (escape_name n));
+		if struct_access then spr ctx "))"  else ()
+
 	| TLocal v ->
 		spr ctx (escape_name v.v_name);
 	| TObjectDecl fl ->
@@ -3328,6 +4486,11 @@ and generate_expr ctx need_val e = match e.eexpr with
 		l()
 	| TContinue ->
 		spr ctx "continue";
+	| TMeta((Meta.MergeBlock,_,_), {eexpr=TBlock(el)}) ->
+		List.iter (fun e ->
+			newline ctx;
+			generate_expr ctx false e;
+		) el;
 	| TMeta((Meta.Custom ":really",_,_), {eexpr = TBreak}) ->
 		spr ctx "break";
 	| TMeta((Meta.Custom ":goto",_,_), {eexpr = TConst (TInt i)}) ->
@@ -3800,6 +4963,7 @@ let generate_type con mt = match mt with
 			generate_enum ctx en;
 		close_type_context ctx;
 	| TAbstractDecl { a_path = [],"Void" } -> ()
+	| TAbstractDecl ({ a_path = ["c"],"Struct" } as a )
 	| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
 		let ctx = mk_type_context con a.a_path in
 		ctx.buf <- ctx.buf_c;
@@ -4165,6 +5329,11 @@ let generate com =
 				| ["c"],"VTable" -> {acc with c_vtable = c}
 				| ["c";"gc"],"GC" -> {acc with c_gc = c}
 				| ["c";"gc"],"Alloc" -> {acc with c_gc_alloc = c}
+				| ["c";"gc"],"Pool" -> {acc with c_gc_pool = c}
+				| ["c";"gc"],"Templates" -> {acc with c_gc_templates = c}
+				| ["c";"gc"],"ClassHeader" -> {acc with c_gc_classheader = c}
+				| ["c";"gc"],"EnumHeader" -> {acc with c_gc_enumheader = c}
+				| ["c";"gc"],"AnonHeader" -> {acc with c_gc_anonheader = c}
 				| _ -> acc
 			end
 		| TAbstractDecl a ->
@@ -4211,6 +5380,12 @@ let generate com =
 		c_vtable = null_class;
 		c_gc     = null_class;
 		c_gc_alloc = null_class;
+		c_gc_pool  = null_class;
+		c_gc_classheader = null_class;
+		c_gc_enumheader = null_class;
+		c_gc_anonheader = null_class;
+		c_gc_templates = null_class;
+
 	} com.types in
 	let anons = ref PMap.empty in
 	let added_anons = ref PMap.empty in
