@@ -33,7 +33,7 @@ let rec blockify_ast e =
 		let cases = List.map (fun (el,e) ->
 			el,mk_block (blockify_ast e)
 		) cases in
-		let def = match def with None -> None | Some e -> Some (blockify_ast e) in
+		let def = match def with None -> None | Some e -> Some (mk_block (blockify_ast e)) in
 		{e with eexpr = TSwitch(e1,cases,def)}
 	| _ ->
 		Type.map_expr blockify_ast e
@@ -45,7 +45,7 @@ let rec blockify_ast e =
 	x = { exprs; value; } -> { exprs; x = value; }
 	var x = { exprs; value; } -> { var x; exprs; x = value; }
 *)
-let promote_complex_rhs ctx e =
+let promote_complex_rhs com e =
 	let rec is_complex e = match e.eexpr with
 		| TBlock _ | TSwitch _ | TIf _ | TTry _ | TCast(_,Some _) -> true
 		| TBinop(_,e1,e2) -> is_complex e1 || is_complex e2
@@ -59,12 +59,12 @@ let promote_complex_rhs ctx e =
 				| [] -> e
 			end
 		| TSwitch(es,cases,edef) ->
-			{e with eexpr = TSwitch(es,List.map (fun (el,e) -> List.map find el,loop f e) cases,match edef with None -> None | Some e -> Some (loop f e))}
+			{e with eexpr = TSwitch(es,List.map (fun (el,e) -> List.map find el,loop f e) cases,match edef with None -> None | Some e -> Some (loop f e)); etype = com.basic.tvoid}
 		| TIf(eif,ethen,eelse) ->
-			{e with eexpr = TIf(find eif, loop f ethen, match eelse with None -> None | Some e -> Some (loop f e))}
+			{e with eexpr = TIf(find eif, loop f ethen, match eelse with None -> None | Some e -> Some (loop f e)); etype = com.basic.tvoid}
 		| TTry(e1,el) ->
-			{e with eexpr = TTry(loop f e1, List.map (fun (el,e) -> el,loop f e) el)}
-		| TParenthesis e1 when not (Common.defined ctx Define.As3) ->
+			{e with eexpr = TTry(loop f e1, List.map (fun (el,e) -> el,loop f e) el); etype = com.basic.tvoid}
+		| TParenthesis e1 when not (Common.defined com Define.As3) ->
 			{e with eexpr = TParenthesis(loop f e1)}
 		| TMeta(m,e1) ->
 			{ e with eexpr = TMeta(m,loop f e1)}
@@ -72,8 +72,6 @@ let promote_complex_rhs ctx e =
 			find e
 		| TContinue | TBreak ->
 			e
-		| TCast(e1,None) when ctx.config.pf_ignore_unsafe_cast ->
-			loop f e1
 		| _ ->
 			f (find e)
 	and block el =
@@ -84,11 +82,11 @@ let promote_complex_rhs ctx e =
 				begin match eo with
 					| Some e when is_complex e ->
 						r := (loop (fun e -> mk (TBinop(OpAssign,mk (TLocal v) v.v_type e.epos,e)) v.v_type e.epos) e)
-							:: ((mk (TVar (v,None)) ctx.basic.tvoid e.epos))
+							:: ((mk (TVar (v,None)) com.basic.tvoid e.epos))
 							:: !r
 					| Some e ->
-						r := (mk (TVar (v,Some (find e))) ctx.basic.tvoid e.epos) :: !r
-					| None -> r := (mk (TVar (v,None)) ctx.basic.tvoid e.epos) :: !r
+						r := (mk (TVar (v,Some (find e))) com.basic.tvoid e.epos) :: !r
+					| None -> r := (mk (TVar (v,None)) com.basic.tvoid e.epos) :: !r
 				end
 			| TReturn (Some e1) when (match follow e1.etype with TAbstract({a_path=[],"Void"},_) -> true | _ -> false) ->
 				r := ({e with eexpr = TReturn None}) :: e1 :: !r
@@ -96,7 +94,7 @@ let promote_complex_rhs ctx e =
 		) el;
 		List.rev !r
 	and find e = match e.eexpr with
-		| TReturn (Some e1) -> loop (fun e -> {e with eexpr = TReturn (Some e)}) e1
+		| TReturn (Some e1) -> loop (fun er -> {e with eexpr = TReturn (Some er)}) e1
 		| TBinop(OpAssign | OpAssignOp _ as op, ({eexpr = TLocal _ | TField _ | TArray _} as e1), e2) -> loop (fun er -> {e with eexpr = TBinop(op, e1, er)}) e2
 		| TBlock(el) -> {e with eexpr = TBlock (block el)}
 		| _ -> Type.map_expr find e
@@ -738,23 +736,16 @@ let remove_generic_base ctx t = match t with
 
 (* Removes extern and macro fields, also checks for Void fields *)
 
-let is_removable_field ctx f =
-	Meta.has Meta.Extern f.cf_meta || Meta.has Meta.Generic f.cf_meta
-	|| (match f.cf_kind with
-		| Var {v_read = AccRequire (s,_)} -> true
-		| Method MethMacro -> not ctx.in_macro
-		| _ -> false)
-
 let remove_extern_fields ctx t = match t with
 	| TClassDecl c ->
 		if not (Common.defined ctx.com Define.DocGen) then begin
 			c.cl_ordered_fields <- List.filter (fun f ->
-				let b = is_removable_field ctx f in
+				let b = Codegen.is_removable_field ctx f in
 				if b then c.cl_fields <- PMap.remove f.cf_name c.cl_fields;
 				not b
 			) c.cl_ordered_fields;
 			c.cl_ordered_statics <- List.filter (fun f ->
-				let b = is_removable_field ctx f in
+				let b = Codegen.is_removable_field ctx f in
 				if b then c.cl_statics <- PMap.remove f.cf_name c.cl_statics;
 				not b
 			) c.cl_ordered_statics;
@@ -974,13 +965,14 @@ let run_expression_filters ctx filters t =
 	| TClassDecl c when is_removable_class c -> ()
 	| TClassDecl c ->
 		ctx.curclass <- c;
-		let process_field f =
-			match f.cf_expr with
-			| Some e when not (is_removable_field ctx f) ->
+		let rec process_field f =
+			(match f.cf_expr with
+			| Some e when not (Codegen.is_removable_field ctx f) ->
 				Codegen.AbstractCast.cast_stack := f :: !Codegen.AbstractCast.cast_stack;
 				f.cf_expr <- Some (run e);
 				Codegen.AbstractCast.cast_stack := List.tl !Codegen.AbstractCast.cast_stack;
-			| _ -> ()
+			| _ -> ());
+			List.iter process_field f.cf_overloads
 		in
 		List.iter process_field c.cl_ordered_fields;
 		List.iter process_field c.cl_ordered_statics;
@@ -997,29 +989,29 @@ let run_expression_filters ctx filters t =
 
 let pp_counter = ref 1
 
-let post_process ctx filters t =
-	(* ensure that we don't process twice the same (cached) module *)
+let is_cached t =
 	let m = (t_infos t).mt_module.m_extra in
 	if m.m_processed = 0 then m.m_processed <- !pp_counter;
-	if m.m_processed = !pp_counter then
-	run_expression_filters ctx filters t
+	m.m_processed <> !pp_counter
 
-let post_process_end() =
+let apply_filters_once ctx filters t =
+	if not (is_cached t) then run_expression_filters ctx filters t
+
+let next_compilation() =
 	incr pp_counter
 
-let iter_expressions com fl =
-	List.iter (fun mt -> match mt with
-		| TClassDecl c ->
-			let field cf = match cf.cf_expr with
-				| None -> ()
-				| Some e -> List.iter (fun f -> f e) fl
-			in
-			List.iter field c.cl_ordered_statics;
-			List.iter field c.cl_ordered_fields;
-			(match c.cl_constructor with None -> () | Some cf -> field cf)
-		| _ ->
-			()
-	) com.types
+let iter_expressions fl mt =
+	match mt with
+	| TClassDecl c ->
+		let field cf = match cf.cf_expr with
+			| None -> ()
+			| Some e -> List.iter (fun f -> f e) fl
+		in
+		List.iter field c.cl_ordered_statics;
+		List.iter field c.cl_ordered_fields;
+		(match c.cl_constructor with None -> () | Some cf -> field cf)
+	| _ ->
+		()
 
 let run com tctx main =
 	begin match com.display with
@@ -1032,6 +1024,7 @@ let run com tctx main =
 		Codegen.DeprecationCheck.run com;
 	let use_static_analyzer = Common.defined com Define.Analyzer in
 	(* this part will be a bit messy until we make the analyzer the default *)
+	let new_types = List.filter (fun t -> not (is_cached t)) com.types in
 	if use_static_analyzer then begin
 		(* PASS 1: general expression filters *)
 		let filters = [
@@ -1042,66 +1035,63 @@ let run com tctx main =
 			blockify_ast;
 			captured_vars com;
 		] in
-		List.iter (post_process tctx filters) com.types;
-		Analyzer.apply com;
-		post_process_end();
-		iter_expressions com [verify_ast];
-		List.iter (fun f -> f()) (List.rev com.filters);
-		(* save class state *)
-		List.iter (save_class_state tctx) com.types;
-		(* PASS 2: destructive type and expression filters *)
+		List.iter (run_expression_filters tctx filters) new_types;
+		Analyzer.Run.run_on_types tctx new_types;
+		List.iter (iter_expressions [verify_ast]) new_types;
 		let filters = [
 			Optimizer.sanitize com;
 			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
 			rename_local_vars tctx;
 		] in
-		List.iter (fun t ->
-			remove_generic_base tctx t;
-			remove_extern_fields tctx t;
-			run_expression_filters tctx filters t;
-		) com.types;
+		List.iter (run_expression_filters tctx filters) new_types;
 	end else begin
 		(* PASS 1: general expression filters *)
 		let filters = [
 			Codegen.UnificationCallback.run (check_unification com);
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			blockify_ast;
-			(match com.platform with
-				| Cpp | Flash8 | C -> (fun e ->
-					let save = save_locals tctx in
-					let e = try snd (Analyzer.Simplifier.apply com (Typecore.gen_local tctx) e) with Exit -> e in
-					save();
-					e)
-				| _ -> fun e -> e);
+			( if (Common.defined com Define.NoSimplify) || (Common.defined com Define.Cppia) ||
+						( match com.platform with Cpp | Flash8 | C -> false | _ -> true ) then
+					fun e -> e
+				else
+					fun e ->
+						let save = save_locals tctx in
+						let e = try snd (Analyzer.Simplifier.apply com (Typecore.gen_local tctx) e) with Exit -> e in
+						save();
+					e );
 			if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else Optimizer.sanitize com;
 			check_local_vars_init;
 			captured_vars com;
-		] in
-		List.iter (post_process tctx filters) com.types;
-		post_process_end();
-		iter_expressions com [verify_ast];
-		List.iter (fun f -> f()) (List.rev com.filters);
-		(* save class state *)
-		List.iter (save_class_state tctx) com.types;
-		(* PASS 2: destructive type and expression filters *)
-		let filters = [
 			promote_complex_rhs com;
 			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
 			rename_local_vars tctx;
 		] in
-		List.iter (fun t ->
-			remove_generic_base tctx t;
-			remove_extern_fields tctx t;
-			run_expression_filters tctx filters t;
-		) com.types;
+		List.iter (run_expression_filters tctx filters) new_types;
+		List.iter (iter_expressions [verify_ast]) new_types;
 	end;
+	next_compilation();
+	List.iter (fun f -> f()) (List.rev com.filters); (* macros onGenerate etc. *)
+	List.iter (save_class_state tctx) new_types;
+	List.iter (fun t ->
+		remove_generic_base tctx t;
+		remove_extern_fields tctx t;
+	) com.types;
 	(* update cache dependencies before DCE is run *)
 	Codegen.update_cache_dependencies com;
 	(* check @:remove metadata before DCE so it is ignored there (issue #2923) *)
 	List.iter (check_remove_metadata tctx) com.types;
 	(* DCE *)
-	let dce_mode = (try Common.defined_value com Define.Dce with _ -> "no") in
-	if not (Common.defined com Define.As3 || dce_mode = "no" || Common.defined com Define.DocGen) then Dce.run com main (dce_mode = "full" && not (Common.defined com Define.Interp));
+	let dce_mode = if Common.defined com Define.As3 || Common.defined com Define.DocGen then
+		"no"
+	else
+		(try Common.defined_value com Define.Dce with _ -> "no")
+	in
+	begin match dce_mode with
+		| "full" -> Dce.run com main (not (Common.defined com Define.Interp))
+		| "std" -> Dce.run com main false
+		| "no" -> Dce.fix_accessors com
+		| _ -> failwith ("Unknown DCE mode " ^ dce_mode)
+	end;
 	(* always filter empty abstract implementation classes (issue #1885) *)
 	List.iter (fun mt -> match mt with
 		| TClassDecl({cl_kind = KAbstractImpl _} as c) when c.cl_ordered_statics = [] && c.cl_ordered_fields = [] && not (Meta.has Meta.Used c.cl_meta) ->

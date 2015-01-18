@@ -78,6 +78,7 @@ module Meta = struct
 		| FunctionTailCode
 		| Generic
 		| GenericBuild
+		| GenericInstance
 		| Getter
 		| Hack
 		| HaxeGeneric
@@ -110,6 +111,7 @@ module Meta = struct
 		| NoCompletion
 		| NoDebug
 		| NoDoc
+		| NoExpr
 		| NoImportGlobal
 		| NoPackageRestrict
 		| NoStack
@@ -131,6 +133,7 @@ module Meta = struct
 		| Remove
 		| Require
 		| RequiresAssign
+		(* | Resolve *)
 		| ReplaceReflection
 		| Rtti
 		| Runtime
@@ -156,6 +159,7 @@ module Meta = struct
 		| Unsafe
 		| Usage
 		| Used
+		| Value
 		| Void
 		| Last
 		(* do not put any custom metadata after Last *)
@@ -733,4 +737,15 @@ let rec s_expr (e,_) =
 	| EArrayDecl el -> "[" ^ (String.concat "," (List.map s_expr el)) ^ "]"
 	| EObjectDecl fl -> "{" ^ (String.concat "," (List.map (fun (n,e) -> n ^ ":" ^ (s_expr e)) fl)) ^ "}"
 	| EBinop (op,e1,e2) -> s_expr e1 ^ s_binop op ^ s_expr e2
+	| ECall (e,el) -> s_expr e ^ "(" ^ (String.concat ", " (List.map s_expr el)) ^ ")"
+	| EField (e,f) -> s_expr e ^ "." ^ f
 	| _ -> "'???'"
+
+let get_value_meta meta =
+	try
+		begin match Meta.get Meta.Value meta with
+			| (_,[EObjectDecl values,_],_) -> List.fold_left (fun acc (s,e) -> PMap.add s e acc) PMap.empty values
+			| _ -> raise Not_found
+		end
+	with Not_found ->
+		PMap.empty

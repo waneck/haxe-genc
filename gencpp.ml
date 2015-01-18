@@ -1817,7 +1817,7 @@ and gen_expression ctx retval expression =
             if assigning then
                output ( "->__FieldRef(" ^ (str member) ^ ")" )
             else
-               output ( "->__Field(" ^ (str member) ^ ",true)" );
+               output ( "->__Field(" ^ (str member) ^ ", hx::paccDynamic )" );
             already_dynamic := true;
          end else begin
             if (isString) then
@@ -3003,7 +3003,7 @@ let generate_enum_files common_ctx enum_def super_deps meta file_info =
       output_cpp ("}\n\n");
 
    (* Dynamic "Get" Field function - string version *)
-   output_cpp ("Dynamic " ^ class_name ^ "::__Field(const ::String &inName,bool inCallProp)\n{\n");
+   output_cpp ("Dynamic " ^ class_name ^ "::__Field(const ::String &inName,hx::PropertyAccess inCallProp)\n{\n");
    let dump_constructor_test _ constr =
       output_cpp ("\tif (inName==" ^ (str constr.ef_name) ^ ") return " ^
                   (keyword_remap constr.ef_name) );
@@ -3508,13 +3508,14 @@ let generate_class_files common_ctx member_types super_deps constructor_deps cla
 
 
       if (has_get_field class_def) then begin
+         let checkPropCall field = "inCallProp != hx::paccNever" in
          (* Dynamic "Get" Field function - string version *)
-         output_cpp ("Dynamic " ^ class_name ^ "::__Field(const ::String &inName,bool inCallProp)\n{\n");
+         output_cpp ("Dynamic " ^ class_name ^ "::__Field(const ::String &inName,hx::PropertyAccess inCallProp)\n{\n");
          let get_field_dat = List.map (fun f ->
             (f.cf_name, String.length f.cf_name, "return " ^
                (match f.cf_kind with
                | Var { v_read = AccCall } when is_extern_field f -> (keyword_remap ("get_" ^ f.cf_name)) ^ "()"
-               | Var { v_read = AccCall } -> "inCallProp ? " ^ (keyword_remap ("get_" ^ f.cf_name)) ^ "() : " ^
+               | Var { v_read = AccCall } -> (checkPropCall f) ^ " ? " ^ (keyword_remap ("get_" ^ f.cf_name)) ^ "() : " ^
                      ((keyword_remap f.cf_name) ^ if (variable_field f) then "" else "_dyn()")
                | _ -> ((keyword_remap f.cf_name) ^ if (variable_field f) then "" else "_dyn()")
                ) ^ ";"
@@ -3561,7 +3562,9 @@ let generate_class_files common_ctx member_types super_deps constructor_deps cla
 
       (* Dynamic "Set" Field function *)
       if (has_set_field class_def) then begin
-         output_cpp ("Dynamic " ^ class_name ^ "::__SetField(const ::String &inName,const Dynamic &inValue,bool inCallProp)\n{\n");
+         let checkPropCall field = "inCallProp != hx::paccNever" in
+
+         output_cpp ("Dynamic " ^ class_name ^ "::__SetField(const ::String &inName,const Dynamic &inValue,hx::PropertyAccess inCallProp)\n{\n");
 
          let set_field_dat = List.map (fun f ->
             let default_action =
@@ -3570,7 +3573,7 @@ let generate_class_files common_ctx member_types super_deps constructor_deps cla
             (f.cf_name, String.length f.cf_name,
                (match f.cf_kind with
                | Var { v_write = AccCall } when is_extern_field f -> "return " ^ (keyword_remap ("set_" ^ f.cf_name)) ^ "(inValue);"
-               | Var { v_write = AccCall } -> "if (inCallProp) return " ^ (keyword_remap ("set_" ^ f.cf_name)) ^ "(inValue);"
+               | Var { v_write = AccCall } -> "if (" ^ (checkPropCall f) ^ ") return " ^ (keyword_remap ("set_" ^ f.cf_name)) ^ "(inValue);"
                   ^ default_action
                | _ -> default_action
                )
@@ -3740,7 +3743,7 @@ let generate_class_files common_ctx member_types super_deps constructor_deps cla
       output_cpp ("\t}  else " ^ ret );
 
       if (class_def.cl_interface) then begin
-         output_cpp (" mDelegate->__Field(HX_CSTRING(\"" ^ field.cf_name ^ "\"),false)");
+         output_cpp (" mDelegate->__Field(HX_CSTRING(\"" ^ field.cf_name ^ "\"), hx::paccNever)");
          if (List.length names <= 5) then
             output_cpp ("->__run(" ^ (String.concat "," names) ^ ");")
          else
@@ -3915,9 +3918,9 @@ let generate_class_files common_ctx member_types super_deps constructor_deps cla
       output_h ("\t\t//~" ^ class_name ^ "();\n\n");
       output_h ("\t\tHX_DO_RTTI_ALL;\n");
       if (has_get_field class_def) then
-         output_h ("Dynamic __Field(const ::String &inString, bool inCallProp);\n");
+         output_h ("Dynamic __Field(const ::String &inString, hx::PropertyAccess inCallProp);\n");
       if (has_set_field class_def) then
-         output_h ("Dynamic __SetField(const ::String &inString,const Dynamic &inValue, bool inCallProp);\n");
+         output_h ("Dynamic __SetField(const ::String &inString,const Dynamic &inValue, hx::PropertyAccess inCallProp);\n");
       if (has_get_fields class_def) then
          output_h ("void __GetFields(Array< ::String> &outFields);\n");
 
@@ -4126,7 +4129,7 @@ let create_super_dependencies common_ctx =
             if not (fst super).cl_extern then
                deps := ((fst super).cl_path) :: !deps
          | _ ->() );
-         List.iter (fun imp -> deps := (fst imp).cl_path :: !deps) (real_interfaces class_def.cl_implements);
+         List.iter (fun imp -> if not (fst imp).cl_extern then deps := (fst imp).cl_path :: !deps) (real_interfaces class_def.cl_implements);
          Hashtbl.add result class_def.cl_path !deps;
       | TEnumDecl enum_def when not enum_def.e_extern ->
          Hashtbl.add result enum_def.e_path [];
@@ -4913,8 +4916,7 @@ let generate_cppia common_ctx =
          () (*if (gen_externs) then gen_extern_class common_ctx class_def;*)
       | TClassDecl class_def ->
          let is_internal = is_internal_class class_def.cl_path in
-         let is_generic_def = match class_def.cl_kind with KGeneric -> true | _ -> false in
-         if (is_internal || (is_macro class_def.cl_meta) || is_generic_def) then
+         if (is_internal || (is_macro class_def.cl_meta)) then
             ( if (debug>1) then print_endline (" internal class " ^ (join_class_path class_def.cl_path ".") ))
          else begin
             ctx.ctx_class_name <- "::" ^ (join_class_path class_def.cl_path "::");
@@ -4978,8 +4980,7 @@ let generate_source common_ctx =
       | TClassDecl class_def ->
          let name =  class_text class_def.cl_path in
          let is_internal = is_internal_class class_def.cl_path in
-         let is_generic_def = match class_def.cl_kind with KGeneric -> true | _ -> false in
-         if (is_internal || (is_macro class_def.cl_meta) || is_generic_def) then
+         if (is_internal || (is_macro class_def.cl_meta)) then
             ( if (debug>1) then print_endline (" internal class " ^ name ))
          else begin
             build_xml := !build_xml ^ (get_code class_def.cl_meta Meta.BuildXml);

@@ -339,6 +339,19 @@ let check_param_constraints ctx types t pl c p =
 				if not ctx.untyped then display_error ctx (error_msg (Unify (Constraint_failure (s_type_path c.cl_path) :: l))) p;
 		) ctl
 
+let requires_value_meta com co =
+	Common.defined com Define.DocGen || (match co with
+		| None -> false
+		| Some c -> c.cl_extern || Meta.has Meta.Rtti c.cl_meta)
+
+let generate_value_meta com co cf args =
+	if requires_value_meta com co then begin
+		let values = List.fold_left (fun acc (name,_,_,eo) -> match eo with Some e -> (name,e) :: acc | _ -> acc) [] args in
+		match values with
+			| [] -> ()
+			| _ -> cf.cf_meta <- ((Meta.Value,[EObjectDecl values,cf.cf_pos],cf.cf_pos) :: cf.cf_meta)
+	end
+
 (* build an instance from a full type *)
 let rec load_instance ctx t p allow_no_params =
 	try
@@ -354,7 +367,8 @@ let rec load_instance ctx t p allow_no_params =
 			| _ -> false,false
 		in
 		let types , path , f = ctx.g.do_build_instance ctx mt p in
-		if allow_no_params && t.tparams = [] && not (match types with ["Rest",_] -> true | _ -> false) then begin
+		let is_rest = is_generic_build && (match types with ["Rest",_] -> true | _ -> false) in
+		if allow_no_params && t.tparams = [] && not is_rest then begin
 			let pl = ref [] in
 			pl := List.map (fun (name,t) ->
 				match follow t with
@@ -371,7 +385,7 @@ let rec load_instance ctx t p allow_no_params =
 			| [TPType t] -> TDynamic (load_complex_type ctx p t)
 			| _ -> error "Too many parameters for Dynamic" p
 		else begin
-			(* if List.length types <> List.length t.tparams then error ("Invalid number of type parameters for " ^ s_type_path path) p; *)
+			if not is_rest && List.length types <> List.length t.tparams then error ("Invalid number of type parameters for " ^ s_type_path path) p;
 			let tparams = List.map (fun t ->
 				match t with
 				| TPExpr e ->
@@ -567,7 +581,7 @@ and load_complex_type ctx p t =
 				cf_meta = f.cff_meta;
 				cf_overloads = [];
 			} in
-			init_meta_overloads ctx cf;
+			init_meta_overloads ctx None cf;
 			PMap.add n cf acc
 		in
 		mk_anon (List.fold_left loop PMap.empty l)
@@ -581,8 +595,13 @@ and load_complex_type ctx p t =
 				"",opt,load_complex_type ctx p t
 			) args,load_complex_type ctx p r)
 
-and init_meta_overloads ctx cf =
+and init_meta_overloads ctx co cf =
 	let overloads = ref [] in
+	let filter_meta m = match m with
+		| ((Meta.Overload | Meta.Value),_,_) -> false
+		| _ -> true
+	in
+	let cf_meta = List.filter filter_meta cf.cf_meta in
 	cf.cf_meta <- List.filter (fun m ->
 		match m with
 		| (Meta.Overload,[(EFunction (fname,f),p)],_)  ->
@@ -596,7 +615,9 @@ and init_meta_overloads ctx cf =
 			ctx.type_params <- params @ ctx.type_params;
 			let topt = function None -> error "Explicit type required" p | Some t -> load_complex_type ctx p t in
 			let args = List.map (fun (a,opt,t,_) ->  a,opt,topt t) f.f_args in
-			overloads := (args,topt f.f_type, params) :: !overloads;
+			let cf = { cf with cf_type = TFun (args,topt f.f_type); cf_params = params; cf_meta = cf_meta} in
+			generate_value_meta ctx.com co cf f.f_args;
+			overloads := cf :: !overloads;
 			ctx.type_params <- old;
 			false
 		| (Meta.Overload,[],_) when ctx.com.config.pf_overload ->
@@ -612,7 +633,7 @@ and init_meta_overloads ctx cf =
 		| _ ->
 			true
 	) cf.cf_meta;
-	cf.cf_overloads <- List.map (fun (args,ret,params) -> { cf with cf_type = TFun (args,ret); cf_params = params }) (List.rev !overloads)
+	cf.cf_overloads <- (List.rev !overloads)
 
 let hide_params ctx =
 	let old_m = ctx.m in
@@ -841,6 +862,7 @@ let check_overriding ctx c =
 					() (* allow to redefine a method as inlined *)
 				| _ ->
 					display_error ctx ("Field " ^ i ^ " has different property access than in superclass") p);
+				if has_meta Meta.Final f2.cf_meta then display_error ctx ("Cannot override @:final method " ^ i) p;
 				try
 					let t = apply_params csup.cl_params params t in
 					valid_redefinition ctx f f.cf_type f2 t
@@ -1023,9 +1045,23 @@ let check_extends ctx c t p = match follow t with
 		end
 	| _ -> error "Should extend by using a class" p
 
+let type_function_arg_value ctx t c =
+	match c with
+		| None -> None
+		| Some e ->
+			let p = pos e in
+			let e = ctx.g.do_optimize ctx (type_expr ctx e (WithType t)) in
+			unify ctx e.etype t p;
+			let rec loop e = match e.eexpr with
+				| TConst c -> Some c
+				| TCast(e,None) -> loop e
+				| _ -> display_error ctx "Parameter default value should be constant" p; None
+			in
+			loop e
+
 let rec add_constructor ctx c force_constructor p =
 	match c.cl_constructor, c.cl_super with
-	| None, Some ({ cl_constructor = Some cfsup } as csup,cparams) when not c.cl_extern ->
+	| None, Some ({ cl_constructor = Some cfsup } as csup,cparams) when not c.cl_extern && not (Meta.has Meta.CompilerGenerated cfsup.cf_meta) ->
 		let cf = {
 			cfsup with
 			cf_pos = p;
@@ -1042,23 +1078,29 @@ let rec add_constructor ctx c force_constructor p =
 			} in
 			ignore (follow cfsup.cf_type); (* make sure it's typed *)
 			(if ctx.com.config.pf_overload then List.iter (fun cf -> ignore (follow cf.cf_type)) cf.cf_overloads);
+			let map_arg (v,def) =
+				(*
+					let's optimize a bit the output by not always copying the default value
+					into the inherited constructor when it's not necessary for the platform
+				*)
+				match ctx.com.platform, def with
+				| _, Some _ when not ctx.com.config.pf_static -> v, (Some TNull)
+				| Flash, Some (TString _) -> v, (Some TNull)
+				| Cpp, Some (TString _) -> v, def
+				| Cpp, Some _ -> { v with v_type = ctx.t.tnull v.v_type }, (Some TNull)
+				| _ -> v, def
+			in
 			let args = (match cfsup.cf_expr with
 				| Some { eexpr = TFunction f } ->
-					List.map (fun (v,def) ->
-						(*
-							let's optimize a bit the output by not always copying the default value
-							into the inherited constructor when it's not necessary for the platform
-						*)
-						match ctx.com.platform, def with
-						| _, Some _ when not ctx.com.config.pf_static -> v, (Some TNull)
-						| Flash, Some (TString _) -> v, (Some TNull)
-						| Cpp, Some (TString _) -> v, def
-						| Cpp, Some _ -> { v with v_type = ctx.t.tnull v.v_type }, (Some TNull)
-						| _ -> v, def
-					) f.tf_args
+					List.map map_arg f.tf_args
 				| _ ->
+					let values = get_value_meta cfsup.cf_meta in
 					match follow cfsup.cf_type with
-					| TFun (args,_) -> List.map (fun (n,o,t) -> alloc_var n (if o then ctx.t.tnull t else t), if o then Some TNull else None) args
+					| TFun (args,_) ->
+						List.map (fun (n,o,t) ->
+							let def = try type_function_arg_value ctx t (Some (PMap.find n values)) with Not_found -> if o then Some TNull else None in
+							map_arg (alloc_var n (if o then ctx.t.tnull t else t),def)
+						) args
 					| _ -> assert false
 			) in
 			let p = c.cl_pos in
@@ -1272,19 +1314,7 @@ let type_function ctx args ret fmode f do_display p =
 	let locals = save_locals ctx in
 	let fargs = List.map (fun (n,c,t) ->
 		if n.[0] = '$' then error "Function argument names starting with a dollar are not allowed" p;
-		let c = (match c with
-			| None -> None
-			| Some e ->
-				let p = pos e in
-				let e = ctx.g.do_optimize ctx (type_expr ctx e (WithType t)) in
-				unify ctx e.etype t p;
-				let rec loop e = match e.eexpr with
-					| TConst c -> Some c
-					| TCast(e,None) -> loop e
-					| _ -> display_error ctx "Parameter default value should be constant" p; None
-				in
-				loop e
-		) in
+		let c = type_function_arg_value ctx t c in
 		let v,c = add_local ctx n t, c in
 		if n = "this" then v.v_meta <- (Meta.This,[],p) :: v.v_meta;
 		v,c
@@ -1494,14 +1524,16 @@ let check_global_metadata ctx f_add mpath tpath so =
 			(* always recurse into types of package paths *)
 			| (s1 :: s11 :: _),[s2] when is_lower_ident s2 && not (is_lower_ident s11)->
 				s1 = s2
-			| _,[] ->
+			| [_],[""] ->
+				true
+			| _,([] | [""]) ->
 				recursive
 			| [],_ ->
 				false
 			| (s1 :: sl1),(s2 :: sl2) ->
 				s1 = s2 && loop sl1 sl2
 		in
-		let add = ((field_mode && to_fields) || (not field_mode && to_types)) && (sl2 = [""] || loop sl1 sl2) in
+		let add = ((field_mode && to_fields) || (not field_mode && to_types)) && (loop sl1 sl2) in
 		if add then f_add m
 	) ctx.g.global_metadata
 
@@ -1754,6 +1786,7 @@ let init_class ctx c p context_init herits fields =
 		match e with
 		| None -> ()
 		| Some e ->
+			if requires_value_meta ctx.com (Some c) then cf.cf_meta <- ((Meta.Value,[e],cf.cf_pos) :: cf.cf_meta);
 			let check_cast e =
 				(* insert cast to keep explicit field type (issue #1901) *)
 				if type_iseq e.etype cf.cf_type then
@@ -1950,7 +1983,7 @@ let init_class ctx c p context_init herits fields =
 			let dynamic = List.mem ADynamic f.cff_access || (match parent with Some { cf_kind = Method MethDynamic } -> true | _ -> false) in
 			if inline && dynamic then error (f.cff_name ^ ": You can't have both 'inline' and 'dynamic'") p;
 			ctx.type_params <- (match c.cl_kind with
-				| KAbstractImpl a when Meta.has Meta.Impl f.cff_meta || Meta.has Meta.From f.cff_meta || Meta.has Meta.MultiType a.a_meta && Meta.has Meta.To f.cff_meta ->
+				| KAbstractImpl a when Meta.has Meta.Impl f.cff_meta ->
 					params @ a.a_params
 				| _ ->
 					if stat then params else params @ ctx.type_params);
@@ -1994,6 +2027,7 @@ let init_class ctx c p context_init herits fields =
 				cf_params = params;
 				cf_overloads = [];
 			} in
+			generate_value_meta ctx.com (Some c) cf fd.f_args;
 			let do_bind = ref (((not c.cl_extern || inline) && not c.cl_interface) || cf.cf_name = "__init__") in
 			let do_add = ref true in
 			(match c.cl_kind with
@@ -2008,6 +2042,7 @@ let init_class ctx c p context_init herits fields =
 								| None -> error (f.cff_name ^ ": Functions without expressions must have an explicit return type") f.cff_pos
 								| Some _ -> ()
 							end;
+							cf.cf_meta <- (Meta.NoExpr,[],cf.cf_pos) :: cf.cf_meta;
 							do_add := false;
 							do_bind := false;
 						end
@@ -2039,7 +2074,7 @@ let init_class ctx c p context_init herits fields =
 									with Not_found ->
 										error "Constructor of multi-type abstract must be defined before the individual @:to-functions are" cf.cf_pos
 									in
-									delay ctx PFinal (fun () -> unify ctx m tthis f.cff_pos);
+									(* delay ctx PFinal (fun () -> unify ctx m tthis f.cff_pos); *)
 									let args = match follow (monomorphs a.a_params ctor.cf_type) with
 										| TFun(args,_) -> List.map (fun (_,_,t) -> t) args
 										| _ -> assert false
@@ -2080,6 +2115,25 @@ let init_class ctx c p context_init herits fields =
 							(try type_eq EqStrict t (tfun [targ] (mk_mono())) with Unify_error l -> raise (Error ((Unify l),f.cff_pos)));
 							a.a_unops <- (op,flag,cf) :: a.a_unops;
 							check_bind();
+						| (Meta.Impl,_,_) :: ml when f.cff_name <> "_new" && not is_macro ->
+							begin match follow t with
+								| TFun((_,_,t1) :: _, _) when type_iseq tthis t1 ->
+									()
+								| _ ->
+									display_error ctx ("First argument of implementation function must be " ^ (s_type (print_context()) tthis)) f.cff_pos
+							end;
+							loop ml
+(* 						| (Meta.Resolve,_,_) :: _ ->
+							let targ = if Meta.has Meta.Impl f.cff_meta then tthis else ta in
+							begin match follow t with
+								| TFun([(_,_,t1);(_,_,t2)],_) ->
+									if not is_macro then begin
+										if not (type_iseq targ t1) then error ("First argument type must be " ^ (s_type (print_context()) targ)) f.cff_pos;
+										if not (type_iseq ctx.t.tstring t2) then error ("Second argument type must be String") f.cff_pos
+									end
+								| _ ->
+									error ("Field type of resolve must be " ^ (s_type (print_context()) targ) ^ " -> String -> T") f.cff_pos
+							end *)
 						| _ :: ml ->
 							loop ml
 						| [] ->
@@ -2089,7 +2143,7 @@ let init_class ctx c p context_init herits fields =
 					if f.cff_name = "_new" && Meta.has Meta.MultiType a.a_meta then do_bind := false;
 				| _ ->
 					());
-			init_meta_overloads ctx cf;
+			init_meta_overloads ctx (Some c) cf;
 			ctx.curfield <- cf;
 			let r = exc_protect ctx (fun r ->
 				if not !return_partial_type then begin
@@ -2144,16 +2198,18 @@ let init_class ctx c p context_init herits fields =
 			let check_method m t req_name =
 				if ctx.com.display <> DMNone then () else
 				try
-					let _, t2, f = (if stat then let f = PMap.find m c.cl_statics in None, f.cf_type, f else class_field c (List.map snd c.cl_params) m) in
+					let _, t2, f2 = (if stat then let f = PMap.find m c.cl_statics in None, f.cf_type, f else class_field c (List.map snd c.cl_params) m) in
 					(* accessors must be public on As3 (issue #1872) *)
-					if Common.defined ctx.com Define.As3 then f.cf_meta <- (Meta.Public,[],p) :: f.cf_meta;
-					(match f.cf_kind with
+					if Common.defined ctx.com Define.As3 then f2.cf_meta <- (Meta.Public,[],p) :: f2.cf_meta;
+					(match f2.cf_kind with
 						| Method MethMacro ->
-							display_error ctx (f.cf_name ^ ": Macro methods cannot be used as property accessor") p;
-							display_error ctx (f.cf_name ^ ": Accessor method is here") f.cf_pos;
+							display_error ctx (f2.cf_name ^ ": Macro methods cannot be used as property accessor") p;
+							display_error ctx (f2.cf_name ^ ": Accessor method is here") f2.cf_pos;
 						| _ -> ());
-					unify_raise ctx t2 t f.cf_pos;
-					(match req_name with None -> () | Some n -> display_error ctx ("Please use " ^ n ^ " to name your property access method") f.cf_pos);
+					unify_raise ctx t2 t f2.cf_pos;
+					if (Meta.has Meta.Impl f.cff_meta && not (Meta.has Meta.Impl f2.cf_meta)) || (Meta.has Meta.Impl f2.cf_meta && not (Meta.has Meta.Impl f.cff_meta)) then
+						display_error ctx "Mixing abstract implementation and static properties/accessors is not allowed" f2.cf_pos;
+					(match req_name with None -> () | Some n -> display_error ctx ("Please use " ^ n ^ " to name your property access method") f2.cf_pos);
 				with
 					| Error (Unify l,p) -> raise (Error (Stack (Custom ("In method " ^ m ^ " required by property " ^ name),Unify l),p))
 					| Not_found ->
@@ -2164,7 +2220,13 @@ let init_class ctx c p context_init herits fields =
 							cf.cf_kind <- Method MethNormal;
 							c.cl_fields <- PMap.add cf.cf_name cf c.cl_fields;
 							c.cl_ordered_fields <- cf :: c.cl_ordered_fields;
-						end else if not c.cl_extern then display_error ctx ("Method " ^ m ^ " required by property " ^ name ^ " is missing") p
+						end else if not c.cl_extern then begin
+							try
+								let _, _, f2 = (if not stat then let f = PMap.find m c.cl_statics in None, f.cf_type, f else class_field c (List.map snd c.cl_params) m) in
+								display_error ctx (Printf.sprintf "Method %s is no valid accessor for %s because it is %sstatic" m name (if stat then "not " else "")) f2.cf_pos
+							with Not_found ->
+								display_error ctx ("Method " ^ m ^ " required by property " ^ name ^ " is missing") p
+						end
 			in
 			let get = (match get with
 				| "null" -> AccNo
@@ -2692,8 +2754,9 @@ let rec init_module_type ctx context_init do_init (decl,p) =
 				error "Abstract is missing underlying type declaration" a.a_pos
 		end
 
-let type_module ctx m file tdecls p =
+let type_module ctx m file ?(is_extern=false) tdecls p =
 	let m, decls, tdecls = make_module ctx m file tdecls p in
+	if is_extern then m.m_extra.m_kind <- MExtern;
 	add_module ctx m p;
 	(* define the per-module context for the next pass *)
 	let ctx = {
@@ -2856,6 +2919,7 @@ let load_module ctx m p =
 			match !type_module_hook ctx m p with
 			| Some m -> m
 			| None ->
+			let is_extern = ref false in
 			let file, decls = (try
 				parse_module ctx m p
 			with Not_found ->
@@ -2867,10 +2931,12 @@ let load_module ctx m p =
 						| None -> loop l
 						| Some (file,(_,a)) -> file, a
 				in
+				is_extern := true;
 				loop ctx.com.load_extern_type
 			) in
+			let is_extern = !is_extern in
 			try
-				type_module ctx m file decls p
+				type_module ctx m file ~is_extern decls p
 			with Forbid_package (inf,pl,pf) when p <> Ast.null_pos ->
 				raise (Forbid_package (inf,p::pl,pf))
 	) in

@@ -52,6 +52,7 @@
 /tests/unit/native_cs/native_cs.csproj
 /tests/unit/unit.js.map
 /tests/unit/unit.n
+/tests/unit/node_modules/
 
 /haxe.sublime*
 build.bat
@@ -71,5 +72,7 @@ tests/unit/unit.py.res2.bin
 *.cmo
 tests/sys/bin/
 tests/optimization/dump/
-tests/misc/projects/Issue3102/test.n
+tests/misc/projects/*/*.n
 tests/unit/bin/
+tests/*.n
+tests/misc/projects/Issue3756/cpp/

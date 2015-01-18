@@ -97,8 +97,6 @@ type platform_config = {
 	pf_pattern_matching : bool;
 	(** can the platform use default values for non-nullable arguments *)
 	pf_can_skip_non_nullable_argument : bool;
-	(** generator ignores TCast(_,None) *)
-	pf_ignore_unsafe_cast : bool;
 }
 
 type display_mode =
@@ -184,6 +182,7 @@ module Define = struct
 		| DocGen
 		| Dump
 		| DumpDependencies
+		| DumpIgnoreVarIds
 		| Fdb
 		| FlashStrict
 		| FlashUseStage
@@ -238,6 +237,7 @@ module Define = struct
 		| SwfUseDoAbc
 		| Sys
 		| UnityStdTarget
+		| Unity46LineNumbers
 		| Unsafe
 		| UseNekoc
 		| UseRttiDoc
@@ -263,6 +263,7 @@ module Define = struct
 		| DocGen -> ("doc_gen","Do not perform any removal/change in order to correctly generate documentation")
 		| Dump -> ("dump","Dump the complete typed AST for internal debugging")
 		| DumpDependencies -> ("dump_dependencies","Dump the classes dependencies")
+		| DumpIgnoreVarIds -> ("dump_ignore_var_ids","Dump files do not contain variable IDs (helps with diff)")
 		| Fdb -> ("fdb","Enable full flash debug infos for FDB interactive debugging")
 		| FlashStrict -> ("flash_strict","More strict typing for flash target")
 		| FlashUseStage -> ("flash_use_stage","Keep the SWF library initial stage")
@@ -295,7 +296,7 @@ module Define = struct
 		| NoInline -> ("no_inline","Disable inlining")
 		| NoRoot -> ("no_root","Generate top-level types into haxe.root namespace")
 		| NoMacroCache -> ("no_macro_cache","Disable macro context caching")
-      | NoSimplify -> "no_simplify",("Disable simplification filter")
+		| NoSimplify -> "no_simplify",("Disable simplification filter")
 		| NoSwfCompress -> ("no_swf_compress","Disable SWF output compression")
 		| NoTraces -> ("no_traces","Disable all trace calls")
 		| PhpPrefix -> ("php_prefix","Compiled with --php-prefix")
@@ -318,6 +319,8 @@ module Define = struct
 		| SwfUseDoAbc -> ("swf_use_doabc", "Use DoAbc swf-tag instead of DoAbcDefine")
 		| Sys -> ("sys","Defined for all system platforms")
 		| UnityStdTarget -> ("unity_std_target", "Changes C# sources location so that each generated C# source is relative to the Haxe source location. If the location is outside the current directory, the value set here will be used")
+		(* see https://github.com/HaxeFoundation/haxe/issues/3759 *)
+		| Unity46LineNumbers -> ("unity46_line_numbers", "Fixes line numbers in generated C# files for Unity 4.6 Mono compiler")
 		| Unsafe -> ("unsafe","Allow unsafe code when targeting C#")
 		| UseNekoc -> ("use_nekoc","Use nekoc compiler instead of internal one")
 		| UseRttiDoc -> ("use_rtti_doc","Allows access to documentation during compilation")
@@ -396,6 +399,7 @@ module MetaInfo = struct
 		| FunctionTailCode -> ":functionTailCode",("",[Platform Cpp])
 		| Generic -> ":generic",("Marks a class or class field as generic so each type parameter combination generates its own type/field",[UsedOnEither [TClass;TClassField]])
 		| GenericBuild -> ":genericBuild",("Builds instances of a type using the specified macro",[UsedOn TClass])
+		| GenericInstance -> ":genericInstance",("Internally used to mark instances of @:generic methods",[UsedOn TClassField;Internal])
 		| Getter -> ":getter",("Generates a native getter function on the given field",[HasParam "Class field name";UsedOn TClassField;Platform Flash])
 		| Hack -> ":hack",("Allows extending classes marked as @:final",[UsedOn TClass])
 		| HaxeGeneric -> ":haxeGeneric",("Used internally to annotate non-native generic classes",[Platform Cs; UsedOnEither[TClass;TEnum]; Internal])
@@ -428,6 +432,7 @@ module MetaInfo = struct
 		| NoCompletion -> ":noCompletion",("Prevents the compiler from suggesting completion on this field",[UsedOn TClassField])
 		| NoDebug -> ":noDebug",("Does not generate debug information into the Swf even if -debug is set",[UsedOnEither [TClass;TClassField];Platform Flash])
 		| NoDoc -> ":noDoc",("Prevents a type from being included in documentation generation",[])
+		| NoExpr -> ":noExpr",("Internally used to mark abstract fields which have no expression by design",[Internal])
 		| NoImportGlobal -> ":noImportGlobal",("Prevents a static field from being imported with import Class.*",[UsedOn TAnyField])
 		| NoPackageRestrict -> ":noPackageRestrict",("Allows a module to be accessed across all targets if found on its first type.",[Internal])
 		| NoStack -> ":noStack",("",[Platform Cpp])
@@ -449,6 +454,7 @@ module MetaInfo = struct
 		| Remove -> ":remove",("Causes an interface to be removed from all implementing classes before generation",[UsedOn TClass])
 		| Require -> ":require",("Allows access to a field only if the specified compiler flag is set",[HasParam "Compiler flag to check";UsedOn TClassField])
 		| RequiresAssign -> ":requiresAssign",("Used internally to mark certain abstract operator overloads",[Internal])
+		(* | Resolve -> ":resolve",("Abstract fields marked with this metadata can be used to resolve unknown fields",[UsedOn TClassField]) *)
 		| ReplaceReflection -> ":replaceReflection",("Used internally to specify a function that should replace its internal __hx_functionName counterpart",[Platforms [Java;Cs]; UsedOnEither[TClass;TEnum]; Internal])
 		| Rtti -> ":rtti",("Adds runtime type informations",[UsedOn TClass])
 		| Runtime -> ":runtime",("?",[])
@@ -474,6 +480,7 @@ module MetaInfo = struct
 		| Unsafe -> ":unsafe",("Declares a class, or a method with the C#'s 'unsafe' flag",[Platform Cs; UsedOnEither [TClass;TClassField]])
 		| Usage -> ":usage",("?",[])
 		| Used -> ":used",("Internally used by DCE to mark a class or field as used",[Internal])
+		| Value -> ":value",("Used to store default values for fields and function arguments",[UsedOn TClassField])
 		| Void -> ":void",("Use Cpp native 'void' return type",[Platform Cpp])
 		| Last -> assert false
 		(* do not put any custom metadata after Last *)
@@ -522,7 +529,6 @@ let default_config =
 		pf_overload = false;
 		pf_pattern_matching = false;
 		pf_can_skip_non_nullable_argument = true;
-		pf_ignore_unsafe_cast = false;
 	}
 
 let get_config com =
@@ -543,7 +549,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = false;
 		}
 	| Js ->
 		{
@@ -558,7 +563,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = true;
 		}
 	| Neko ->
 		{
@@ -573,7 +577,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = true;
 		}
 	| Flash when defined Define.As3 ->
 		{
@@ -588,7 +591,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = false;
-			pf_ignore_unsafe_cast = false;
 		}
 	| Flash ->
 		{
@@ -603,7 +605,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = false;
-			pf_ignore_unsafe_cast = false;
 		}
 	| Php ->
 		{
@@ -618,7 +619,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = false;
 		}
 	| Cpp ->
 		{
@@ -633,7 +633,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = false;
 		}
 	| Cs ->
 		{
@@ -648,7 +647,6 @@ let get_config com =
 			pf_overload = true;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = false;
 		}
 	| Java ->
 		{
@@ -663,7 +661,6 @@ let get_config com =
 			pf_overload = true;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = false;
 		}
 	| C ->
 		{
@@ -693,7 +690,6 @@ let get_config com =
 			pf_overload = false;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
-			pf_ignore_unsafe_cast = true;
 		}
 
 let memory_marker = [|Unix.time()|]

@@ -494,7 +494,7 @@ and gen_expr ctx e =
 		print ctx "$iterator(";
 		gen_value ctx x;
 		print ctx ")";
-	| TField (x,FClosure (Some {cl_path=[],"Array"}, {cf_name="push"})) ->
+	| TField (x,FClosure (Some ({cl_path=[],"Array"},_), {cf_name="push"})) ->
 		(* see https://github.com/HaxeFoundation/haxe/issues/1997 *)
 		add_feature ctx "use.$arrayPushClosure";
 		print ctx "$arrayPushClosure(";
@@ -584,7 +584,10 @@ and gen_expr ctx e =
 	| TNew ({ cl_path = [],"Array" },_,[]) ->
 		print ctx "[]"
 	| TNew (c,_,el) ->
-		print ctx "new %s(" (ctx.type_accessor (TClassDecl c));
+		(match c.cl_constructor with
+		| Some cf when Meta.has Meta.SelfCall cf.cf_meta -> ()
+		| _ -> print ctx "new ");
+		print ctx "%s(" (ctx.type_accessor (TClassDecl c));
 		concat ctx "," (gen_value ctx) el;
 		spr ctx ")"
 	| TIf (cond,e,eelse) ->
@@ -1009,7 +1012,7 @@ let generate_class ctx c =
 	(match c.cl_implements with
 	| [] -> ()
 	| l ->
-		print ctx "%s.__interfaces__ = [%s]" p (String.concat "," (List.map (fun (i,_) -> s_path ctx i.cl_path) l));
+		print ctx "%s.__interfaces__ = [%s]" p (String.concat "," (List.map (fun (i,_) -> ctx.type_accessor (TClassDecl i)) l));
 		newline ctx;
 	);
 
@@ -1261,6 +1264,27 @@ let generate com =
 		in loop parts "";
 	)) exposed;
 
+
+	let closureArgs = [] in
+	let closureArgs = if (anyExposed && not (Common.defined com Define.ShallowExpose)) then
+		(
+			"$hx_exports",
+			(* TODO(bruno): Remove runtime branching when standard node haxelib is available *)
+			"typeof window != \"undefined\" ? window : exports"
+		) :: closureArgs
+	else
+		closureArgs
+	in
+	(* Provide console for environments that may not have it. *)
+	let closureArgs = if (not (Common.defined com Define.JsEs5)) then
+		(
+			"console",
+			"typeof console != \"undefined\" ? console : {log:function(){}}"
+		) :: closureArgs
+	else
+		closureArgs
+	in
+
 	if ctx.js_modern then begin
 		(* Additional ES5 strict mode keywords. *)
 		List.iter (fun s -> Hashtbl.replace kwds s ()) [ "arguments"; "eval" ];
@@ -1271,9 +1295,7 @@ let generate com =
 			ctx.separator <- true;
 			newline ctx
 		);
-		print ctx "(function (";
-		if (anyExposed && not (Common.defined com Define.ShallowExpose)) then print ctx "$hx_exports";
-		print ctx ") { \"use strict\"";
+		print ctx "(function (%s) { \"use strict\"" (String.concat ", " (List.map fst closureArgs));
 		newline ctx;
 		let rec print_obj f root = (
 			let path = root ^ "." ^ f.os_name in
@@ -1286,8 +1308,10 @@ let generate com =
 		List.iter (fun f -> print_obj f "$hx_exports") exposedObject.os_fields;
 	end;
 
-	if not (Common.defined com Define.JsEs5) then
-		spr ctx "var console = (1,eval)('this').console || {log:function(){}};\n";
+	(* If ctx.js_modern, console is defined in closureArgs. *)
+	if (not ctx.js_modern) && (not (Common.defined com Define.JsEs5)) then
+		spr ctx "var console = Function(\"return typeof console != 'undefined' ? console : {log:function(){}}\")();\n";
+
 	(* TODO: fix $estr *)
 	let vars = [] in
 	let vars = (if has_feature ctx "Type.resolveClass" || has_feature ctx "Type.resolveEnum" then ("$hxClasses = " ^ (if ctx.js_modern then "{}" else "$hxClasses || {}")) :: vars else vars) in
@@ -1344,12 +1368,7 @@ let generate com =
 	| None -> ()
 	| Some e -> gen_expr ctx e; newline ctx);
 	if ctx.js_modern then begin
-		print ctx "})(";
-		if (anyExposed && not (Common.defined com Define.ShallowExpose)) then (
-			(* TODO(bruno): Remove runtime branching when standard node haxelib is available *)
-			print ctx "typeof window != \"undefined\" ? window : exports"
-		);
-		print ctx ")";
+		print ctx "})(%s)" (String.concat ", " (List.map snd closureArgs));
 		newline ctx;
 		if (anyExposed && (Common.defined com Define.ShallowExpose)) then (
 			List.iter (fun f ->

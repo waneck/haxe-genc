@@ -285,10 +285,14 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 			if v.v_type != t_dynamic && follow e.etype == t_dynamic then (local v).i_write <- true;
 			(match e.eexpr, opt with
 			| TConst TNull , Some c -> mk (TConst c) v.v_type e.epos
-			(* we have to check for abstract casts here because we can't do that later. However, we have to skip the check for the
-			   first argument of abstract implementation functions. *)
-			(* actually we don't because unify_call_args takes care of that anyway *)
-			(* | _ when not (first && Meta.has Meta.Impl cf.cf_meta && cf.cf_name <> "_new") -> (!cast_or_unify_ref) ctx (map_type v.v_type) e e.epos *)
+			(*
+				This is really weird and should be reviewed again. The problem is that we cannot insert a TCast here because
+				the abstract `this` value could be written to, which is not possible if it is wrapped in a cast.
+
+				The original problem here is that we do not generate a temporary variable and thus mute the type of the
+				`this` variable, which leads to unification errors down the line. See issues #2236 and #3713.
+			*)
+			(* | _ when first && (Meta.has Meta.Impl cf.cf_meta) -> {e with etype = v.v_type} *)
 			| _ -> e) :: loop pl al false
 		| [], (v,opt) :: al ->
 			(mk (TConst (match opt with None -> TNull | Some c -> c)) v.v_type p) :: loop [] al false
@@ -494,32 +498,23 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 
 		This could be fixed with better post process code cleanup (planed)
 	*)
-	if !cancel_inlining || (Common.platform ctx.com Js && not !force && (init <> None || !has_vars)) then
+	if !cancel_inlining || (not (Common.defined ctx.com Define.Analyzer) && Common.platform ctx.com Js && not !force && (init <> None || !has_vars)) then
 		None
 	else
 		let wrap e =
 			(* we can't mute the type of the expression because it is not correct to do so *)
-			(try
-				let etype = if has_params then map_type e.etype else e.etype in
-				(* if the expression is "untyped" and we don't want to unify it accidentally ! *)
-				(match follow e.etype with
-				| TMono _ ->
-					(match follow tret with
-					| TAbstract ({ a_path = [],"Void" },_) -> e
-					| _ -> raise (Unify_error []))
-				| _ -> try
-					type_eq (if ctx.com.config.pf_static then EqDoNotFollowNull else EqStrict) etype tret;
-					e
-				with Unify_error _ when (match ctx.com.platform with Cpp -> true | Flash when Common.defined ctx.com Define.As3 -> true | _ -> false) ->
-					(* try to detect upcasts: in that case we may use a safe cast *)
-					Type.unify tret etype;
-					let ct = match follow tret with
-						| TInst(c,_) -> Some (TClassDecl c)
-						| _ -> None
-					in
-					mk (TCast (e,ct)) tret e.epos)
+			let etype = if has_params then map_type e.etype else e.etype in
+			(* if the expression is "untyped" and we don't want to unify it accidentally ! *)
+			try (match follow e.etype with
+			| TMono _ | TInst ({cl_kind = KTypeParameter _ },_) ->
+				(match follow tret with
+				| TAbstract ({ a_path = [],"Void" },_) -> e
+				| _ -> raise (Unify_error []))
+			| _ ->
+				type_eq (if ctx.com.config.pf_static then EqDoNotFollowNull else EqStrict) etype tret;
+				e)
 			with Unify_error _ ->
-				mk (TCast (e,None)) tret e.epos)
+				mk (TCast (e,None)) tret e.epos
 		in
 		let e = (match e.eexpr, init with
 			| _, None when not !has_return_value ->
@@ -542,7 +537,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		if not has_params then
 			Some e
 		else
-			let mt = map_type cf.cf_type in
+ 			let mt = map_type cf.cf_type in
 			let unify_func () = unify_raise ctx mt (TFun (List.map (fun e -> "",false,e.etype) params,tret)) p in
 			(match follow ethis.etype with
 			| TAnon a -> (match !(a.a_status) with
@@ -573,7 +568,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 (* ---------------------------------------------------------------------- *)
 (* LOOPS *)
 
-let rec optimize_for_loop ctx i e1 e2 p =
+let rec optimize_for_loop ctx (i,pi) e1 e2 p =
 	let t_void = ctx.t.tvoid in
 	let t_int = ctx.t.tint in
 	let lblock el = Some (mk (TBlock el) t_void p) in
@@ -591,7 +586,7 @@ let rec optimize_for_loop ctx i e1 e2 p =
 		) in
 		let iexpr = mk (TLocal index) t_int p in
 		let e2 = type_expr ctx e2 NoValue in
-		let aget = mk (TVar (i,Some (f_get arr iexpr pt p))) t_void p in
+		let aget = mk (TVar (i,Some (f_get arr iexpr pt p))) t_void pi in
 		let incr = mk (TUnop (Increment,Prefix,iexpr)) t_int p in
 		let block = match e2.eexpr with
 			| TBlock el -> mk (TBlock (aget :: incr :: el)) t_void e2.epos
@@ -638,7 +633,7 @@ let rec optimize_for_loop ctx i e1 e2 p =
 		check e2;
 		let etmp = mk (TLocal tmp) t_int p in
 		let incr = mk (TUnop (Increment,Postfix,etmp)) t_int p in
-		let init = mk (TVar (i,Some incr)) t_void p in
+		let init = mk (TVar (i,Some incr)) t_void pi in
 		let block = match e2.eexpr with
 			| TBlock el -> mk (TBlock (init :: el)) t_void e2.epos
 			| _ -> mk (TBlock [init;e2]) t_void p
@@ -715,7 +710,7 @@ let rec optimize_for_loop ctx i e1 e2 p =
 		let cell = gen_local ctx tcell in
 		let cexpr = mk (TLocal cell) tcell p in
 		let e2 = type_expr ctx e2 NoValue in
-		let evar = mk (TVar (i,Some (mk (mk_field cexpr "elt") t p))) t_void p in
+		let evar = mk (TVar (i,Some (mk (mk_field cexpr "elt") t p))) t_void pi in
 		let enext = mk (TBinop (OpAssign,cexpr,mk (mk_field cexpr "next") tcell p)) tcell p in
 		let block = match e2.eexpr with
 			| TBlock el -> mk (TBlock (evar :: enext :: el)) t_void e2.epos
@@ -1090,7 +1085,7 @@ let rec reduce_loop ctx e =
 		| None -> reduce_expr ctx e
 		| Some e -> reduce_loop ctx e)
 	| TCall ({ eexpr = TField (o,FClosure (c,cf)) } as f,el) ->
-		let fmode = (match c with None -> FAnon cf | Some c -> FInstance (c,[],cf)) in (* TODO *)
+		let fmode = (match c with None -> FAnon cf | Some (c,tl) -> FInstance (c,tl,cf)) in
 		{ e with eexpr = TCall ({ f with eexpr = TField (o,fmode) },el) }
 	| TSwitch (e1,[[{eexpr = TConst (TBool true)}],{eexpr = TConst (TBool true)}],Some ({eexpr = TConst (TBool false)})) ->
 		(* introduced by extractors in some cases *)
