@@ -66,6 +66,8 @@ abstract ConstPointer<T> {
 	@:op(A-B) public static function subP<T>(lhs:ConstPointer<T>, rhs:ConstPointer<T>):ConstPointer<T>;
 
 	@:op(++A) public function increment<T>():ConstPointer<T>;
+
+	@:noExpr // HACK HACK HACK HACK
 	@:arrayAccess public inline function __get(index:Int):T {
 		return untyped this[index];
 	}

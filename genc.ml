@@ -1237,7 +1237,7 @@ module ClosureHandler = struct
 			e
 		| TField(_,FStatic(c,({cf_kind = Method m} as cf))) when not !is_call_expr && not !is_extern ->
 			Wrap.wrap_static_function gen.gcon.hxc (Expr.mk_static_field c cf e.epos)
-		| TField(e1,FClosure(Some c,{cf_expr = Some {eexpr = TFunction tf}})) ->
+		| TField(e1,FClosure(Some (c,_),{cf_expr = Some {eexpr = TFunction tf}})) ->
 			add_closure_field gen c tf (Some e1) e.epos
 		| _ ->
 			Type.map_expr gen.map e
@@ -3175,11 +3175,13 @@ let initialize_class con c =
 	List.iter (fun cf ->
 		match cf.cf_kind with
 		| Var _ -> check_closure cf
-		| Method m -> match cf.cf_type with
+		| Method m -> match follow cf.cf_type with
 			| TFun(_) ->
 				infer_null_argument cf;
 				check_dynamic cf false;
-			| _ -> assert false;
+			| _ ->
+				Printf.printf "Invalid type %s While handling %s.%s\n" (Type.s_type (print_context()) cf.cf_type) (s_type_path c.cl_path) cf.cf_name;
+				assert false;
 	) c.cl_ordered_fields;
 
 	List.iter (fun cf ->
