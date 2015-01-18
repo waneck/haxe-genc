@@ -82,6 +82,7 @@ abstract ConstPointer<T> {
 }
 
 @:coreType
+@:callable
 abstract FunctionPointer<T> {}
 
 @:coreType
