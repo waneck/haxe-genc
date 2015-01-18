@@ -19,6 +19,9 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+
+import c.Pointer.FunctionPointer;
+
 enum ValueType {
 	TNull;
 	TInt;
@@ -68,7 +71,18 @@ enum ValueType {
 	}
 
 	public static function createInstance<T>( cl : Class<T>, args : Array<Dynamic> ) : T {
-		return null;
+		var t:c.TypeReference<Dynamic> = cast cl;
+		var ctor:Dynamic = t.constructor;
+		if (ctor == null) {
+			return null;
+		}
+		return switch (args) {
+			case []: (ctor : FunctionPointer<Void -> T>)();
+			case [a]: (ctor : FunctionPointer<Dynamic -> T>)(a);
+			case [a, b]: (ctor : FunctionPointer<Dynamic -> Dynamic -> T>)(a, b);
+			case [a, b, c]: (ctor : FunctionPointer<Dynamic -> Dynamic -> Dynamic -> T>)(a, b, c);
+			case _: throw 'Something went wrong';
+		}
 	}
 
 	public static function createEmptyInstance<T>( cl : Class<T> ) : T untyped {
