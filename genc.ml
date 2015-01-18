@@ -2558,12 +2558,16 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TIf(e1,e2,e3) ->
 		spr ctx "if";
 		generate_expr ctx true e1;
-		generate_expr ctx false (mk_block e2);
+		let empty_block_or_recurse e = match e.eexpr with
+			| TBlock [] -> spr ctx " { }"
+			| _ -> generate_expr ctx false (mk_block e)
+		in
+		empty_block_or_recurse e2;
 		begin match e3 with
 			| None -> ()
 			| Some e3 ->
 				spr ctx " else ";
-				generate_expr ctx false (mk_block e3)
+				empty_block_or_recurse e3;
 		end
 	| TSwitch(e1,cases,edef) ->
 		spr ctx "switch";
