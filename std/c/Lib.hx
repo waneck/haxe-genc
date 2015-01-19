@@ -3,6 +3,7 @@ package c;
 import c.Pointer;
 import c.Types;
 
+@:analyzer(no_simplification, no_const_propagation)
 extern class Lib {
 	public static function sizeof<T>(c:TypeReference<T>):Int;
 

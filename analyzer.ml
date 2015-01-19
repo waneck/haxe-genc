@@ -1051,7 +1051,7 @@ module ConstPropagation = struct
 					e'
 				else
 					e
-			| TCall({eexpr = TField(_,(FStatic(_,cf) | FInstance(_,_,cf) | FAnon cf))},el) when has_analyzer_option cf.cf_meta flag_no_const_propagation ->
+			| TCall({eexpr = TField(_,(FStatic(c,cf) | FInstance(c,_,cf)))},el) when has_analyzer_option cf.cf_meta flag_no_const_propagation || has_analyzer_option c.cl_meta flag_no_const_propagation->
 				e
 			| TCall(e1,el) ->
 				let e1 = loop e1 in
