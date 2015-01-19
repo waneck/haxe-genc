@@ -585,9 +585,9 @@ module Filters = struct
 				List.iter (run_filters_field gen false) fields;
 				List.iter (run_filters_field gen true) statics;
 				gen.gfield <- null_field;
-(* 				c.cl_init <- (match c.cl_init with
+				c.cl_init <- (match c.cl_init with
 					| None -> None
-					| Some e -> Some (run_filters gen (Analyzer.run_ssa gen.gcom e))); *)
+					| Some e -> Some (run_filters gen e));
 
 				(* run all added fields *)
 				let rec loop () = match !added with
