@@ -479,10 +479,17 @@ let map loop t =
 	| TFun (tl,r) ->
 		TFun (List.map (fun (s,o,t) -> s, o, loop t) tl,loop r)
 	| TAnon a ->
-		TAnon {
-			a_fields = PMap.map (fun f -> { f with cf_type = loop f.cf_type }) a.a_fields;
-			a_status = a.a_status;
-		}
+		let fields = PMap.map (fun f -> { f with cf_type = loop f.cf_type }) a.a_fields in
+		begin match !(a.a_status) with
+			| Opened ->
+				a.a_fields <- fields;
+				t
+			| _ ->
+	 			TAnon {
+					a_fields = fields;
+					a_status = a.a_status;
+				}
+		end
 	| TLazy f ->
 		let ft = !f() in
 		let ft2 = loop ft in
@@ -542,10 +549,17 @@ let apply_params cparams params t =
 		| TFun (tl,r) ->
 			TFun (List.map (fun (s,o,t) -> s, o, loop t) tl,loop r)
 		| TAnon a ->
-			TAnon {
-				a_fields = PMap.map (fun f -> { f with cf_type = loop f.cf_type }) a.a_fields;
-				a_status = a.a_status;
-			}
+			let fields = PMap.map (fun f -> { f with cf_type = loop f.cf_type }) a.a_fields in
+			begin match !(a.a_status) with
+				| Opened ->
+					a.a_fields <- fields;
+					t
+				| _ ->
+		 			TAnon {
+						a_fields = fields;
+						a_status = a.a_status;
+					}
+			end
 		| TLazy f ->
 			let ft = !f() in
 			let ft2 = loop ft in
@@ -779,6 +793,23 @@ let rec get_constructor build_type c =
 (* ======= Printing ======= *)
 
 let print_context() = ref []
+
+let rec s_type_kind t =
+	let map tl = String.concat ", " (List.map s_type_kind tl) in
+	match t with
+	| TMono r ->
+		begin match !r with
+			| None -> "TMono (None)"
+			| Some t -> "TMono (Some (" ^ (s_type_kind t) ^ "))"
+		end
+	| TEnum(en,tl) -> Printf.sprintf "TEnum(%s, [%s])" (s_type_path en.e_path) (map tl)
+	| TInst(c,tl) -> Printf.sprintf "TInst(%s, [%s])" (s_type_path c.cl_path) (map tl)
+	| TType(t,tl) -> Printf.sprintf "TType(%s, [%s])" (s_type_path t.t_path) (map tl)
+	| TAbstract(a,tl) -> Printf.sprintf "TAbstract(%s, [%s])" (s_type_path a.a_path) (map tl)
+	| TFun(tl,r) -> Printf.sprintf "TFun([%s], %s)" (String.concat ", " (List.map (fun (n,b,t) -> Printf.sprintf "%s%s:%s" (if b then "?" else "") n (s_type_kind t)) tl)) (s_type_kind r)
+	| TAnon an -> "TAnon"
+	| TDynamic t2 -> "TDynamic"
+	| TLazy _ -> "TLazy"
 
 let rec s_type ctx t =
 	match t with
@@ -2025,3 +2056,6 @@ let map_expr_type f ft fv e =
 		{ e with eexpr = TCast (f e1,t); etype = ft e.etype }
 	| TMeta (m,e1) ->
 		{e with eexpr = TMeta(m, f e1); etype = ft e.etype }
+
+let print_if b e =
+	if b then print_endline (s_expr_pretty "" (s_type (print_context())) e)

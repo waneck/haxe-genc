@@ -6,6 +6,7 @@ import haxe.test.Base.Base___InnerClass3__;
 import haxe.test.Base.Base___InnerClass3___InnerClass4__;
 import haxe.test.TEnum;
 import java.util.EnumSet;
+import java.vm.*;
 
 #if java
 class TestJava extends Test

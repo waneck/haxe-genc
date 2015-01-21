@@ -136,6 +136,11 @@ struct
 		}
 end;;
 
+let path_of_md_def md_def =
+	match md_def.m_types with
+		| [TClassDecl c] -> c.cl_path
+		| _ -> md_def.m_path
+
 open ExprHashtblHelper;;
 (* Expression Hashtbl. This shouldn't be kept indefinately as it's not a weak Hashtbl. *)
 module ExprHashtbl = Hashtbl.Make(
@@ -971,7 +976,7 @@ let clean_files path excludes verbose =
 				let pack = pack @ [file] in
 				iter_files (pack) (Unix.opendir filepath) filepath;
 				try Unix.rmdir filepath with Unix.Unix_error (ENOTEMPTY,_,_) -> ();
-			else if not (List.mem (unique_full_path filepath) excludes) then begin
+			else if not (String.ends_with filepath ".meta") && not (List.mem (unique_full_path filepath) excludes) then begin
 				if verbose then print_endline ("Removing " ^ filepath);
 			 	Sys.remove filepath
 			end
@@ -1015,7 +1020,7 @@ let dump_descriptor gen name path_s module_s =
 	let main_paths = Hashtbl.create 0 in
 	List.iter (fun md_def ->
 		SourceWriter.write w "M ";
-		SourceWriter.write w (path_s md_def.m_path);
+		SourceWriter.write w (path_s (path_of_md_def md_def));
 		SourceWriter.newline w;
 		List.iter (fun m ->
 			match m with
@@ -1081,6 +1086,15 @@ let dump_descriptor gen name path_s module_s =
 			end
 		) gen.gcon.net_libs;
 	SourceWriter.write w "end libs";
+	SourceWriter.newline w;
+	let args = gen.gcon.c_args in
+	if args <> [] then begin
+		SourceWriter.write w "begin opts";
+		SourceWriter.newline w;
+		List.iter (fun opt -> SourceWriter.write w opt; SourceWriter.newline w) (List.rev args);
+		SourceWriter.write w "end opts";
+		SourceWriter.newline w;
+	end;
 
 	let contents = SourceWriter.contents w in
 	let f = open_out (gen.gcon.file ^ "/" ^ name) in
@@ -1145,13 +1159,13 @@ let generate_modules gen extension source_dir (module_gen : SourceWriter.source_
 					| _ ->
 						Common.defined_value gen.gcon Define.UnityStdTarget ^ "/Haxe-Std/" ^ (String.concat "/" (fst md_def.m_path))
 			else
-				gen.gcon.file ^ "/" ^ source_dir ^ "/" ^ (String.concat "/" (fst md_def.m_path))
+				gen.gcon.file ^ "/" ^ source_dir ^ "/" ^ (String.concat "/" (fst (path_of_md_def md_def)))
 		in
 		let w = SourceWriter.new_source_writer () in
 		(*let should_write = List.fold_left (fun should md -> module_gen w md or should) false md_def.m_types in*)
 		let should_write = module_gen w md_def in
 		if should_write then begin
-			let path = md_def.m_path in
+			let path = path_of_md_def md_def in
 			write_file gen w source_dir path extension out_files
 		end
 	) gen.gcon.modules
@@ -2422,81 +2436,6 @@ struct
 end;;
 
 (* ******************************************* *)
-(* Closure Detection *)
-(* ******************************************* *)
-
-(*
-
-	Just a small utility filter that detects when a closure must be created.
-	On the default implementation, this means when a function field is being accessed
-	not via reflection and not to be called instantly
-
-*)
-
-module FilterClosures =
-struct
-
-	let priority = 0.0
-
-	let traverse gen (should_change:texpr->string->bool) (filter:texpr->texpr->string->bool->texpr) =
-		let rec run e =
-			match e.eexpr with
-				(*(* this is precisely the only case where we won't even ask if we should change, because it is a direct use of TClosure *)
-				| TCall ( {eexpr = TClosure(e1,s)} as clos, args ) ->
-					{ e with eexpr = TCall({ clos with eexpr = TClosure(run e1, s) }, List.map run args ) }
-				| TCall ( clos, args ) ->
-					let rec loop clos = match clos.eexpr with
-						| TClosure(e1,s) -> Some (clos, e1, s)
-						| TParenthesis p -> loop p
-						| _ -> None
-					in
-					let clos = loop clos in
-					(match clos with
-						| Some (clos, e1, s) -> { e with eexpr = TCall({ clos with eexpr = TClosure(run e1, s) }, List.map run args ) }
-						| None -> Type.map_expr run e)*)
-					| TCall({ eexpr = TLocal{ v_name = "__delegate__" } } as local, [del]) ->
-						{ e with eexpr = TCall(local, [Type.map_expr run del]) }
-					| TCall(({ eexpr = TField(_, _) } as ef), params) ->
-						{ e with eexpr = TCall(Type.map_expr run ef, List.map run params) }
-					| TField(ef, FEnum(en, field)) ->
-							(* FIXME replace t_dynamic with actual enum Anon field *)
-							let ef = run ef in
-							(match follow field.ef_type with
-								| TFun _ when should_change ef field.ef_name ->
-									filter e ef field.ef_name true
-								| _ ->
-										{ e with eexpr = TField(ef, FEnum(en,field)) }
-							)
-					| TField(({ eexpr = TTypeExpr _ } as tf), f) ->
-						(match field_access_esp gen tf.etype (f) with
-							| FClassField(_,_,_,cf,_,_,_) ->
-								(match cf.cf_kind with
-									| Method(MethDynamic)
-									| Var _ ->
-										e
-									| _ when should_change tf cf.cf_name ->
-										filter e tf cf.cf_name true
-									| _ ->
-										e
-							 )
-							| _ -> e)
-					| TField(e1, FClosure (Some _, cf)) when should_change e1 cf.cf_name ->
-						(match cf.cf_kind with
-						| Method MethDynamic | Var _ ->
-							Type.map_expr run e
-						| _ ->
-							filter e (run e1) cf.cf_name false)
-					| _ -> Type.map_expr run e
-		in
-		run
-
-	let configure gen (mapping_func:texpr->texpr) =
-		let map e = Some(mapping_func e) in
-		gen.gexpr_filters#add ~name:"closures_filter" ~priority:(PCustom priority) map
-
-end;;
-
-(* ******************************************* *)
 (* Dynamic Field Access *)
 (* ******************************************* *)
 
@@ -2626,6 +2565,85 @@ struct
 	let configure_as_synf gen (mapping_func:texpr->texpr) =
 		let map e = Some(mapping_func e) in
 		gen.gexpr_filters#add ~name:"dynamic_field_access" ~priority:(PCustom(priority_as_synf)) map
+
+end;;
+
+(* ******************************************* *)
+(* Closure Detection *)
+(* ******************************************* *)
+
+(*
+
+	Just a small utility filter that detects when a closure must be created.
+	On the default implementation, this means when a function field is being accessed
+	not via reflection and not to be called instantly
+
+	dependencies:
+		must run after DynamicFieldAccess, so any TAnon { Statics / EnumStatics } will be changed to the corresponding TTypeExpr
+*)
+
+module FilterClosures =
+struct
+
+	let name = "filter_closures"
+
+	let priority = solve_deps name [DAfter DynamicFieldAccess.priority]
+
+	let traverse gen (should_change:texpr->string->bool) (filter:texpr->texpr->string->bool->texpr) =
+		let rec run e =
+			match e.eexpr with
+				(*(* this is precisely the only case where we won't even ask if we should change, because it is a direct use of TClosure *)
+				| TCall ( {eexpr = TClosure(e1,s)} as clos, args ) ->
+					{ e with eexpr = TCall({ clos with eexpr = TClosure(run e1, s) }, List.map run args ) }
+				| TCall ( clos, args ) ->
+					let rec loop clos = match clos.eexpr with
+						| TClosure(e1,s) -> Some (clos, e1, s)
+						| TParenthesis p -> loop p
+						| _ -> None
+					in
+					let clos = loop clos in
+					(match clos with
+						| Some (clos, e1, s) -> { e with eexpr = TCall({ clos with eexpr = TClosure(run e1, s) }, List.map run args ) }
+						| None -> Type.map_expr run e)*)
+					| TCall({ eexpr = TLocal{ v_name = "__delegate__" } } as local, [del]) ->
+						{ e with eexpr = TCall(local, [Type.map_expr run del]) }
+					| TCall(({ eexpr = TField(_, _) } as ef), params) ->
+						{ e with eexpr = TCall(Type.map_expr run ef, List.map run params) }
+					| TField(ef, FEnum(en, field)) ->
+							(* FIXME replace t_dynamic with actual enum Anon field *)
+							let ef = run ef in
+							(match follow field.ef_type with
+								| TFun _ when should_change ef field.ef_name ->
+									filter e ef field.ef_name true
+								| _ ->
+										{ e with eexpr = TField(ef, FEnum(en,field)) }
+							)
+					| TField(({ eexpr = TTypeExpr _ } as tf), f) ->
+						(match field_access_esp gen tf.etype (f) with
+							| FClassField(_,_,_,cf,_,_,_) ->
+								(match cf.cf_kind with
+									| Method(MethDynamic)
+									| Var _ ->
+										e
+									| _ when should_change tf cf.cf_name ->
+										filter e tf cf.cf_name true
+									| _ ->
+										e
+							 )
+							| _ -> e)
+					| TField(e1, FClosure (Some _, cf)) when should_change e1 cf.cf_name ->
+						(match cf.cf_kind with
+						| Method MethDynamic | Var _ ->
+							Type.map_expr run e
+						| _ ->
+							filter e (run e1) cf.cf_name false)
+					| _ -> Type.map_expr run e
+		in
+		run
+
+	let configure gen (mapping_func:texpr->texpr) =
+		let map e = Some(mapping_func e) in
+		gen.gexpr_filters#add ~name:name ~priority:(PCustom priority) map
 
 end;;
 
@@ -10591,9 +10609,9 @@ struct
 						e
 				| TCast( ({ eexpr = TBinop((Ast.OpDiv as op), e1, e2) } as ebinop ), _ )
 				| TCast( ({ eexpr = TBinop(( (Ast.OpAssignOp Ast.OpDiv) as op), e1, e2) } as ebinop ), _ ) when catch_int_div && is_int e1.etype && is_int e2.etype && is_int e.etype ->
-					let e = { ebinop with eexpr = TBinop(op, run e1, run e2); etype = basic.tint } in
+					let ret = { ebinop with eexpr = TBinop(op, run e1, run e2); etype = e.etype } in
 					if not (is_exactly_int e1.etype && is_exactly_int e2.etype) then
-						mk_cast basic.tint e
+						mk_cast e.etype ret
 					else
 						e
 				| _ -> Type.map_expr run e
