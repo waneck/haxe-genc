@@ -2170,7 +2170,7 @@ let escape_name n =
 
 let rec s_type ctx t =
 	if is_null t then
-		s_type ctx (Wrap.mk_box_type t)
+		s_type ctx (Wrap.mk_box_type (follow t))
 	else match follow t with
 	| TAbstract({a_path = [],"Int"},[]) -> "int"
 	| TAbstract({a_path = [],"Float"},[]) -> "double"
