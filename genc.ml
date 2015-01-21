@@ -2605,6 +2605,8 @@ and generate_expr ctx need_val e = match e.eexpr with
 	| TBinop(OpAssign,e1,e2) ->
 		generate_expr ctx need_val e1;
 		spr ctx " = ";
+		(* TODO: I don't think that should be here... *)
+		let e2 = if type_iseq e1.etype e2.etype then e2 else Expr.mk_cast e2 e1.etype in
 		generate_expr ctx true e2;
 	| TBinop(op,e1,e2) ->
 		generate_expr ctx true e1;
