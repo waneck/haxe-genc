@@ -86,79 +86,103 @@ class UnitBuilder {
 			case [e]: e;
 		case _:
 			var e = el.pop();
-			macro @:pos(e.pos) $e || ${collapseToOrExpr(el)};
+			{ expr: EBinop(OpBoolOr, e, collapseToOrExpr(el)), pos: e.pos }
 		}
 	}
 
 	static function mkEq(e1, e2, p) {
 		function isFloat(e) {
-			try return switch(Context.typeof(e)) {
-				case TAbstract(_.get() => {name: "Float"}, _):
-					true;
+			try return switch(Context.follow(Context.typeof(e))) {
+				case TAbstract(tr, _):
+					tr.get().name == "Float";
 				case _:
 					false;
 			} catch (e:Dynamic) {
 				return false;
 			}
 		}
-		var e = switch [isFloat(e1) || isFloat(e2), e2] {
-			case [true, macro Math.POSITIVE_INFINITY | Math.NEGATIVE_INFINITY] if (Context.defined("cpp") || Context.defined("php")):
-				macro @:pos(p) $isTrue($e1 == $e2);
+		var e = switch [isFloat(e1) || isFloat(e2), e2.expr] {
+			case [_, EField( { expr:EConst(CIdent("Math" | "math")) }, "POSITIVE_INFINITY" | "NEGATIVE_INFINITY")] if (Context.defined("cpp") || Context.defined("php")):
+				macro $isTrue($e1 == $e2);
 			case [true, _]:
-				macro @:pos(p) $equalsFloat($e1, $e2);
+				macro $equalsFloat($e1, $e2);
 			case _:
-				macro @:pos(p) $equals($e1, $e2);
+				macro $equals($e1, $e2);
 		}
 		return {
 			expr: e.expr,
 			pos: p
 		}
 	}
-
 	static public function read(path:String) {
 		var p = Context.makePosition( { min:0, max:0, file:path } );
 		var file = sys.io.File.getContent(path);
 		var code = Context.parseInlineString("{" + file + "}", p);
-		var block = switch(code.expr) {
-			case EBlock(b): b;
-			case _: throw "false";
-		}
-		var ret = [macro @:pos(p) trace("Begin")];
-		for (e in block) {
-			var e = switch(e) {
-				case macro $e1 == $i{"false"}, macro $i{"false"} == $e1:
-					macro @:pos(e.pos) $isFalse($e1);
-				case macro $e1 == $i{"true"}, macro $i{"true"} == $e1:
-					macro @:pos(e.pos) $isTrue($e1);
-				case macro $e1 == $a{el}, macro $a{el} == $e1:
-					var el2 = [];
-					for (i in 0...el.length) {
-						var e2 = el[i];
-						el2.push(mkEq((macro $e1[$v{i}]), e2, e.pos));
-					}
-					if (el2.length == 0)
-						mkEq((macro $e1.length), (macro 0), e.pos);
-					else
-						macro $b{el2};
-				case macro $e1 == $e2:
-					mkEq(e1, e2, e.pos);
-				case macro $e1 != $e2:
-					macro @:pos(e.pos) $equalsNot($e1, $e2);
-				case { expr: EBinop(OpGt | OpGte | OpLt | OpLte, _, _)}:
-					macro @:pos(e.pos) $isTrue($e);
-				case macro throw $e:
-					macro exc(function() $e);
-				case macro $e1 in $a{el}:
-					var el2 = [];
-					for (e in el)
-						el2.push(macro $e1 == $e);
-					macro @:pos(e.pos) $isTrue(${ collapseToOrExpr(el2) } );
-				case _:
-					e;
+		function mkBlock(e:Expr) {
+			return switch(e.expr) {
+				case EBlock(b): b;
+				case _: [e];
 			}
-			ret.push(e);
 		}
-		return macro $b{ret};
+		function bl(block:Array<Expr>):Array<Expr> {
+			var ret = [];
+			for (e in block) {
+				var e = switch(e.expr) {
+					case EBinop(OpEq, e1, { expr: EConst(CIdent("false")) } )
+					| EBinop(OpEq, { expr: EConst(CIdent("false")) }, e1):
+						{
+							expr: (macro $isFalse($e1)).expr,
+							pos: e.pos
+						}
+					case EBinop(OpEq, e1, { expr: EConst(CIdent("true")) } )
+					| EBinop(OpEq, { expr: EConst(CIdent("true")) }, e1):
+						{
+							expr: (macro $isTrue($e1)).expr,
+							pos: e.pos
+						}
+					case EBinop(OpEq, e1, { expr: EArrayDecl(el) } )
+					| EBinop(OpEq, { expr: EArrayDecl(el) }, e1 ):
+						var el2 = [];
+						for (i in 0...el.length) {
+							var e2 = el[i];
+							el2.push(mkEq((macro $e1[$v{i}]), e2, e.pos));
+						}
+						if (el2.length == 0)
+							mkEq((macro @:pos(e1.pos) $e1.length), (macro 0), e.pos);
+						else
+							macro { $a{el2}; };
+					case EBinop(OpEq, e1, e2):
+						mkEq(e1, e2, e.pos);
+					case EBinop(OpNotEq, e1, e2):
+						macro $isTrue($e1 != $e2);
+					case EBinop(OpGt | OpGte | OpLt | OpLte, _, _):
+						{
+							expr: (macro t($e)).expr,
+							pos: e.pos
+						}
+					case EThrow(e):
+						macro exc(function() $e);
+					case EIn(e1, {expr:EArrayDecl(el) }):
+						var el2 = [];
+						for (e in el)
+							el2.push(macro $e1 == $e);
+						macro @:pos(e.pos) t(${ collapseToOrExpr(el2) } );
+					case EVars(vl):
+						for (v in vl)
+							if (v.name == "t" || v.name == "f" || v.name == "eq" || v.name == "neq")
+								Context.error('${v.name} is reserved for unit testing', e.pos);
+							e;
+					case EFor(it, {expr: EBlock(el), pos: p}):
+						{ expr: EFor(it, {expr:EBlock(bl(el)), pos: p}), pos: e.pos };
+					case _:
+						e;
+				}
+				ret.push(e);
+			}
+			return ret;
+		}
+		var block = mkBlock(code);
+		return macro $b{bl(block)};
 	}
 	#end
 }
