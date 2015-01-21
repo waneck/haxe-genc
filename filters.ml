@@ -691,11 +691,24 @@ let check_unification com e t =
 	begin match e.eexpr,t with
 		| TLocal v,TType({t_path = ["cs"],("Ref" | "Out")},_) ->
 			(* TODO: this smells of hack, but we have to deal with it somehow *)
-			v.v_capture <- true
+			v.v_capture <- true;
+			e
+		| TObjectDecl fl,t ->
+			begin match follow t with
+				| (TAnon an as ta) ->
+					let fl = PMap.foldi (fun n cf fl->
+						if not (List.exists (fun (n2,_) -> n = n2) fl) then
+							(n,(mk (TConst TNull) cf.cf_type cf.cf_pos)) :: fl
+						else
+							fl
+					) an.a_fields fl in
+					{ e with eexpr = TObjectDecl fl; etype = ta}
+				| _ ->
+					e
+			end
 		| _ ->
-			()
-	end;
-	e
+			e
+	end
 
 (* PASS 1 end *)
 
