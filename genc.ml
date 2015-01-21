@@ -682,7 +682,7 @@ module DefaultValues = struct
 				in
 				replace e,!v_this
 			in
-			let handle_default_assign e =
+			let handle_default_assign need_ret e =
 				let subst,el = List.fold_left (fun (subst,el) (v,co) ->
 					match co with
 					| None ->
@@ -708,7 +708,13 @@ module DefaultValues = struct
 						let eif = mk (TIf(econd,eassign,eelse)) gen.gcom.basic.tvoid p in
 						subst,(eif :: el)
 				) ([],[]) tf.tf_args in
-				let el = (fst (replace_locals subst e)) :: el in
+				let e_call = (fst (replace_locals subst e)) in
+				let e_ret = if need_ret then
+					mk (TReturn (Some e_call)) t_dynamic p
+				else
+					e_call
+				in
+				let el = e_ret :: el in
 				Expr.mk_block gen.gcom p (List.rev el)
 			in
 			let e = match get_fmode tf e.etype with
@@ -741,12 +747,12 @@ module DefaultValues = struct
 						| Some v -> (mk (TConst TThis) v.v_type p) :: e_args
 					in
 					let e_call = Expr.mk_static_call gen.gclass cf_given e_args p in
-					let e_call = handle_default_assign e_call in
+					let e_call = handle_default_assign true e_call in
 					{ e with eexpr = TFunction({tf with tf_expr = e_call})}
 				| Given ->
 					{e with eexpr = TFunction{tf with tf_expr = gen.map tf.tf_expr}}
 				| _ ->
-					let e = handle_default_assign tf.tf_expr in
+					let e = handle_default_assign false tf.tf_expr in
 					{ e with eexpr = TFunction({tf with tf_expr = gen.map e})}
 			in
 			fstack := List.tl !fstack;
