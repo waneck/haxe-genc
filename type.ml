@@ -667,6 +667,12 @@ let concat e1 e2 =
 
 let is_closed a = !(a.a_status) <> Opened
 
+let type_of_module_type = function
+	| TClassDecl c -> TInst (c,List.map snd c.cl_params)
+	| TEnumDecl e -> TEnum (e,List.map snd e.e_params)
+	| TTypeDecl t -> TType (t,List.map snd t.t_params)
+	| TAbstractDecl a -> TAbstract (a,List.map snd a.a_params)
+
 (* ======= Field utility ======= *)
 
 let field_name f =
@@ -1122,7 +1128,7 @@ let rec s_expr_ast print_var_ids tabs s_type e =
 	| TFunction f -> tag "Function" [loop f.tf_expr]
 	| TVar (v,eo) -> var v (match eo with None -> [] | Some e -> [loop e])
 	| TBlock el -> tag "Block" (List.map loop el)
-	| TIf (e,e1,e2) -> tag "If" (loop e :: ("Then " ^ loop e1) :: (match e2 with None -> [] | Some e -> ["Else " ^ (loop e)]))
+	| TIf (e,e1,e2) -> tag "If" (loop e :: (Printf.sprintf "[Then:%s] %s" (s_type e1.etype) (loop e1)) :: (match e2 with None -> [] | Some e -> [Printf.sprintf "[Else:%s] %s" (s_type e.etype) (loop e)]))
 	| TCast (e1,None) -> tag "Cast" [loop e1]
 	| TCast (e1,Some mt) -> tag "Cast" [loop e1; module_type mt]
 	| TThrow e1 -> tag "Throw" [loop e1]
