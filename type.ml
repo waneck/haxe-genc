@@ -1972,6 +1972,214 @@ let map_expr f e =
 	| TMeta (m,e1) ->
 		 {e with eexpr = TMeta(m,f e1)}
 
+
+let _foldmap_list f acc el =
+	let rec loop acc el acc2 = (match el with
+		| [] -> (List.rev acc2),acc
+		| e1 :: el ->
+			let e1,acc = f acc e1 in
+			loop acc el (e1 :: acc2))
+	in loop acc el []
+
+let _foldmap_eo f acc eo = match eo with
+	| Some(e) -> let e,acc = f acc e in Some(e),acc
+	| None    -> eo,acc
+
+let _foldmap_pairs f acc pairs =
+	let acc,pairs = List.fold_left
+		(fun (acc,el) (v,e) -> let e,acc = f acc e in (acc,(v,e) :: el))
+		(acc,[])
+		pairs
+	in (List.rev pairs),acc
+
+let foldmap_expr f acc e =
+	begin match e.eexpr with
+	| TConst _
+	| TLocal _
+	| TBreak
+	| TContinue
+	| TTypeExpr _ ->
+		e,acc
+	| TArray (e1,e2) ->
+		let e1,acc = f acc e1 in
+		let e2,acc = f acc e2 in
+		{ e with eexpr = TArray (e1, e2) },acc
+	| TBinop (op,e1,e2) ->
+		let e1,acc = f acc e1 in
+		let e2,acc = f acc e2 in
+		{ e with eexpr = TBinop (op,e1,e2) },acc
+	| TFor (v,e1,e2) ->
+		let e1,acc = f acc e1 in
+		let e2,acc = f acc e2 in
+		{ e with eexpr = TFor (v,e1,e2) },acc
+	| TWhile (e1,e2,flag) ->
+		let e1,acc = f acc e1 in
+		let e2,acc = f acc e2 in
+		{ e with eexpr = TWhile (e1,e2,flag) },acc
+	| TThrow e1 ->
+		let e1,acc = f acc e1 in
+		{ e with eexpr = TThrow (e1) },acc
+	| TEnumParameter (e1,ef,i) ->
+		let e1,acc = f acc e1 in
+		{ e with eexpr = TEnumParameter(e1,ef,i) },acc
+	| TField (e1,v) ->
+		let e1,acc = f acc e1 in
+		{ e with eexpr = TField (e1,v) },acc
+	| TParenthesis e1 ->
+		let e1,acc = f acc e1 in
+		{ e with eexpr = TParenthesis (e1) },acc
+	| TUnop (op,pre,e1) ->
+		let e1,acc = f acc e1 in
+		{ e with eexpr = TUnop (op,pre,e1) },acc
+	| TArrayDecl el ->
+		let el, acc = _foldmap_list f acc el in
+		{ e with eexpr = TArrayDecl el },acc
+	| TNew (t,pl,el) ->
+		let el,acc = _foldmap_list f acc el in
+		{ e with eexpr = TNew (t,pl,el) },acc
+	| TBlock el ->
+		let el,acc = _foldmap_list f acc el in
+		{ e with eexpr = TBlock (el) },acc
+	| TObjectDecl el ->
+		let el,acc = _foldmap_pairs f acc el in
+		{ e with eexpr = TObjectDecl el },acc
+	| TCall (e1,el) ->
+		let e1,acc = f acc e1 in
+		let el,acc = _foldmap_list f acc el in
+		{ e with eexpr = TCall (e1,el) },acc
+	| TVar (v,eo) ->
+		let eo,acc = _foldmap_eo f acc eo in
+		{ e with eexpr = TVar (v, eo) },acc
+	| TFunction fu ->
+		let e1, acc = f acc fu.tf_expr in
+		{ e with eexpr = TFunction { fu with tf_expr = e1 } },acc
+	| TIf (ec,e1,eo) ->
+		let ec,acc = f acc ec in
+		let e1,acc = f acc e1 in
+		let eo,acc = _foldmap_eo f acc eo in
+		{ e with eexpr = TIf (ec,e1,eo)},acc
+	| TSwitch (e1,cases,def) ->
+		let e1,acc = f acc e1 in
+		let acc,cases = List.fold_left (fun (acc,cases) (el,e2) ->
+			let el,acc = _foldmap_list f acc el in
+			let e2,acc = f acc e2 in
+			acc,((el,e2) :: cases)
+		) (acc,[]) cases in
+		let def,acc = _foldmap_eo f acc def in
+		{ e with eexpr = TSwitch (e1, cases, def) },acc
+	| TTry (e1,catches) ->
+		let e1,acc = f acc e1 in
+		let catches,acc = _foldmap_pairs f acc catches in
+		{ e with eexpr = TTry (e1, catches) },acc
+	| TReturn eo ->
+		let eo,acc = _foldmap_eo f acc eo in
+		{ e with eexpr = TReturn eo },acc
+	| TCast (e1,t) ->
+		let e1,acc = f acc e1 in
+		{ e with eexpr = TCast (e1,t) },acc
+	| TMeta (m,e1) ->
+		let e1,acc = f acc e1 in
+		{ e with eexpr = TMeta(m,e1)},acc
+	end
+
+
+let fold_expr_list f acc el = List.fold_left (fun acc e -> f acc e) acc el
+
+let fold_expr_pairs f acc pairs = List.fold_left (fun acc (_,e) -> f acc e) acc pairs
+
+let fold_expr_eo f acc eo = match eo with Some(e) -> f acc e | None -> acc
+
+let fold_expr f acc e =
+	begin match e.eexpr with
+	| TConst _
+	| TLocal _
+	| TBreak
+	| TContinue
+	| TTypeExpr _ ->
+		acc
+	| TArray (e1,e2) ->
+		let acc = f acc e1 in
+		let acc = f acc e2 in
+		acc
+	| TBinop (op,e1,e2) ->
+		let acc = f acc e1 in
+		let acc = f acc e2 in
+		acc
+	| TFor (v,e1,e2) ->
+		let acc = f acc e1 in
+		let acc = f acc e2 in
+		acc
+	| TWhile (e1,e2,flag) ->
+		let acc = f acc e1 in
+		let acc = f acc e2 in
+		acc
+	| TThrow e1 ->
+		let acc = f acc e1 in
+		acc
+	| TEnumParameter (e1,ef,i) ->
+		let acc = f acc e1 in
+		acc
+	| TField (e1,v) ->
+		let acc = f acc e1 in
+		acc
+	| TParenthesis e1 ->
+		let acc = f acc e1 in
+		acc
+	| TUnop (op,pre,e1) ->
+		let acc = f acc e1 in
+		acc
+	| TArrayDecl el ->
+		let acc = fold_expr_list f acc el in
+		acc
+	| TNew (t,pl,el) ->
+		let acc = fold_expr_list f acc el in
+		acc
+	| TBlock el ->
+		let acc = fold_expr_list f acc el in
+		acc
+	| TObjectDecl el ->
+		let acc = fold_expr_pairs f acc el in
+		acc
+	| TCall (e1,el) ->
+		let acc = f acc e1 in
+		let acc = fold_expr_list f acc el in
+		acc
+	| TVar (v,eo) ->
+		let acc = fold_expr_eo f acc eo in
+		acc
+	| TFunction fu ->
+		let acc = f acc fu.tf_expr in
+		acc
+	| TIf (ec,e1,eo) ->
+		let acc = f acc ec in
+		let acc = f acc e1 in
+		let acc = fold_expr_eo f acc eo in
+		acc
+	| TSwitch (e1,cases,def) ->
+		let acc = f acc e1 in
+		let acc = List.fold_left (fun acc (el,e2) ->
+			let acc = fold_expr_list f acc el in
+			let acc = f acc e2 in
+			acc
+		) acc cases in
+		let acc = fold_expr_eo f acc def in
+		acc
+	| TTry (e1,catches) ->
+		let acc = f acc e1 in
+		let acc = fold_expr_pairs f acc catches in
+		acc
+	| TReturn eo ->
+		let acc = fold_expr_eo f acc eo in
+		acc
+	| TCast (e1,t) ->
+		let acc = f acc e1 in
+		acc
+	| TMeta (m,e1) ->
+		let acc = f acc e1 in
+		acc
+	end
+
+
 let map_expr_type f ft fv e =
 	match e.eexpr with
 	| TConst _
