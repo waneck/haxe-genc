@@ -5860,7 +5860,6 @@ let generate_types con types =
 	Filters.run_filters_types gen types
 
 
-
 let generate com =
 	let rec find_class path mtl = match mtl with
 		| TClassDecl c :: _ when c.cl_path = path -> c
