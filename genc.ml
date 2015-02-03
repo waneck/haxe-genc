@@ -4469,10 +4469,10 @@ module GC = struct
 
 		let _ = run con in
 
-		(*
+
 		List.iter (type_decl_info con) con.com.types;
 		List.iter (run_snd con) con.com.types;
-		*)
+
 		(* p_alignment con.hxc; *)
 		()
 

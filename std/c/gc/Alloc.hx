@@ -37,7 +37,7 @@ extern class MMan {
     @:plain static var MAP_UNINITIALIZED;
 
     @:plain static var MAP_FAILED;
-    
+
     @:plain
     static function mmap(addr:Pointer<Void>,size:Int64,prot:Int,flags:Int,fd:Int,offset:Int64):Pointer<Void>;
 
@@ -52,7 +52,7 @@ extern class MMan {
 
 }
 #elseif winapi
-@:include("windows.h")
+@:include("<windows.h>")
 @:include("<sys/stat.h>")
 extern class MMan {
     @:plain static var MEM_RESERVE;
@@ -76,16 +76,16 @@ class Utils {
         c.Lib.cCode("
 #define LT(n) n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n
 
-    unsigned char logtable_arr[] = { 
+    unsigned char logtable_arr[] = {
     -1, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
-    LT(4), LT(5), LT(5), LT(6), 
-    LT(6), LT(6), LT(6), LT(7), 
-    LT(7), LT(7), LT(7), LT(7), 
+    LT(4), LT(5), LT(5), LT(6),
+    LT(6), LT(6), LT(6), LT(7),
+    LT(7), LT(7), LT(7), LT(7),
     LT(7), LT(7), LT(7) };
     memcpy(&c_gc_Utils_logtable,&logtable_arr,256);
 ");
     }
-    
+
     static inline function div(l:Int,r:Int):Int return Std.int(l/r);
 
     static inline var one:Int64 = (1 : Int64);
@@ -156,7 +156,7 @@ class Utils {
         var t,tt:Int;
         #if GCC
         r = asm_bsrl(v);
-        #else 
+        #else
         if ((tt = (v >> 16))  != 0 ) {
             r = ((t = tt >> 8)  != 0) ? 24 + logtable[t] : 16 + logtable[tt];
         } else {
@@ -166,7 +166,7 @@ class Utils {
         r += (((1 << r)-1) & v != 0) ? 1 : 0; // round up to next power of two
         return r;
     }
-    
+
     static function test_log2_64(){
         var b63 = (1 : Int64) << 63;
         var b62 = (1 : Int64) << 62;
@@ -187,29 +187,29 @@ class Utils {
 /*
  *  The FreeStack is a set for small integers (where small can be relatively big)
  *  the integers are assumed to start small and grow over time
- *  the set is implemented as 
- *  
- *  var bitmap:Pointer<Int64>  an array of 64 bit wide bitmaps 
- *  var stack:Pointer<Int>-    a freelist which itself is implemented using a stack 
+ *  the set is implemented as
+ *
+ *  var bitmap:Pointer<Int64>  an array of 64 bit wide bitmaps
+ *  var stack:Pointer<Int>-    a freelist which itself is implemented using a stack
  *      each item in the freelist holds the index of a
  *      bitmap segment with at least one bit set
  *  - var idx always indexes the top of the stack
  *  - var committed is the number of objects the FreeStack can currently hold without having to be grown
  *  - var empty indicates whether at least one bit is set
- *  
- *  lookup time for a member of the set is O(1) 
+ *
+ *  lookup time for a member of the set is O(1)
  *  adding a member is O(1)
  *  finding any member and removing it is O(1)
- * 
+ *
  *  unlike actual stacks there is no fixed LIFO order
- *  
- * The space requirements are 1.5 bits per member of the set, so for e.g. 
+ *
+ * The space requirements are 1.5 bits per member of the set, so for e.g.
  *     1   GB worth of 32 byte objects,
  *  or 0.5 GB worth of 16 byte objects,
  *  or 4   GB worth of 128 byte objects
  *  which is ca. 33.5 million objects (or "small integers"),
  *  we need exactly 6 MB of memory for the FreeStack
- * 
+ *
  *  the stack is growable on demand and doesn't require any relocations, growing it is a O(1) operation.
  *  the granularity of the growth is tunable and required to be a power of 2 >= 64
  */
@@ -226,11 +226,11 @@ class FreeStack {
     var bitmap:Pointer<Int64>;
     var empty:Bool;
 
-    /* 
-     * 
-     * 
+    /*
+     *
+     *
      */
-    
+
     inline function init(max_objects:Int64, meta_start:Int64, bitmapsize:Int64){
         bitmap      = (cast meta_start + bitmapsize : Pointer<Int64> );
         stack       = (cast meta_start + (bitmapsize * 2) : Pointer<Int> );
@@ -270,21 +270,21 @@ class FreeStack {
         }
         return obidx;
     }
-    
+
     inline function grow(n_obs:Int){
-        
+
         var n_obs         = n_obs < 64 ? 64 : n_obs; // n is assumed to be a POW2 >= 64
-        
-        var bm            = bitmap.int64(); 
-        var bm_cur        = committed >> 3; // currently committed bytes (one bit per object, 8 bits per byte, number of committed objects / 8 ) 
-        var bm_blocksz    = n_obs     >> 3; // bytes to grow freestack.bitmap 
+
+        var bm            = bitmap.int64();
+        var bm_cur        = committed >> 3; // currently committed bytes (one bit per object, 8 bits per byte, number of committed objects / 8 )
+        var bm_blocksz    = n_obs     >> 3; // bytes to grow freestack.bitmap
         var bm_res        = MMan.mcommit( (cast bm+bm_cur : Pointer<Void> ), bm_blocksz, MEM_COMMIT, PAGE_READWRITE);
-        
+
         var st            = stack.int64();
         var st_cur        = committed >> 4;  // same game as above, but we only need 0.5 bits / object for the stack, and hence half the number of bytes
         var st_blocksz    = n_obs >> 4;      // bytes to grow stack   (we need one int per 64 objects)
         var st_res        = MMan.mcommit( (cast st + st_cur : Pointer<Void>), st_blocksz, MEM_COMMIT, PAGE_READWRITE);
-        
+
         committed         = committed + n_obs;
     }
 }
@@ -405,13 +405,13 @@ class Pool {
         var r = ( mem + (obidx << sz_shift) );
         return cast r;
     }
-    
+
     function alloc_w_header(header:UInt64):Pointer<Void> {
 		var obj:c.gc.Headers.GenericHeader = cast alloc();
 		obj.header = header;
 		return cast obj;
 	}
-	
+
 	function alloc_w_header_tps(header:UInt64,tps:UInt64):Pointer<Void> {
 		var obj:c.gc.Headers.GenericHeader = cast alloc();
 		obj.header = header;
@@ -517,7 +517,7 @@ class Area {
         }
         return area;
     }
-    
+
 
 }
 
@@ -527,7 +527,7 @@ extern class Time {
     static var CLOCKS_PER_SEC:Int64;
     @:plain
     static function clock():Int64;
-    
+
     static inline function elapsed(t0:Int64,t1:Int64):Float{
         return t1.float()/CLOCKS_PER_SEC.float() - t0.float()/CLOCKS_PER_SEC.float();
     }
@@ -536,21 +536,21 @@ extern class Time {
 @:analyzer(ignore)
 @:publicFields
 class Bench {
-    
+
     static var N   = 1000;
     static var MAX = 128000;
     static var ps:ConstSizeArray<Pointer<Int>,640000>;
-    
+
     static var mmlc = false;
-    
+
     static var area:Area;
-    
+
     static var OBS  = 32000;
     static var FROM = 0;
     static var TO   = 11;
-    
+
     static function alloc(sz:Int) {
-        
+
         if (mmlc)
             return malloc(1 << (sz+4));
         else {
@@ -564,8 +564,8 @@ class Bench {
         else
             area.free(cast p);
     }
-    
-    
+
+
     static function allocs(){
         var sizes = [for (i in FROM...TO) i];
         var idx = 0;
@@ -589,7 +589,7 @@ class Bench {
              dofree(ps[idx++],sz);
         }
     }
-    
+
     static function allocs4(st:Int){
         var sizes = [for (i in FROM...TO) i];
         var idx = st;
@@ -632,7 +632,7 @@ class Bench {
         var t1 = Time.clock();
         return t1-t0;
     }
-    
+
     static function run(){
         area = Area.create(0);
         N = 250;
@@ -643,9 +643,9 @@ class Bench {
         var tcustom = _run();
         var tsys = tsysmalloc.float()/Time.CLOCKS_PER_SEC.float();
         var tcst = tcustom.float()/Time.CLOCKS_PER_SEC.float();
-        
+
         var pairs = N * (TO-FROM) * OBS;
-        
+
         printf("malloc: %f\\n        %f pairs/s \\ncustom: %f\\n        %f pairs/s\\ncount: %d\\n",[tsys,pairs/tsys,tcst,pairs/tcst,count]);
     }
 }
@@ -659,7 +659,7 @@ class Alloc {
         Utils.test_log2_64();
         Bench.run();
     }
-    
+
 
 }
 
