@@ -21,6 +21,7 @@
  */
 package c;
 
+@:analyzer(no_simplification)
 @:runtimeValue
 @:coreType
 abstract ConstSizeArray<T, Const>

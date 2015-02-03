@@ -86,6 +86,7 @@ module Meta = struct
 		| HeaderCode
 		| HeaderNamespaceCode
 		| HxCNoHeader
+		| HxCSpecialize
 		| HxGen
 		| IfFeature
 		| Impl

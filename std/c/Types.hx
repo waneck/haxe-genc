@@ -36,6 +36,7 @@ abstract UShort from Int to Int { }
 abstract Float32 from Float to Float { }
 
 @:native("hx_uint8")
+@:keep
 @:struct
 @:coreType
 abstract UInt8 from Int to Int { }
@@ -45,7 +46,9 @@ abstract UInt8 from Int to Int { }
 @:coreType
 abstract Int8 from Int to Int { }
 
+
 @:native("hx_uint16")
+@:keep
 @:struct
 @:coreType
 abstract UInt16 from Int to Int { }
@@ -56,6 +59,8 @@ abstract UInt16 from Int to Int { }
 abstract Int16 from Int to Int { }
 
 @:native("hx_uint32")
+@:keep
+@:runtimeValue
 @:struct
 @:coreType
 abstract UInt32 from Int to Int { }

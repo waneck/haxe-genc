@@ -97,3 +97,17 @@ abstract UInt64 from Int {
         return cast this;
     }
 }
+
+/*
+@:coreType
+@:int("uint32")
+abstract UInt32 from Int to Int {}
+
+@:coreType
+@:int("uint16")
+abstract UInt16 from Int to Int {}
+
+@:coreType
+@:int("uint8")
+abstract UInt8 from Int to Int {}
+*/

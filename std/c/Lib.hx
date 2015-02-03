@@ -13,6 +13,7 @@ extern class Lib {
 
 	public static function alloca(i:Int):Pointer<Void>;
 
+	@:analyzer(no_simplification)
 	public static function cCode<T>(s:ConstPointer<Char>):T;
 
 	public static function callMain():Void;

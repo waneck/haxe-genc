@@ -161,7 +161,7 @@ let check_local_vars_init e =
 			let init = (try PMap.find v.v_id !vars with Not_found -> true) in
 			if not init then begin
 				if v.v_name = "this" then error "Missing this = value" e.epos
-				else error ("Local variable " ^ v.v_name ^ " used without being initialized") e.epos
+				else () (*error ("Local variable " ^ v.v_name ^ " used without being initialized") e.epos*)
 			end
 		| TVar (v,eo) ->
 			begin

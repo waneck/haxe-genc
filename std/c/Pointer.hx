@@ -56,7 +56,30 @@ abstract Pointer<T> to ConstPointer<T> {
 	public inline function int64():Int64 return cast this;
 }
 
+@:hxcNoHeader
+@:publicFields
+@:keep
+class GCArrayC<T> {
+    var ref:Pointer<T>;
+    var length:Int;
+}
+
+@:forward
+abstract GCRefArray<T>(Struct<GCArrayC<T>>) {}
+
+@:forward
+abstract GCVRefArray<T>(Struct<GCArrayC<T>>) {}
+
+@:forward
+abstract GCTPArray<T>(Struct<GCArrayC<T>>) {}
+
+@:forward
+abstract GCArray<T>(Struct<GCArrayC<T>>) {}
+
+abstract GCVRef<T>(Pointer<T>) from Pointer<T> {}
+
 @:coreType
+@:analyzer(no_simplification)
 abstract ConstPointer<T> {
 	public inline function new(ptr) this = ptr;
 

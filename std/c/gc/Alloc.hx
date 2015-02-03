@@ -3,6 +3,7 @@ package c.gc;
 import c.ConstSizeArray;
 import c.Pointer;
 import c.NInt.Int64;
+import c.NInt.UInt64;
 import c.Types;
 import c.Lib.dereference;
 import c.CStdio.*;
@@ -14,6 +15,7 @@ import c.gc.Alloc.MMan.*;
 
 #if !winapi
 @:include("<sys/mman.h>")
+@:include("<jemalloc/jemalloc.h>")
 extern class MMan {
 
     @:plain static var PROT_EXEC;
@@ -70,6 +72,7 @@ extern class MMan {
 class Utils {
 
     static function __init__(){
+		c.Lib.cCode("");
         c.Lib.cCode("
 #define LT(n) n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n
 
@@ -87,11 +90,40 @@ class Utils {
 
     static inline var one:Int64 = (1 : Int64);
 
+    @:analyzer(no_simplification)
+    @:keep
     static var logtable:ConstSizeArray<UChar,256>;
 
+    static function asm_bsrq(asm_inp:Int64){
+        var asm_res:UInt32 = 0;
+        c.Lib.cCode('
+            asm ("bsrq %1,%0"
+             : "=r" (asm_res)
+             : "r" (asm_inp)
+             : "cc");
+        ');
+        return asm_res;
+    }
+
+    static function asm_bsrl(asm_inp:Int){
+        var asm_res:Int = 0;
+        c.Lib.cCode('
+            asm ("bsrl %1,%0"
+             : "=r" (asm_res)
+             : "r" (asm_inp)
+             : "cc");
+        ');
+        return asm_res;
+    }
+
     static function log2_64(v:Int64):Int{
+
+
         var r:UInt;
         var t,tt,ttt:UInt;
+        #if GCC
+        return asm_bsrq(v);
+        #else
         if ( (ttt = (v >> 32).int32()) != 0) {
             if ((tt = (ttt >> 16)) != 0) {
                 r = ((t = (tt >> 8)) != 0) ? 56 + logtable[t] : 48 + logtable[tt];
@@ -104,6 +136,7 @@ class Utils {
             r = ((t = (v >> 8).int32()) != 0) ? 8 + logtable[t] : logtable[v.int32()];
         }
         return r;
+        #end
     }
 
     ;
@@ -121,11 +154,15 @@ class Utils {
     static function next_pow2_log2_32(v:Int):Int {
         var r:Int;
         var t,tt:Int;
+        #if GCC
+        r = asm_bsrl(v);
+        #else 
         if ((tt = (v >> 16))  != 0 ) {
             r = ((t = tt >> 8)  != 0) ? 24 + logtable[t] : 16 + logtable[tt];
         } else {
             r = ((t = (v >> 8)) != 0) ? 8 + logtable[t] : logtable[v];
         }
+        #end
         r += (((1 << r)-1) & v != 0) ? 1 : 0; // round up to next power of two
         return r;
     }
@@ -253,6 +290,7 @@ class FreeStack {
 }
 
 @:publicFields
+//@:analyzer(ignore)
 class Pool {
 
 
@@ -261,8 +299,8 @@ class Pool {
     var max:Int64;
     var idx:Int64;
     var committed:Int64;
-    var _fstack:Struct<FreeStack>;
-    var fstack:FreeStack;
+    var fstack:Struct<FreeStack>;
+    //var fstack:FreeStack;
     //var greystack:GreyStack;
     var markbits:Pointer<Int64>;
     var meta:Pointer<Char>;
@@ -272,7 +310,7 @@ class Pool {
     static inline function pcast<A,B>(p:Pointer<A>,_:Pointer<B>):Pointer<B> return cast p;
 
     function init(area:Area,psz_shift:Int){
-        fstack = _fstack;
+        //fstack = _fstack;
         sz_shift       = psz_shift;
 
         var obsize     = one << sz_shift;
@@ -290,7 +328,7 @@ class Pool {
         markbits      = meta.pcast(markbits);
         size          = obsize.int32();
 
-        fstack.init(obmax,cast meta,bitmapsize);
+        fstack.v.init(obmax,cast meta,bitmapsize);
 
         printf("%p pool_idx: %d idx:%d obsize: %llu obmax: %llu area:%p mem:%p sz_shift:%d\\n",[this,pool_idx,idx,obsize,obmax,area.mem,mem,sz_shift]);
         //Area.mem + ((one << (area.sz_shift)) * pool_idx);
@@ -311,7 +349,7 @@ class Pool {
     function grow(n:Int){
         //var so_far         = ( fstack.committed : Int64 ) << sz_shift;
         printf("growing by %d (* %d)\\n",[n,1 << sz_shift]);
-        if ( (idx+n) < fstack.committed) {
+        if ( (idx+n) < fstack.v.committed) {
 
             // we have enough committed mem in fstack
 
@@ -319,13 +357,13 @@ class Pool {
 
             var fsn = n < 64 ? 64 : n; // n is assumed to be a POT >= 64
 
-            var fsbm           = fstack.bitmap.int64();
-            var stack          = fstack.stack.int64();
+            var fsbm           = fstack.v.bitmap.int64();
+            var stack          = fstack.v.stack.int64();
             var mark           = markbits.int64();
 
 
-            var bm_cur         = fstack.committed >> 3;
-            var stack_cur      = fstack.committed >> 4;
+            var bm_cur         = fstack.v.committed >> 3;
+            var stack_cur      = fstack.v.committed >> 4;
 
             var stack_blocksz = fsn >> 4;        // bytes to grow freestack.stack (we need one int per 64 objects)
             var bm_blocksz    = fsn >> 3;        // bytes to grow freestack.bitmap and markbits
@@ -335,7 +373,7 @@ class Pool {
             var mark_res   = MMan.mcommit(cast mark+bm_cur, bm_blocksz, MEM_COMMIT, PAGE_READWRITE);
             var stack_res  = MMan.mcommit(cast stack+stack_cur, stack_blocksz, MEM_COMMIT, PAGE_READWRITE);
 
-            fstack.committed = fstack.committed + fsn;
+            fstack.v.committed = fstack.v.committed + fsn;
         }
 
         var data_cur       = idx << sz_shift;
@@ -348,8 +386,9 @@ class Pool {
     }
 
     function alloc():Pointer<Void> {
+        //printf("pool alloc this: %p \\n",[this]);
         var obidx:Int64;
-        if (fstack.empty) {
+        if (fstack.v.empty) {
             //printf("idx %llu max: %llu %p \\n",[idx,max,this]);
             if (idx < max){
                 obidx = idx;
@@ -361,19 +400,33 @@ class Pool {
                 return null;
             }
         } else {
-            obidx = fstack.pop();
+            obidx = fstack.v.pop();
         }
         var r = ( mem + (obidx << sz_shift) );
         return cast r;
     }
+    
+    function alloc_w_header(header:UInt64):Pointer<Void> {
+		var obj:c.gc.Headers.GenericHeader = cast alloc();
+		obj.header = header;
+		return cast obj;
+	}
+	
+	function alloc_w_header_tps(header:UInt64,tps:UInt64):Pointer<Void> {
+		var obj:c.gc.Headers.GenericHeader = cast alloc();
+		obj.header = header;
+		obj.tparms = tps;
+		return cast obj;
+	}
 
     function free(v:Pointer<Void>){
         var cp:Pointer<Char> = cast v;
         var obidx = (cp - mem).int64() >> sz_shift;
-        fstack.push(cast obidx);
+        fstack.v.push(cast obidx);
     }
 }
 
+//@:analyzer(ignore)
 @:publicFields
 class Area {
 
@@ -441,6 +494,8 @@ class Area {
         var mem = MMan.mmap(area_start.pointer(), size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_FIXED|MAP_NORESERVE|MAP_PRIVATE , -1, 0);
         if (mem == MMan.MAP_FAILED){
             trace("fatal: mmap failed.");
+        } else {
+            printf("mmap %p \\n",[mem]);
         }
         #else
         var mem = MMan.VirtualAlloc(area_start.pointer(), size, MEM_RESERVE, PAGE_READWRITE);
@@ -478,6 +533,7 @@ extern class Time {
     }
 }
 
+@:analyzer(ignore)
 @:publicFields
 class Bench {
     
@@ -517,6 +573,11 @@ class Bench {
             ps[idx] = cast alloc(sz);
             //printf("alloc: %p \\n",[ps[idx]]);
             ps[idx][0] = 123;
+            ps[idx][1] = 123;
+            ps[idx][2] = 123;
+            ps[idx][3] = 123;
+            ps[idx][0] = 123;
+            //ps[idx][0] = 123;
             ++idx;
         }
     }
@@ -535,8 +596,8 @@ class Bench {
         for (sz in sizes)for (ob in 0...div(OBS,4)){
             ps[idx] = cast alloc(sz);
             //printf("alloc: %p \\n",[ps[idx]]);
-            ps[idx][0] = 123;
-            ps[idx][3] = 123;
+            //ps[idx][0] = 123;
+            //ps[idx][3] = 123;
             idx+=4;
         }
     }
@@ -576,10 +637,10 @@ class Bench {
         area = Area.create(0);
         N = 250;
         mmlc = true;
-        var tsysmalloc = _run4();
+        var tsysmalloc = _run();
         //N = 1000;
         mmlc = false;
-        var tcustom = _run4();
+        var tcustom = _run();
         var tsys = tsysmalloc.float()/Time.CLOCKS_PER_SEC.float();
         var tcst = tcustom.float()/Time.CLOCKS_PER_SEC.float();
         

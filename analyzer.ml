@@ -216,7 +216,8 @@ module Simplifier = struct
 			with Exit ->
 				begin match follow e.etype with
 					| TAbstract({a_path = [],"Void"},_) -> true
-					| _ -> false
+					| _ ->
+						type_has_analyzer_option e.etype flag_no_simplification
 				end
 		in
 		let has_unbound = ref false in
