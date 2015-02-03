@@ -1,3 +1,24 @@
+/*
+ * Copyright (C)2005-2015 Haxe Foundation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
 package haxe.io;
 
 /**
@@ -6,27 +27,25 @@ package haxe.io;
 **/
 class FPHelper {
 
-	#if !(java || cs)
+	#if neko_v21
+	// stored in helper
+	#elseif neko
+	static var i64tmp = new neko.vm.Tls<Int64>();
+	#elseif !(java || cs)
 	static var i64tmp = Int64.ofInt(0);
 	#end
 
 	#if neko
 		#if neko_v21
-		static var helper = neko.NativeArray.alloc(2);
+		static var helpers = new neko.vm.Tls<neko.NativeArray<Dynamic>>();
 		#else
-		static var helperf = neko.NativeString.alloc(4);
-		static var helperd = neko.NativeString.alloc(8);
+		static var helperf = new neko.vm.Tls<neko.NativeString>();
+		static var helperd = new neko.vm.Tls<neko.NativeString>();
 		static var _float_of_bytes = neko.Lib.load("std","float_of_bytes",2);
 		static var _double_of_bytes = neko.Lib.load("std","double_of_bytes",2);
 		static var _float_bytes = neko.Lib.load("std","float_bytes",2);
 		static var _double_bytes = neko.Lib.load("std","double_bytes",2);
 		#end
-	#elseif cpp
-		static var helper = haxe.io.Bytes.alloc(8);
-		static var _float_of_bytes = cpp.Lib.load("std","float_of_bytes",2);
-		static var _double_of_bytes = cpp.Lib.load("std","double_of_bytes",2);
-		static var _float_bytes = cpp.Lib.load("std","float_bytes",2);
-		static var _double_bytes = cpp.Lib.load("std","double_bytes",2);
 	#elseif flash9
 		static var helper = {
 			var b = new flash.utils.ByteArray();
@@ -45,7 +64,9 @@ class FPHelper {
 			#if neko_v21
 			return untyped $itof(i);
 			#else
-			var helper = helperf;
+			var helper = helperf.value;
+			if( helper == null )
+				helperf.value = helper = neko.NativeString.alloc(4);
 			untyped $sset(helper,0,i&0xFF);
 			untyped $sset(helper,1,(i>>8)&0xFF);
 			untyped $sset(helper,2,(i>>16)&0xFF);
@@ -53,13 +74,7 @@ class FPHelper {
 			return _float_of_bytes(helper,false);
 			#end
 		#elseif cpp
-			// TODO : more direct version
-			var helper = helper;
-			helper.set(0,i);
-			helper.set(1,i>>8);
-			helper.set(2,i>>16);
-			helper.set(3,i>>>24);
-			return _float_of_bytes(helper.getData(),false);
+			return untyped __global__.__hxcpp_reinterpret_le_int32_as_float32(i);
 		#elseif cs
 			var helper = new SingleHelper(0);
 			if( cs.system.BitConverter.IsLittleEndian )
@@ -100,9 +115,7 @@ class FPHelper {
 			return untyped $sget(r,0) | ($sget(r,1)<<8) | ($sget(r,2)<<16) | ($sget(r,3)<<24);
 			#end
 		#elseif cpp
-			// TODO : no allocation version
-			var r = haxe.io.Bytes.ofData(_float_bytes(f,false));
-			return r.getI32(0);
+			return untyped __global__.__hxcpp_reinterpret_float32_as_le_int32(f);
 		#elseif cs
 			var helper = new SingleHelper(f);
 			if( cs.system.BitConverter.IsLittleEndian )
@@ -138,7 +151,9 @@ class FPHelper {
 			#if neko_v21
 			return untyped $itod(low,high);
 			#else
-			var helper = helperd;
+			var helper = helperd.value;
+			if( helper == null )
+				helperd.value = helper = neko.NativeString.alloc(8);
 			untyped $sset(helper,0,low&0xFF);
 			untyped $sset(helper,1,(low>>8)&0xFF);
 			untyped $sset(helper,2,(low>>16)&0xFF);
@@ -150,17 +165,7 @@ class FPHelper {
 			return _double_of_bytes(helper,false);
 			#end
 		#elseif cpp
-			// TODO : more direct version
-			var helper = helper;
-			helper.set(0,low);
-			helper.set(1,low>>8);
-			helper.set(2,low>>16);
-			helper.set(3,low>>>24);
-			helper.set(4,high);
-			helper.set(5,high>>8);
-			helper.set(6,high>>16);
-			helper.set(7,high>>>24);
-			return _double_of_bytes(helper.getData(),false);
+			return untyped __global__.__hxcpp_reinterpret_le_int32s_as_float64(low,high);
 		#elseif cs
 			var helper = new FloatHelper(0);
 			if( cs.system.BitConverter.IsLittleEndian )
@@ -198,20 +203,28 @@ class FPHelper {
 	/**
 		Returns an Int64 representing the bytes representation of the double precision IEEE float value.
 		WARNING : for performance reason, the same Int64 value might be reused every time. Copy its low/high values before calling again.
+		We still ensure that this is safe to use in a multithread environment
 	**/
-	#if neko_v21 inline #end
 	public static function doubleToI64( v : Float ) : Int64 {
 		#if neko
 			#if neko_v21
-			var helper = helper, i64 = i64tmp;
-			untyped $dtoi(v,helper);
+			var helper = helpers.value;
+			if( helper == null ) {
+				helpers.value = helper = neko.NativeArray.alloc(2);
+				helper[0] = neko.NativeArray.alloc(2);
+				helper[1] = haxe.Int64.ofInt(0);
+			}
+			var i64 : haxe.Int64 = helper[1], int2 = helper[0];
+			untyped $dtoi(v,int2);
 			@:privateAccess {
-				i64.low = helper[0];
-				i64.high = helper[1];
+				i64.low = int2[0];
+				i64.high = int2[1];
 			}
 			return i64;
 			#else
-			var r = _double_bytes(v,false), i64 = i64tmp;
+			var r = _double_bytes(v,false), i64 = i64tmp.value;
+			if( i64 == null )
+				i64 = i64tmp.value = haxe.Int64.ofInt(0);
 			@:privateAccess {
 				i64.low = untyped $sget(r,0) | ($sget(r,1)<<8) | ($sget(r,2)<<16) | ($sget(r,3)<<24);
 				i64.high =  untyped $sget(r,4) | ($sget(r,5)<<8) | ($sget(r,6)<<16) | ($sget(r,7)<<24);
@@ -219,11 +232,10 @@ class FPHelper {
 			return i64;
 			#end
 		#elseif cpp
-			// TODO : no allocation version
-			var r = haxe.io.Bytes.ofData(_double_bytes(v,false)), i64 = i64tmp;
+			var i64 = i64tmp;
 			@:privateAccess {
-				i64.low = r.getI32(0);
-				i64.high = r.getI32(4);
+				i64.low = untyped __global__.__hxcpp_reinterpret_float64_as_le_int32_low(v);
+				i64.high = untyped __global__.__hxcpp_reinterpret_float64_as_le_int32_high(v);
 			}
 			return i64;
 		#elseif java

@@ -263,7 +263,6 @@ let get_tdef mt = match mt with | TTypeDecl t -> t | _ -> assert false
 let mk_mt_access mt pos = { eexpr = TTypeExpr(mt); etype = anon_of_mt mt; epos = pos }
 
 let is_void t = match follow t with
-	| TEnum({ e_path = ([], "Void") }, [])
 	| TAbstract ({ a_path = ([], "Void") },[]) ->
 			true
 	| _ -> false
@@ -3706,7 +3705,6 @@ struct
 					in
 
 					let may_cast = match follow call_expr.etype with
-						| TEnum({ e_path = ([], "Void")}, [])
 						| TAbstract ({ a_path = ([], "Void") },[]) -> (fun e -> e)
 						| _ -> mk_cast call_expr.etype
 					in
@@ -3757,7 +3755,6 @@ struct
 						let vo, _ = List.nth args (i * 2 + 1) in
 
 						let needs_cast, is_float = match t, like_float t && not (like_i64 t) with
-							| TInst({ cl_path = ([], "Float") }, []), _
 							| TAbstract({ a_path = ([], "Float") },[]), _ -> false, true
 							| _, true -> true, true
 							| _ -> false,false
@@ -5253,7 +5250,6 @@ struct
 
 	let add_assign gen add_statement expr =
 		match expr.eexpr, follow expr.etype with
-			| _, TEnum({ e_path = ([],"Void") },[])
 			| _, TAbstract ({ a_path = ([],"Void") },[])
 			| TThrow _, _ ->
 				add_statement expr;
@@ -5290,7 +5286,6 @@ struct
 				right
 			| _ ->
 				match follow right.etype with
-					| TEnum( { e_path = ([], "Void") }, [] )
 					| TAbstract ({ a_path = ([], "Void") },[]) ->
 						right
 					| _ -> trace (debug_expr right); assert false (* a statement is required *)
@@ -8377,7 +8372,6 @@ struct
 			(* as Array<Dynamic> *)
 			let args, ret = get_args t in
 			let ret = match follow ret with
-				| TEnum({ e_path = ([], "Void") }, [])
 				| TAbstract ({ a_path = ([], "Void") },[]) -> ret
 				| _ -> ret
 			in
@@ -9175,40 +9169,6 @@ struct
 
 		let priority = solve_deps name [DBefore TArrayTransform.priority]
 
-		let ensure_local gen cond =
-			let exprs_before, new_cond = match cond.eexpr with
-				| TLocal v ->
-					[], cond
-				| _ ->
-					let v = mk_temp gen "cond" cond.etype in
-					[ { eexpr = TVar(v, Some cond); etype = gen.gcon.basic.tvoid; epos = cond.epos } ], mk_local v cond.epos
-			in
-			exprs_before, new_cond
-
-		let get_index gen cond cls tparams =
-			{ (mk_field_access gen { cond with etype = TInst(cls, tparams) } "index" cond.epos) with etype = gen.gcon.basic.tint }
-
-		(* stolen from Hugh's hxcpp sources *)
-		let tmatch_params_to_vars params =
-			(match params with
-			| None | Some [] -> []
-			| Some l ->
-				let n = ref (-1) in
-				List.fold_left
-					(fun acc v -> incr n; match v with None -> acc | Some v -> (v,!n) :: acc) [] l)
-
-(*		 let tmatch_params_to_exprs gen params cond_local =
-			let vars = tmatch_params_to_vars params in
-			let cond_array = { (mk_field_access gen cond_local "params" cond_local.epos) with etype = gen.gcon.basic.tarray t_empty } in
-			let tvars = List.map (fun (v, n) ->
-				(v, Some({ eexpr = TArray(cond_array, mk_int gen n cond_array.epos); etype = t_dynamic; epos = cond_array.epos }))
-			) vars in
-			match vars with
-				| [] ->
-						[]
-				| _ ->
-						[ { eexpr = TVar(tvars); etype = gen.gcon.basic.tvoid; epos = cond_local.epos } ]
- *)
 		let traverse gen t opt_get_native_enum_tag =
 			let rec run e =
 				let get_converted_enum_type et =
@@ -9318,7 +9278,7 @@ struct
 		let conforms_cfs has_next next =
 			try (match follow has_next.cf_type with
 				| TFun([],ret) when
-					(match follow ret with | TEnum({ e_path = ([], "Bool") }, []) -> () | _ -> raise Not_found) ->
+					(match follow ret with | TAbstract({ a_path = ([], "Bool") }, []) -> () | _ -> raise Not_found) ->
 						()
 				| _ -> raise Not_found);
 			(match follow next.cf_type with

@@ -39,11 +39,8 @@ let rec is_cs_basic_type t =
 	match follow t with
 		| TInst( { cl_path = (["haxe"], "Int32") }, [] )
 		| TInst( { cl_path = (["haxe"], "Int64") }, [] )
-		| TInst( { cl_path = ([], "Int") }, [] )
 		| TAbstract ({ a_path = ([], "Int") },[])
-		| TInst( { cl_path = ([], "Float") }, [] )
 		| TAbstract ({ a_path = ([], "Float") },[])
-		| TEnum( { e_path = ([], "Bool") }, [] )
 		| TAbstract ({ a_path = ([], "Bool") },[]) ->
 			true
 		| TAbstract ({ a_path = (["cs"], "Pointer") },_) ->
@@ -111,9 +108,7 @@ let is_tparam t =
 let rec is_int_float t =
 	match follow t with
 		| TInst( { cl_path = (["haxe"], "Int32") }, [] )
-		| TInst( { cl_path = ([], "Int") }, [] )
 		| TAbstract ({ a_path = ([], "Int") },[])
-		| TInst( { cl_path = ([], "Float") }, [] )
 		| TAbstract ({ a_path = ([], "Float") },[]) ->
 			true
 		| TAbstract _ when like_float t && not (like_i64 t) ->
@@ -123,7 +118,6 @@ let rec is_int_float t =
 
 let is_bool t =
 	match follow t with
-		| TEnum( { e_path = ([], "Bool") }, [] )
 		| TAbstract ({ a_path = ([], "Bool") },[]) ->
 			true
 		| _ -> false
@@ -780,15 +774,10 @@ let configure gen =
 	in
 
 	gen.gfollow#add ~name:"follow_basic" (fun t -> match t with
-			| TEnum ({ e_path = ([], "Bool") }, [])
 			| TAbstract ({ a_path = ([], "Bool") },[])
-			| TEnum ({ e_path = ([], "Void") }, [])
 			| TAbstract ({ a_path = ([], "Void") },[])
-			| TInst ({ cl_path = ([],"Float") },[])
 			| TAbstract ({ a_path = ([],"Float") },[])
-			| TInst ({ cl_path = ([],"Int") },[])
 			| TAbstract ({ a_path = ([],"Int") },[])
-			| TType ({ t_path = [],"UInt" },[])
 			| TAbstract ({ a_path = [],"UInt" },[])
 			| TType ({ t_path = ["cs"], "Int64" },[])
 			| TAbstract ({ a_path = ["cs"], "Int64" },[])
@@ -943,15 +932,10 @@ let configure gen =
 	let rec t_s t =
 		match real_type t with
 			(* basic types *)
-			| TEnum ({ e_path = ([], "Bool") }, [])
 			| TAbstract ({ a_path = ([], "Bool") },[]) -> "bool"
-			| TEnum ({ e_path = ([], "Void") }, [])
 			| TAbstract ({ a_path = ([], "Void") },[]) -> "object"
-			| TInst ({ cl_path = ([],"Float") },[])
 			| TAbstract ({ a_path = ([],"Float") },[]) -> "double"
-			| TInst ({ cl_path = ([],"Int") },[])
 			| TAbstract ({ a_path = ([],"Int") },[]) -> "int"
-			| TType ({ t_path = [],"UInt" },[])
 			| TAbstract ({ a_path = [],"UInt" },[]) -> "uint"
 			| TType ({ t_path = ["cs"], "Int64" },[])
 			| TAbstract ({ a_path = ["cs"], "Int64" },[]) -> "long"
@@ -1024,7 +1008,6 @@ let configure gen =
 
 	let rett_s t =
 		match t with
-			| TEnum ({e_path = ([], "Void")}, [])
 			| TAbstract ({ a_path = ([], "Void") },[]) -> "void"
 			| _ -> t_s t
 	in
@@ -1757,21 +1740,49 @@ let configure gen =
 			ret
 	in
 
-	let get_string_params cl_params =
+	let get_string_params hxgen cl_params =
 		match cl_params with
 			| [] ->
 				("","")
 			| _ ->
-				let params = sprintf "<%s>" (String.concat ", " (List.map (fun (_, tcl) -> match follow tcl with | TInst(cl, _) -> snd cl.cl_path | _ -> assert false) cl_params)) in
-				let params_extends = List.fold_left (fun acc (name, t) ->
-					match run_follow gen t with
-						| TInst (cl, p) ->
-							(match cl.cl_implements with
-								| [] -> acc
-								| _ -> acc) (* TODO
-								| _ -> (sprintf " where %s : %s" name (String.concat ", " (List.map (fun (cl,p) -> path_param_s (TClassDecl cl) cl.cl_path p) cl.cl_implements))) :: acc ) *)
-						| _ -> trace (t_s t); assert false (* FIXME it seems that a cl_params will never be anything other than cl.cl_params. I'll take the risk and fail if not, just to see if that confirms *)
-				) [] cl_params in
+				let get_param_name t = match follow t with TInst(cl, _) -> snd cl.cl_path | _ -> assert false in
+				let params = sprintf "<%s>" (String.concat ", " (List.map (fun (_, tcl) -> get_param_name tcl) cl_params)) in
+				let params_extends =
+					if hxgen then
+						[""]
+					else
+						List.fold_left (fun acc (name, t) ->
+							match run_follow gen t with
+								| TInst({cl_kind = KTypeParameter constraints}, _) when constraints <> [] ->
+									(* base class should come before interface constraints *)
+									let base_class_constraints = ref [] in
+									let other_constraints = List.fold_left (fun acc t ->
+										match follow t with
+											(* string is implicitly sealed, maybe haxe should have it final as well *)
+											| TInst ({ cl_path=[],"String" }, []) ->
+												acc
+
+											(* non-sealed class *)
+											| TInst ({ cl_interface = false; cl_meta = meta},_) when not (Meta.has Meta.Final meta) ->
+												base_class_constraints := (t_s t) :: !base_class_constraints;
+												acc;
+
+											(* interface *)
+											| TInst ({ cl_interface = true}, _) ->
+												(t_s t) :: acc
+
+											(* skip anything other *)
+											| _ ->
+												acc
+									) [] constraints in
+
+									let s_constraints = (!base_class_constraints @ other_constraints) in
+									if s_constraints <> [] then
+										(sprintf " where %s : %s" (get_param_name t) (String.concat ", " s_constraints) :: acc)
+									else
+										acc;
+								| _ -> acc
+						) [] cl_params in
 				(params, String.concat " " params_extends)
 	in
 
@@ -1935,7 +1946,6 @@ let configure gen =
 				let is_override = is_override || match cf.cf_name, follow cf.cf_type with
 					| "Equals", TFun([_,_,targ], tret) ->
 						(match follow targ, follow tret with
-							| TDynamic _, TEnum({ e_path = ([], "Bool") }, [])
 							| TDynamic _, TAbstract({ a_path = ([], "Bool") }, []) -> true
 							| _ -> false)
 					| "GetHashCode", TFun([],_) -> true
@@ -1957,7 +1967,7 @@ let configure gen =
 				(* public static void funcName *)
 				gen_field_decl w visibility v_n modifiers (if not is_new then (rett_s (run_follow gen ret_type)) else "") (change_field name);
 
-				let params, params_ext = get_string_params cf.cf_params in
+				let params, params_ext = get_string_params (is_hxgen (TClassDecl cl)) cf.cf_params in
 				(* <T>(string arg1, object arg2) with T : object *)
 				(match cf.cf_expr with
 				| Some { eexpr = TFunction tf } ->
@@ -2280,11 +2290,11 @@ let configure gen =
 		let modifiers = [access] @ modifiers in
 		print w "%s %s %s" (String.concat " " modifiers) clt (change_clname (snd cl.cl_path));
 		(* type parameters *)
-		let params, params_ext = get_string_params cl.cl_params in
+		let params, params_ext = get_string_params (is_hxgen (TClassDecl cl)) cl.cl_params in
 		let extends_implements = (match cl.cl_super with | None -> [] | Some (cl,p) -> [path_param_s (TClassDecl cl) cl.cl_path p]) @ (List.map (fun (cl,p) -> path_param_s (TClassDecl cl) cl.cl_path p) cl.cl_implements) in
 		(match extends_implements with
-			| [] -> print w "%s %s" params params_ext
-			| _ -> print w "%s : %s %s" params (String.concat ", " extends_implements) params_ext);
+			| [] -> print w "%s%s " params params_ext
+			| _ -> print w "%s : %s%s " params (String.concat ", " extends_implements) params_ext);
 		(* class head ok: *)
 		(* public class Test<A> : X, Y, Z where A : Y *)
 		begin_block w;
@@ -2675,7 +2685,7 @@ let configure gen =
 
 		let is_unsafe = { eexpr = TConst(TBool is_unsafe); etype = basic.tbool; epos = pos } in
 
-		let should_cast = match main_expr.etype with | TInst({ cl_path = ([], "Float") }, []) -> false | _ -> true in
+		let should_cast = match main_expr.etype with | TAbstract({ a_path = ([], "Float") }, []) -> false | _ -> true in
 		let infer = mk_static_field_access_infer runtime_cl fn_name field_expr.epos [] in
 		let first_args =
 			[ field_expr; { eexpr = TConst(TString field); etype = basic.tstring; epos = pos } ]
@@ -2776,11 +2786,6 @@ let configure gen =
 			| _ -> true
 	in
 
-	let is_type_param e = match follow e with
-		| TInst( { cl_kind = KTypeParameter _ },[]) -> true
-		| _ -> false
-	in
-
 	let is_dynamic_expr e = is_dynamic e.etype || match e.eexpr with
 		| TField(tf, f) -> field_is_dynamic tf.etype (f)
 		| _ -> false
@@ -2790,13 +2795,10 @@ let configure gen =
 		| TType({ t_path = ([], "Null") }, [t]) ->
 			(match follow t with
 				| TInst({ cl_path = ([], "String") }, [])
-				| TInst({ cl_path = ([], "Float") }, [])
 				| TAbstract ({ a_path = ([], "Float") },[])
 				| TInst({ cl_path = (["haxe"], "Int32")}, [] )
 				| TInst({ cl_path = (["haxe"], "Int64")}, [] )
-				| TInst({ cl_path = ([], "Int") }, [])
 				| TAbstract ({ a_path = ([], "Int") },[])
-				| TEnum({ e_path = ([], "Bool") }, [])
 				| TAbstract ({ a_path = ([], "Bool") },[]) -> Some t
 				| TAbstract _ when like_float t -> Some t
 				| t when is_cs_basic_type t -> Some t
@@ -2839,9 +2841,9 @@ let configure gen =
 				(
 					(* dont touch (v == null) and (null == v) comparisons because they are handled by HardNullableSynf later *)
 					match e1.eexpr, e2.eexpr with
-					| TConst(TNull), _ when is_null_expr e2 ->
+					| TConst(TNull), _ when (not (is_tparam e2.etype) && is_dynamic e2.etype) || is_null_expr e2 ->
 						false
-					| _, TConst(TNull) when is_null_expr e1 ->
+					| _, TConst(TNull) when (not (is_tparam e1.etype) && is_dynamic e1.etype) || is_null_expr e1 ->
 						false
 					| _, TLocal { v_name = "__undefined__" } ->
 						false
@@ -2850,7 +2852,7 @@ let configure gen =
 				)
 			| TBinop (Ast.OpAssignOp Ast.OpAdd, e1, e2) ->
 				is_dynamic_expr e1 || is_null_expr e1 || is_string e.etype
-			| TBinop (Ast.OpAdd, e1, e2) -> is_dynamic e1.etype || is_dynamic e2.etype || is_type_param e1.etype || is_type_param e2.etype || is_string e1.etype || is_string e2.etype || is_string e.etype
+			| TBinop (Ast.OpAdd, e1, e2) -> is_dynamic e1.etype || is_dynamic e2.etype || is_tparam e1.etype || is_tparam e2.etype || is_string e1.etype || is_string e2.etype || is_string e.etype
 			| TBinop (Ast.OpLt, e1, e2)
 			| TBinop (Ast.OpLte, e1, e2)
 			| TBinop (Ast.OpGte, e1, e2)
@@ -2965,7 +2967,6 @@ let configure gen =
 		match e.eexpr with
 			| TSwitch(cond, cases, def) ->
 				(match gen.gfollow#run_f cond.etype with
-					| TInst({ cl_path = ([], "Int") },[])
 					| TAbstract ({ a_path = ([], "Int") },[])
 					| TInst({ cl_path = ([], "String") },[]) ->
 						(List.exists (fun (c,_) ->

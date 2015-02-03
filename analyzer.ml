@@ -91,7 +91,7 @@ let rec awkward_get_enum_index com e = match e.eexpr with
 	nodes without worrying about their placement.
 *)
 module Simplifier = struct
-	let mk_block_context com gen_temp =
+	let mk_block_context com =
 		let block_el = ref [] in
 		let push e = block_el := e :: !block_el in
 		let assign ev e =
@@ -140,7 +140,7 @@ module Simplifier = struct
 			loop e
 		in
 		let declare_temp t eo p =
-			let v = gen_temp t in
+			let v = alloc_var "tmp" t in
 			v.v_meta <- [Meta.CompilerGenerated,[],p];
 			let e_v = mk (TLocal v) t p in
 			let declare e_init =
@@ -194,8 +194,8 @@ module Simplifier = struct
 		in
 		block,declare_temp,fun () -> !block_el
 
-	let apply com gen_temp e =
-		let block,declare_temp,close_block = mk_block_context com gen_temp in
+	let apply com e =
+		let block,declare_temp,close_block = mk_block_context com in
 		let skip_binding ?(allow_tlocal=false) e =
 			let rec loop e =
 				match e.eexpr with
@@ -1143,7 +1143,7 @@ module EffectChecker = struct
 		in
 		let e = if is_var_expression then
 			(* var initialization expressions are like assignments, so let's cheat a bit here *)
-			snd (Simplifier.apply com (alloc_var "tmp") (Codegen.binop OpAssign (mk (TConst TNull) t_dynamic e.epos) e e.etype e.epos))
+			snd (Simplifier.apply com (Codegen.binop OpAssign (mk (TConst TNull) t_dynamic e.epos) e e.etype e.epos))
 		else e
 		in
 		let rec loop e = match e.eexpr with
@@ -1379,9 +1379,6 @@ module Run = struct
 	open Config
 
 	let run_on_expr com config is_var_expression e =
-		let rec gen_local t =
-			alloc_var "tmp" t
-		in
 		let do_simplify = (not (Common.defined com Define.NoSimplify) ) && match com.platform with
 			| Cpp when Common.defined com Define.Cppia -> false
 			| Cpp | Flash8 | Python | C -> true
@@ -1395,7 +1392,7 @@ module Run = struct
 		in
 		try
 			let has_unbound,e = if do_simplify || config.analyzer_use then
-				with_timer "analyzer-simplify-apply" (fun () -> Simplifier.apply com gen_local e)
+				with_timer "analyzer-simplify-apply" (fun () -> Simplifier.apply com e)
 			else
 				false,e
 			in
