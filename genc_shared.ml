@@ -79,6 +79,148 @@ end
 
 (* Static extensions for types *)
 module ExtType = struct
+
+	type type_kind =
+		| KBool
+		| KInteger of int
+		| KFloat
+		| KNullBool
+		| KNullInteger of int
+		| KNullFloat
+		| KString
+		| KPointer of type_kind
+		| KStructure
+		| KFunction
+		| KVoid
+		| KNamed of string
+		| KDynamic
+		| KTypeParameter
+		| KVarArgs
+
+	type cast_kind =
+		| CastNone
+		| CastError
+		| CastNext of cast_kind * cast_kind
+		| CastInteger
+		| CastIntegerToFloat
+		| CastFloatToInteger
+		| CastIntegerToPointer
+		| CastPointerToInteger
+		| CastPointerToPointer of cast_kind
+		| CastBox
+		| CastUnbox
+		| CastToDynamic
+		| CastFromDynamic
+
+	let rec string_of_type_kind = function
+		| KBool -> "KBool"
+		| KInteger i -> "KInteger " ^ (string_of_int i)
+		| KFloat -> "KFloat"
+		| KNullBool -> "KNullBool"
+		| KNullInteger i -> "KNullInteger " ^ (string_of_int i)
+		| KNullFloat -> "KNullFloat"
+		| KString -> "KString"
+		| KPointer k -> "KPointer " ^ (string_of_type_kind k)
+		| KStructure -> "KStructure"
+		| KFunction -> "KFunction"
+		| KVoid -> "KVoid"
+		| KNamed s -> "KNamed " ^ s
+		| KDynamic -> "KDynamic"
+		| KTypeParameter -> "KTypeParameter"
+		| KVarArgs -> "KVarArgs"
+
+	let rec classify_type t = match follow t with
+		| TInst({cl_kind = Type.KTypeParameter _},_) ->
+			KPointer KTypeParameter
+		| TInst(c,tl) ->
+			KPointer (KNamed (s_type_path c.cl_path))
+		| TEnum(en,tl) ->
+			KPointer (KNamed (s_type_path en.e_path))
+		| TAbstract(a,tl) ->
+			begin match a.a_path with
+			| [],"Int" ->
+				if Type.is_null t then
+					KNullInteger 32
+				else
+					KInteger 32
+			| [],"Float" ->
+				if Type.is_null t then
+					KNullFloat
+				else
+					KFloat
+			| [],"Bool" ->
+				if Type.is_null t then
+					KNullBool
+				else
+					KBool
+			| [],"Void" ->
+				KVoid
+			| ["c"],("ConstPointer" | "Pointer") ->
+				KPointer (classify_type (List.hd tl))
+			| ["c"],"VarArg" ->
+				KVarArgs
+			| _ ->
+				classify_type (Abstract.get_underlying_type a tl)
+			end
+		| TFun _ ->
+			KFunction
+		| TAnon _ ->
+			KStructure
+		| TDynamic _ | TMono _ ->
+			KDynamic
+		| TLazy _ | TType _ ->
+			assert false
+
+	let rec cast_type k1 k2 = match k1,k2 with
+		| KInteger i1,KInteger i2 ->
+			if i1 = i2 then CastNone else CastInteger
+		| KInteger _,KFloat ->
+			CastIntegerToFloat
+		| KFloat,KInteger _ ->
+			CastFloatToInteger
+		| (KInteger _ | KFloat | KBool),KPointer KTypeParameter ->
+			CastBox
+		| KPointer KTypeParameter,(KInteger _ | KFloat | KBool) ->
+			CastUnbox
+		| KInteger i1,KNullInteger i2 ->
+			if i1 = i2 then
+				CastBox
+			else
+				CastNext(CastInteger,CastBox)
+		| KNullInteger i1,KInteger i2 ->
+			if i1 = i2 then
+				CastUnbox
+			else
+				CastNext(CastInteger,CastUnbox)
+		| KFloat,KNullFloat ->
+			CastBox
+		| KNullFloat,KFloat ->
+			CastUnbox
+		| KInteger _,KNullFloat ->
+			CastNext(CastIntegerToFloat,CastBox)
+		| KPointer _,KInteger _ ->
+			CastIntegerToPointer
+		| KInteger _,KPointer _ ->
+			CastPointerToInteger
+		| KPointer k1,KPointer k2 ->
+			CastPointerToPointer(cast_type k1 k2)
+		| (KNullFloat | KNullInteger _ | KNullBool),KVarArgs ->
+			CastUnbox
+		| (KInteger _ | KFloat | KBool),KVarArgs ->
+			CastNone
+		| KNamed _,KNamed _
+		| KDynamic,KDynamic
+		| KVoid,KVoid
+		| KFloat,KFloat
+		| KFunction,KFunction ->
+			CastNone
+		| KDynamic,_ ->
+			CastFromDynamic
+		| _,KDynamic ->
+			CastToDynamic
+		| _ ->
+			CastError
+
 	let is_runtime_string_type t = match follow t with
 		| TInst({cl_path=[],"String"},_) -> true
 		| _ -> false
@@ -95,7 +237,7 @@ module ExtType = struct
 		| _ -> false
 
 	let is_type_parameter t = match follow t with
-		| TInst({cl_kind = KTypeParameter _},_) -> true
+		| TInst({cl_kind = Type.KTypeParameter _},_) -> true
 		| _ -> false
 
 	let is_var_args_type t = match follow t with
