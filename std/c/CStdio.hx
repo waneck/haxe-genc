@@ -79,7 +79,7 @@ extern class CStdio {
 
 	@:plain static public function scanf(format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 
-	@:plain static public function printf(format:ConstPointer<Char>, rest:Array<VarArg>):Void;
+	@:plain static public function printf(format:ConstPointer<Char>, rest:Array<VarArg>):Int;
 
 	@:plain static public function sprintf(str:Pointer<Char>, format:ConstPointer<Char>, rest:Array<VarArg>):Void;
 

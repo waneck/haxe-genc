@@ -200,6 +200,7 @@ module Define = struct
 		| JsFlatten
 		| KeepOldOutput
 		| LoopUnrollMaxCost
+		| Llvm
 		| Macro
 		| MacroTimes
 		| NekoSource
@@ -284,6 +285,7 @@ module Define = struct
 		| LoopUnrollMaxCost -> ("loop_unroll_max_cost","Maximum cost (number of expressions * iterations) before loop unrolling is canceled (default 250)")
 		| Macro -> ("macro","Defined when we compile code in the macro context")
 		| MacroTimes -> ("macro_times","Display per-macro timing when used with --times")
+		| Llvm -> ("llvm","Generate LLVM")
 		| NetVer -> ("net_ver", "<version:20-45> Sets the .NET version to be targeted")
 		| NetTarget -> ("net_target", "<name> Sets the .NET target. Defaults to \"net\". xbox, micro (Micro Framework), compact (Compact Framework) are some valid values")
 		| NekoSource -> ("neko_source","Output neko source instead of bytecode")
@@ -438,6 +440,7 @@ module MetaInfo = struct
 		| NoDebug -> ":noDebug",("Does not generate debug information into the Swf even if -debug is set",[UsedOnEither [TClass;TClassField];Platform Flash])
 		| NoDoc -> ":noDoc",("Prevents a type from being included in documentation generation",[])
 		| NoExpr -> ":noExpr",("Internally used to mark abstract fields which have no expression by design",[Internal])
+		| NoFollow -> ":noFollow",("Does not follow to the underlying type at generator-level",[UsedOn TAbstract])
 		| NoImportGlobal -> ":noImportGlobal",("Prevents a static field from being imported with import Class.*",[UsedOn TAnyField])
 		| NoPackageRestrict -> ":noPackageRestrict",("Allows a module to be accessed across all targets if found on its first type.",[Internal])
 		| NoStack -> ":noStack",("",[Platform Cpp])
@@ -666,6 +669,20 @@ let get_config com =
 			pf_overload = true;
 			pf_pattern_matching = false;
 			pf_can_skip_non_nullable_argument = true;
+		}
+	| C when defined Define.Llvm ->
+		{
+			pf_static = true;
+			pf_sys = true;
+			pf_locals_scope = true;
+			pf_captured_scope = true;
+			pf_unique_locals = false;
+			pf_capture_policy = CPWrapRef;
+			pf_pad_nulls = true;
+			pf_add_final_return = true;
+			pf_overload = false;
+			pf_pattern_matching = false;
+			pf_can_skip_non_nullable_argument = false;
 		}
 	| C ->
 		{

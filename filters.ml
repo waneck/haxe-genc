@@ -1064,7 +1064,7 @@ let run com tctx main =
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			blockify_ast;
 			( if (Common.defined com Define.NoSimplify) || (Common.defined com Define.Cppia) ||
-						( match com.platform with Cpp | Flash8 | C -> false | _ -> true ) then
+						( match com.platform with Cpp | Flash8 | C -> defined com Define.Llvm | _ -> true ) then
 					fun e -> e
 				else
 					fun e ->

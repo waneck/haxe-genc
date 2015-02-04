@@ -29,10 +29,8 @@ import c.Types.Short;
 import c.CStdio;
 import c.CString;
 import c.NInt.Int64;
-import c.gc.Memory;
-import c.gc.GC;
 
-//@:coreApi
+@:coreApi
 @:final class Array<T> implements ArrayAccess<T>
 {
 	public var length(default,null) : Int;
@@ -43,389 +41,107 @@ import c.gc.GC;
 	public function new() : Void
 	{
 		this.length = 0;
-		this.__a = cast __alloc_mem(1,8); // TODO: fix wasting the allocation
-		this.__byte_length = 1;
+		var byteLength = Lib.sizeof(new c.TypeReference<T>());
+		this.__a = cast __alloc_mem(byteLength); // TODO: fix wasting the allocation
+		this.__byte_length = byteLength;
 	}
 
+	@:specialize
 	private static function __new<T>(len:Int):Array<T> {
-		var ret = new Memory<Array<T>>().get();
-		ret.__a = __alloc_mem(len,Lib.sizeof(new TypeReference<Pointer<Char>>()));
+		var ret = new Array();
+		ret.__a = __alloc_mem(len);
 		ret.__byte_length = len;
 		return cast ret;
 	}
 
-	private static function __new_8<T>(len:Int):Array<Char> {
-		var ret = new Memory<Array<Char>>().get();
-		ret.__a = ret.__alloc_mem_8(len);
-		ret.__byte_length = len;
-		return cast ret;
-	}
-
-	private static function __new_16<T>(len:Int):Array<Short> {
-		var ret = new Memory<Array<Short>>().get();
-		ret.__a = ret.__alloc_mem_16(len);
-		ret.__byte_length = len;
-		return cast ret;
-	}
-
-	private static function __new_32<T>(len:Int):Array<Int> {
-		var ret = new Memory<Array<Int>>().get();
-		ret.__a = ret.__alloc_mem_32(len);
-		ret.__byte_length = len;
-		return cast ret;
-	}
-
-	private static function __new_64<T>(len:Int):Array<c.NInt.Int64> {
-		var ret = new Memory<Array<c.NInt.Int64>>().get();
-		ret.__a = ret.__alloc_mem_64(len);
-		ret.__byte_length = len;
-		return cast ret;
-	}
-
-	@:keep private static function __alloc_mem<T>(len:Int,obsz:Int):Pointer<T>{
-		var p:Pointer<Char> = cast c.CStdlib.calloc(len, obsz);
-		return cast p;
-	}
-
-	@:keep private function __alloc_mem_8(len:Int):Pointer<Char>{
-		var p:Pointer<Char> = cast c.CStdlib.calloc(len, 1);
+	@:keep
+	@:specialize
+	private static function __alloc_mem<T>(len:Int):Pointer<T>{
+		var size = Lib.sizeof(new c.TypeReference<T>());
+		var p:Pointer<T> = cast c.CStdlib.calloc(len, size);
 		return p;
 	}
 
-	@:keep inline private function __alloc_mem_16(len:Int):Pointer<Short>{
-		var p:Pointer<Short> = cast c.CStdlib.calloc(len, 2);
-		return p;
-	}
-
-	@:keep inline private function __alloc_mem_32(len:Int):Pointer<Int>{
-		var p:Pointer<Int> = cast c.CStdlib.calloc(len, 4);
-		return p;
-	}
-
-	@:keep inline private function __alloc_mem_64(len:Int):Pointer<c.NInt.Int64>{
-		var p:Pointer<c.NInt.Int64> = cast c.CStdlib.calloc(len, 8);
-		return p;
-	}
-
-	@:extern private static inline function memcpy<T>(src:FixedArray<T>, srcPos:Int, dest:FixedArray<T>, destPos:Int, length:Int):Void
+	@:extern
+	@:specialize
+	private static inline function memcpy<T>(src:Pointer<T>, srcPos:Int, dest:Pointer<T>, destPos:Int, length:Int):Void
 	{
-		FixedArray.copy(src.array, srcPos, dest.array, destPos, length);
+		var size = Lib.sizeof(new c.TypeReference<T>());
+		c.CString.memcpy((dest + destPos * size), (src + srcPos * size), length * size);
 	}
 
-	private inline function memcpy_8(src:Pointer<Char>, srcPos:Int, dest:Pointer<Char>, destPos:Int, length:Int):Void{
-		c.CString.memcpy((dest + destPos), (src + srcPos), length << 0 );
-	}
-
-	private inline function memcpy_16(src:Pointer<Short>, srcPos:Int, dest:Pointer<Short>, destPos:Int, length:Int):Void{
-		c.CString.memcpy((dest + destPos), (src + srcPos), length << 1 );
-	}
-
-	private inline function memcpy_32(src:Pointer<Int>, srcPos:Int, dest:Pointer<Int>, destPos:Int, length:Int):Void{
-		c.CString.memcpy((dest + destPos), (src + srcPos), length << 2 );
-	}
-
-	private inline function memcpy_64(src:Pointer<c.NInt.Int64>, srcPos:Int, dest:Pointer<c.NInt.Int64>, destPos:Int, length:Int):Void{
-		c.CString.memcpy((dest + destPos), (src + srcPos), length << 3 );
-	}
-
-	@:keep private static function ofNative<X>(native:FixedArray<X>):Array<X>
+	@:keep
+	@:specialize
+	private static function ofNative<X>(native:Pointer<X>, length:Int):Array<X>
 	{
-		var ret:Array<X> = new Memory<Array<X>>();
-		ret.__a = cast native.array;
-		ret.length = native.length;
-		return ret;
-	}
-
-	@:keep private static function ofNative_8(native:Pointer<Char>,length:Int):Array<Char>
-	{
-		var ret    = new Memory<Array<Char>>().get();
-		ret.__a    = native;
+		var ret = new Array();
+		ret.__a = cast native;
 		ret.length = length;
 		return ret;
 	}
 
-	@:keep private static function ofNative_16(native:Pointer<Short>,length:Int):Array<Short>
-	{
-		var ret    = new Memory<Array<Short>>().get();
-		ret.__a    = native;
-		ret.length = length;
-		return ret;
-	}
-
-	@:keep private static function ofNative_32(native:Pointer<Int>,length:Int):Array<Int>
-	{
-		var ret    = new Memory<Array<Int>>().get();
-		ret.__a    = native;
-		ret.length = length;
-		return ret;
-	}
-
-	@:keep private static function ofNative_64(native:Pointer<c.NInt.Int64>,length:Int):Array<c.NInt.Int64>
-	{
-		var ret    = new Memory<Array<c.NInt.Int64>>().get();
-		ret.__a    = native;
-		ret.length = length;
-		return ret;
-	}
-
+	@:specialize
 	public function concat( a : Array<T> ) : Array<T>
 	{
-		return null;
-	}
-
-	private function concat_8( a : Array<Char> ) : Array<Char>
-	{
 		var length = length;
 		var len = length + a.length;
-		var retarr = __alloc_mem_8(len);
-		__byte_length = len;
-		var __a:Pointer<Char> = cast __a;
-		memcpy_8(cast __a, 0, cast retarr, 0, length);
-		memcpy_8(cast a.__a, 0, cast retarr, length, a.length);
+		var retarr = __alloc_mem(len);
+		memcpy(cast __a, 0, cast retarr, 0, length);
+		memcpy(cast a.__a, 0, cast retarr, length, a.length);
 
-		return cast ofNative_8(cast retarr,len);
+		return cast ofNative(cast retarr, len);
 	}
 
-	private function concat_16( a : Array<Short> ) : Array<Short>
-	{
-		var length = length;
-		var len = length + a.length;
-		var retarr = __alloc_mem_16(len);
-		__byte_length = len;
-		var __a:Pointer<Short> = cast __a;
-		memcpy_16(cast __a, 0, cast retarr, 0, length);
-		memcpy_16(cast a.__a, 0, cast retarr, length, a.length);
-
-		return cast ofNative_16(cast retarr,len);
-	}
-
-	private function concat_32( a : Array<Int> ) : Array<Int>
-	{
-		var length = length;
-		var len = length + a.length;
-		var retarr = __alloc_mem_32(len);
-		__byte_length = len;
-		var __a:Pointer<Int> = cast __a;
-		memcpy_32(cast __a, 0, cast retarr, 0, length);
-		memcpy_32(cast a.__a, 0, cast retarr, length, a.length);
-
-		return cast ofNative_32(cast retarr,len);
-	}
-
-	private function concat_64( a : Array<c.NInt.Int64> ) : Array<c.NInt.Int64>
-	{
-		var length = length;
-		var len = length + a.length;
-		var retarr = __alloc_mem_64(len);
-		__byte_length = len;
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		memcpy_64(cast __a, 0, cast retarr, 0, length);
-		memcpy_64(cast a.__a, 0, cast retarr, length, a.length);
-
-		return cast ofNative_64(cast retarr,len);
-	}
-
+	@:specialize
 	public function copy() : Array<T>
 	{
-		return null;
-	}
-
-	private function copy_8() : Array<Char>
-	{
 		var len = length;
-		var __a:Pointer<Char> = cast __a;
-		var newarr = __alloc_mem_8(len);
-		memcpy_8(__a, 0, newarr, 0, len);
-		var ret = ofNative_8(newarr,len);
+		var newarr = __alloc_mem(len);
+		memcpy(__a, 0, newarr, 0, len);
+		var ret = ofNative(newarr,len);
 		ret.__byte_length = len;
 		return cast ret;
 	}
 
-	private function copy_16() : Array<Short>
-	{
-		var len = length;
-		var __a:Pointer<Short> = cast __a;
-		var newarr = __alloc_mem_16(len);
-		memcpy_16(__a, 0, newarr, 0, len);
-		var ret = ofNative_16(newarr,len);
-		ret.__byte_length = len;
-		return cast ret;
-	}
-
-	private function copy_32() : Array<Int>
-	{
-		var len = length;
-		var __a:Pointer<Int> = cast __a;
-		var newarr = __alloc_mem_32(len);
-		memcpy_32(__a, 0, newarr, 0, len);
-		var ret = ofNative_32(newarr,len);
-		ret.__byte_length = len;
-		return cast ret;
-	}
-
-	private function copy_64() : Array<c.NInt.Int64>
-	{
-		var len = length;
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		var newarr = __alloc_mem_64(len);
-		memcpy_64(__a, 0, newarr, 0, len);
-		var ret = ofNative_64(newarr,len);
-		ret.__byte_length = len;
-		return cast ret;
-	}
-
+	@:specialize
 	public function insert( pos : Int, x : T ) : Void
 	{
-
-	}
-
-	private function insert_8( pos : Int, x : Char ) : Void
-	{
 		var l = this.length;
 		if( pos < 0 ) {
 			pos = l + pos;
 			if( pos < 0 ) pos = 0;
 		}
 		if ( pos >= l ) {
-			this.push_8(x);
+			this.push(x);
 			return;
 		} else if (pos == 0) {
-			this.unshift_8(x);
+			this.unshift(x);
 			return;
 		}
 
-		var __a:Pointer<Char> = cast __a;
-
-		if (l >= __byte_length)
+		var elementSize = Lib.sizeof(new c.TypeReference<T>());
+		var byteOffset = pos * elementSize;
+		if (l * elementSize >= __byte_length)
 		{
 			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_8(newLen);
+			var newarr = __alloc_mem(newLen);
 			__byte_length = newLen;
-			memcpy_8(__a, 0, newarr, 0, pos);
+			memcpy(__a, 0, newarr, 0, pos);
 			newarr[pos] = cast x;
-			memcpy_8(__a, pos, newarr, pos + 1, l - pos);
+			memcpy(__a, pos, newarr, pos + 1, l - pos);
 
 			this.__a = cast newarr;
 			++this.length;
 		} else {
-			CString.memmove(__a+pos, __a+pos+1, (l-pos) << 0);
+			CString.memmove(__a + byteOffset, __a + byteOffset + elementSize, (l-pos) << 2);
 			__a[pos] = cast x;
 			++this.length;
 		}
 	}
 
-	private function insert_16( pos : Int, x : Int ) : Void
-	{
-		var l = this.length;
-		if( pos < 0 ) {
-			pos = l + pos;
-			if( pos < 0 ) pos = 0;
-		}
-		if ( pos >= l ) {
-			this.push_16(x);
-			return;
-		} else if (pos == 0) {
-			this.unshift_16(x);
-			return;
-		}
-
-		var __a:Pointer<Short> = cast __a;
-
-		if (l >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_16(newLen);
-			__byte_length = newLen;
-			memcpy_16(__a, 0, newarr, 0, pos);
-			newarr[pos] = cast x;
-			memcpy_16(__a, pos, newarr, pos + 1, l - pos);
-
-			this.__a = cast newarr;
-			++this.length;
-		} else {
-			CString.memmove(__a+pos, __a+pos+1, (l-pos) << 1);
-			__a[pos] = cast x;
-			++this.length;
-		}
-	}
-
-	private function insert_32( pos : Int, x : Int ) : Void
-	{
-		var l = this.length;
-		if( pos < 0 ) {
-			pos = l + pos;
-			if( pos < 0 ) pos = 0;
-		}
-		if ( pos >= l ) {
-			this.push_32(x);
-			return;
-		} else if (pos == 0) {
-			this.unshift_32(x);
-			return;
-		}
-
-		var __a:Pointer<Int> = cast __a;
-
-		if (l >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_32(newLen);
-			__byte_length = newLen;
-			memcpy_32(__a, 0, newarr, 0, pos);
-			newarr[pos] = cast x;
-			memcpy_32(__a, pos, newarr, pos + 1, l - pos);
-
-			this.__a = cast newarr;
-			++this.length;
-		} else {
-			CString.memmove(__a+pos, __a+pos+1, (l-pos) << 2);
-			__a[pos] = cast x;
-			++this.length;
-		}
-	}
-
-	private function insert_64( pos : Int, x : c.NInt.Int64 ) : Void
-	{
-		var l = this.length;
-		if( pos < 0 ) {
-			pos = l + pos;
-			if( pos < 0 ) pos = 0;
-		}
-		if ( pos >= l ) {
-			this.push_64(x);
-			return;
-		} else if (pos == 0) {
-			this.unshift_64(x);
-			return;
-		}
-
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-
-		if (l >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_64(newLen);
-			__byte_length = newLen;
-			memcpy_64(__a, 0, newarr, 0, pos);
-			newarr[pos] = cast x;
-			memcpy_64(__a, pos, newarr, pos + 1, l - pos);
-
-			this.__a = cast newarr;
-			++this.length;
-		} else {
-			CString.memmove(__a+pos, __a+pos+1, (l-pos) << 3);
-			__a[pos] = cast x;
-			++this.length;
-		}
-	}
-
+	@:specialize
 	public function iterator() : Iterator<T>
 	{
-		return null;
-	}
-
-	private function iterator_64():Iterator<T> {
-		var __a:Pointer<c.NInt.Int64> = cast __a;
 		var i = 0;
 		var len = length;
 		return {
@@ -435,6 +151,30 @@ import c.gc.GC;
 				return cast __a[i - 1];
 			}
 		};
+	}
+
+	@:specialize
+	public function indexOf(x:T, ?fromIndex:Int = 0):Int {
+		var i:Int = fromIndex; // coerce, defaults to 0
+		while (i < length) {
+			if (__a[i] == x) {
+				return i;
+			}
+			++i;
+		}
+		return -1;
+	}
+
+	@:specialize
+	public function lastIndexOf(x:T, ?fromIndex:Int):Int {
+		var i:Int = fromIndex == null ? length - 1 : fromIndex;
+		while (i > 0) {
+			if (__a[i] == x) {
+				return i;
+			}
+			--i;
+		}
+		return -1;
 	}
 
 	public function join( sep : String ) : String
@@ -457,14 +197,9 @@ import c.gc.GC;
 		return null; //TODO
 	}
 
-	public function pop() : T
+	@:specialize
+	public function pop() : Null<T>
 	{
-		return null;
-	}
-
-	private function pop_8() : T
-	{
-		var __a:Pointer<Char> = cast __a;
 		var length = length;
 		if (length > 0)
 		{
@@ -479,72 +214,15 @@ import c.gc.GC;
 		}
 	}
 
-	private function pop_16() : T
-	{
-		var __a:Pointer<Short> = cast __a;
-		var length = length;
-		if (length > 0)
-		{
-			length-=1;
-			var val = cast __a[length];
-			__a[length] = cast 0;
-			this.length = length;
-
-			return cast val;
-		} else {
-			return null;
-		}
-	}
-
-	private function pop_32() : T
-	{
-		var __a:Pointer<Int> = cast __a;
-		var length = length;
-		if (length > 0)
-		{
-			length-=1;
-			var val = cast __a[length];
-			__a[length] = cast 0;
-			this.length = length;
-
-			return cast val;
-		} else {
-			return null;
-		}
-	}
-
-	private function pop_64() : T
-	{
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		var length = length;
-		if (length > 0)
-		{
-			length-=1;
-			var val = cast __a[length];
-			__a[length] = cast 0;
-			this.length = length;
-
-			return cast val;
-		} else {
-			return null;
-		}
-	}
-
+	@:specialize
 	public function push(x : T) : Int
 	{
-		return 0;
-	}
-
-
-	private function push_8(x : Char) : Int
-	{
-		var __a:Pointer<Char> = cast __a;
 		var length = length;
 		if (length >= __byte_length)
 		{
 			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_8(newLen);
-			memcpy_8(__a, 0, newarr, 0, length);
+			var newarr = __alloc_mem(newLen);
+			memcpy(__a, 0, newarr, 0, length);
 			__byte_length = newLen;
 			__a = newarr;
 			__a[length] = cast x;
@@ -556,81 +234,16 @@ import c.gc.GC;
 		return ++this.length;
 	}
 
-	private function push_16(x : Int) : Int
-	{
-		var __a:Pointer<Short> = cast __a;
-		var length = length;
-		if (length >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_16(newLen);
-			memcpy_16(__a, 0, newarr, 0, length);
-			__byte_length = newLen;
-			__a = newarr;
-			__a[length] = cast x;
-
-			this.__a = cast newarr;
-		} else {
-	        __a[length] = cast x;
-		}
-		return ++this.length;
-	}
-
-	private function push_32(x : Int) : Int
-	{
-		var __a:Pointer<Int> = cast __a;
-		var length = length;
-		if (length >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_32(newLen);
-			memcpy_32(__a, 0, newarr, 0, length);
-			__byte_length = newLen;
-			__a = newarr;
-			__a[length] = cast x;
-
-			this.__a = cast newarr;
-		} else {
-	        __a[length] = cast x;
-		}
-		return ++this.length;
-	}
-
-	private function push_64(x : c.NInt.Int64) : Int
-	{
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		var length = length;
-		if (length >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_64(newLen);
-			memcpy_64(__a, 0, newarr, 0, length);
-			__byte_length = newLen;
-			__a = newarr;
-			__a[length] = cast x;
-
-			this.__a = cast newarr;
-		} else {
-	        __a[length] = cast x;
-		}
-		return ++this.length;
-	}
-
+	@:specialize
 	public function remove( x : T ) : Bool
 	{
-		return false;
-	}
-
-	private function remove_8( x : Char ) : Bool
-	{
-		var __a:Pointer<Char> = cast __a;
 		var i = -1;
 		var length = length;
 		while (++i < length)
 		{
 			if (__a[i] == cast x)
 			{
-				memcpy_8(__a, i + 1, __a, i, length - i - 1);
+				memcpy(__a, i + 1, __a, i, length - i - 1);
 				this.length-=1;
 				__a[this.length] = cast 0;
 
@@ -641,77 +254,12 @@ import c.gc.GC;
 		return false;
 	}
 
-	private function remove_16( x : Int ) : Bool
-	{
-		var __a:Pointer<Short> = cast __a;
-		var i = -1;
-		var length = length;
-		while (++i < length)
-		{
-			if (__a[i] == cast x)
-			{
-				memcpy_16(__a, i + 1, __a, i, length - i - 1);
-				this.length-=1;
-				__a[this.length] = cast 0;
-
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	private function remove_32( x : Int ) : Bool
-	{
-		var __a:Pointer<Int> = cast __a;
-		var i = -1;
-		var length = length;
-		while (++i < length)
-		{
-			if (__a[i] == cast x)
-			{
-				memcpy_32(__a, i + 1, __a, i, length - i - 1);
-				this.length-=1;
-				__a[this.length] = cast 0;
-
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	private function remove_64( x : c.NInt.Int64 ) : Bool
-	{
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		var i = -1;
-		var length = length;
-		while (++i < length)
-		{
-			if (__a[i] == cast x)
-			{
-				memcpy_64(__a, i + 1, __a, i, length - i - 1);
-				this.length-=1;
-				__a[this.length] = cast 0;
-
-				return true;
-			}
-		}
-
-		return false;
-	}
-
+	@:specialize
 	public function reverse() : Void
 	{
-
-	}
-
-	private function reverse_8() : Void
-	{
 		var i = 0;
 		var l = this.length;
 		var a = this.__a;
-		var __a:Pointer<Char> = cast __a;
 		var half = l >> 1;
 		l -= 1;
 		while ( i < half )
@@ -723,133 +271,26 @@ import c.gc.GC;
 		}
 	}
 
-	private function reverse_16() : Void
-	{
-		var i = 0;
-		var l = this.length;
-		var a = this.__a;
-		var __a:Pointer<Short> = cast __a;
-		var half = l >> 1;
-		l -= 1;
-		while ( i < half )
-		{
-			var tmp = __a[i];
-			__a[i] = __a[l-i];
-			__a[l-i] = tmp;
-			i += 1;
-		}
-	}
-
-	private function reverse_32() : Void
-	{
-		var i = 0;
-		var l = this.length;
-		var a = this.__a;
-		var __a:Pointer<Int> = cast __a;
-		var half = l >> 1;
-		l -= 1;
-		while ( i < half )
-		{
-			var tmp = __a[i];
-			__a[i] = __a[l-i];
-			__a[l-i] = tmp;
-			i += 1;
-		}
-	}
-
-	private function reverse_64() : Void
-	{
-		var i = 0;
-		var l = this.length;
-		var a = this.__a;
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		var half = l >> 1;
-		l -= 1;
-		while ( i < half )
-		{
-			var tmp = __a[i];
-			__a[i] = __a[l-i];
-			__a[l-i] = tmp;
-			i += 1;
-		}
-	}
-
+	@:specialize
 	public function shift() : Null<T>
 	{
-		return null;
-	}
-
-	private function shift_8() : Null<T>
-	{
 		var l = this.length;
 		if( l == 0 )
 			return null;
 
-		var __a:Pointer<Char> = cast __a;
 		var x = __a[0];
 		l -= 1;
-		CString.memmove(__a, __a+1, l << 0);
+		var elementSize = Lib.sizeof(new c.TypeReference<T>());
+		CString.memmove(__a, __a + elementSize, l << 2);
 
 		__a[l] = cast 0;
 		this.length = l;
 		return cast x;
 	}
 
-	private function shift_16() : Null<T>
-	{
-		var l = this.length;
-		if( l == 0 )
-			return null;
-
-		var __a:Pointer<Short> = cast __a;
-		var x = __a[0];
-		l -= 1;
-		CString.memmove(__a, __a+1, l << 1);
-
-		__a[l] = cast 0;
-		this.length = l;
-		return cast x;
-	}
-
-	private function shift_32() : Null<T>
-	{
-		var l = this.length;
-		if( l == 0 )
-			return null;
-
-		var __a:Pointer<Int> = cast __a;
-		var x = __a[0];
-		l -= 1;
-		CString.memmove(__a, __a+1, l << 2);
-
-		__a[l] = cast 0;
-		this.length = l;
-		return cast x;
-	}
-
-	private function shift_64() : Null<T>
-	{
-		var l = this.length;
-		if( l == 0 )
-			return null;
-
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		var x = __a[0];
-		l -= 1;
-		CString.memmove(__a, __a+1, l << 3);
-
-		__a[l] = cast 0;
-		this.length = l;
-		return cast x;
-	}
-
+	@:specialize
 	public function slice( pos : Int, ?end : Int ) : Array<T>
 	{
-		return null;
-	}
-
-	private function slice_8( pos : Int, ?end : Int ) : Array<Char>
-	{
 		if( pos < 0 ){
 			pos = this.length + pos;
 			if( pos < 0 )
@@ -864,80 +305,10 @@ import c.gc.GC;
 		var len = end - pos;
 		if ( len < 0 ) return new Array();
 
-		var newarr    = __alloc_mem_8(len);
-		var __a:Pointer<Char> = cast __a;
-		memcpy_8(__a, pos, newarr, 0, len);
+		var newarr    = __alloc_mem(len);
+		memcpy(__a, pos, newarr, 0, len);
 
-		return cast ofNative_8(newarr,len);
-	}
-
-	private function slice_16( pos : Int, ?end : Int ) : Array<Short>
-	{
-		if( pos < 0 ){
-			pos = this.length + pos;
-			if( pos < 0 )
-				pos = 0;
-		}
-		if( end == null )
-			end = this.length;
-		else if( end < 0 )
-			end = this.length + end;
-		if( end > this.length )
-			end = this.length;
-		var len = end - pos;
-		if ( len < 0 ) return new Array();
-
-		var newarr    = __alloc_mem_16(len);
-		var __a:Pointer<Short> = cast __a;
-		memcpy_16(__a, pos, newarr, 0, len);
-
-		return cast ofNative_16(newarr,len);
-	}
-
-	private function slice_32( pos : Int, ?end : Int ) : Array<Int>
-	{
-		if( pos < 0 ){
-			pos = this.length + pos;
-			if( pos < 0 )
-				pos = 0;
-		}
-		if( end == null )
-			end = this.length;
-		else if( end < 0 )
-			end = this.length + end;
-		if( end > this.length )
-			end = this.length;
-		var len = end - pos;
-		if ( len < 0 ) return new Array();
-
-		var newarr    = __alloc_mem_32(len);
-		var __a:Pointer<Int> = cast __a;
-		memcpy_32(__a, pos, newarr, 0, len);
-
-		return cast ofNative_32(newarr,len);
-	}
-
-	private function slice_64( pos : Int, ?end : Int ) : Array<c.NInt.Int64>
-	{
-		if( pos < 0 ){
-			pos = this.length + pos;
-			if( pos < 0 )
-				pos = 0;
-		}
-		if( end == null )
-			end = this.length;
-		else if( end < 0 )
-			end = this.length + end;
-		if( end > this.length )
-			end = this.length;
-		var len = end - pos;
-		if ( len < 0 ) return new Array();
-
-		var newarr    = __alloc_mem_64(len);
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		memcpy_64(__a, pos, newarr, 0, len);
-
-		return cast ofNative_64(newarr,len);
+		return cast ofNative(newarr,len);
 	}
 
 	public function sort( f : T -> T -> Int ) : Void
@@ -969,14 +340,10 @@ import c.gc.GC;
 //         if( i < hi ) quicksort( i, hi, f );
 // 	}
 
+	@:specialize
 	public function splice( pos : Int, len : Int ) : Array<T>
 	{
-		return null;
-	}
-
-	private function splice_8( pos : Int, len : Int ) : Array<Char>
-	{
-		if( len < 0 ) return __new_8(1);
+		if( len < 0 ) return __new(1);
 		if( pos < 0 ) {
 			pos = this.length + pos;
 			if( pos < 0 ) pos = 0;
@@ -988,220 +355,57 @@ import c.gc.GC;
 			len = this.length - pos;
 			if( len < 0 ) len = 0;
 		}
-		var a:Pointer<Char> = cast this.__a;
 
-		var ret = __alloc_mem_8(len);
+		var ret = __alloc_mem(len);
 
-		memcpy_8(a, pos, ret, 0, len);
+		memcpy(__a, pos, ret, 0, len);
 
-		var ret = ofNative_8(ret,len);
+		var ret = ofNative(ret,len);
 		ret.__byte_length = len;
 
 		var end = pos + len;
-		memcpy_8(a, end, a, pos, this.length - end);
+		memcpy(__a, end, __a, pos, this.length - end);
 		this.length -= len;
 		while( --len >= 0 )
-			a[this.length + len] = cast 0;
-		return cast ret;
-	}
-
-	private function splice_16( pos : Int, len : Int ) : Array<Short>
-	{
-		if( len < 0 ) return __new_16(1);
-		if( pos < 0 ) {
-			pos = this.length + pos;
-			if( pos < 0 ) pos = 0;
-		}
-		if( pos > this.length ) {
-			pos = 0;
-			len = 0;
-		} else if( pos + len > this.length ) {
-			len = this.length - pos;
-			if( len < 0 ) len = 0;
-		}
-		var a:Pointer<Short> = cast this.__a;
-
-		var ret = __alloc_mem_16(len);
-
-		memcpy_16(a, pos, ret, 0, len);
-
-		var ret = ofNative_16(ret,len);
-		ret.__byte_length = len;
-
-		var end = pos + len;
-		memcpy_16(a, end, a, pos, this.length - end);
-		this.length -= len;
-		while( --len >= 0 )
-			a[this.length + len] = cast 0;
-		return cast ret;
-	}
-
-	private function splice_32( pos : Int, len : Int ) : Array<Int>
-	{
-		if( len < 0 ) return __new_32(1);
-		if( pos < 0 ) {
-			pos = this.length + pos;
-			if( pos < 0 ) pos = 0;
-		}
-		if( pos > this.length ) {
-			pos = 0;
-			len = 0;
-		} else if( pos + len > this.length ) {
-			len = this.length - pos;
-			if( len < 0 ) len = 0;
-		}
-		var a:Pointer<Int> = cast this.__a;
-
-		var ret = __alloc_mem_32(len);
-
-		memcpy_32(a, pos, ret, 0, len);
-
-		var ret = ofNative_32(ret,len);
-		ret.__byte_length = len;
-
-		var end = pos + len;
-		memcpy_32(a, end, a, pos, this.length - end);
-		this.length -= len;
-		while( --len >= 0 )
-			a[this.length + len] = cast 0;
-		return cast ret;
-	}
-
-	private function splice_64( pos : Int, len : Int ) : Array<c.NInt.Int64>
-	{
-		if( len < 0 ) return __new_64(1);
-		if( pos < 0 ) {
-			pos = this.length + pos;
-			if( pos < 0 ) pos = 0;
-		}
-		if( pos > this.length ) {
-			pos = 0;
-			len = 0;
-		} else if( pos + len > this.length ) {
-			len = this.length - pos;
-			if( len < 0 ) len = 0;
-		}
-		var a:Pointer<c.NInt.Int64> = cast this.__a;
-
-		var ret = __alloc_mem_64(len);
-
-		memcpy_64(a, pos, ret, 0, len);
-
-		var ret = ofNative_64(ret,len);
-		ret.__byte_length = len;
-
-		var end = pos + len;
-		memcpy_64(a, end, a, pos, this.length - end);
-		this.length -= len;
-		while( --len >= 0 )
-			a[this.length + len] = cast 0;
+			__a[this.length + len] = cast 0;
 		return cast ret;
 	}
 
 	public function toString() : String
 	{
-		return "TODO";
-		// var ret = new StringBuf();
-		// var a = __a;
-		// ret.add("[");
-		// var first = true;
-		// for (i in 0...length)
-		// {
-		// 	if (first)
-		// 		first = false;
-		// 	else
-		// 		ret.add(",");
-		// 	ret.add(a.array[i]);
-		// }
+		var ret = new StringBuf();
+		var a = __a;
+		ret.add("[");
+		var first = true;
+		for (i in 0...length)
+		{
+			if (first)
+				first = false;
+			else
+				ret.add(",");
+			ret.add(Std.string(a[i]));
+		}
 
-		// ret.add("]");
-		// return ret.toString();
+		ret.add("]");
+		return ret.toString();
 	}
 
+	@:specialize
 	public function unshift( x : T ) : Void
 	{
-
-	}
-
-	private function unshift_8( x : Char ) : Void
-	{
-		var __a:Pointer<Char> = cast this.__a;
 		var length = length;
-		if (length >= __byte_length)
+		var elementSize = Lib.sizeof(new c.TypeReference<T>());
+		if (length * elementSize >= __byte_length)
 		{
 			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_8(newLen);
-			memcpy_8(__a, 0, newarr, 1, length);
+			var newarr = __alloc_mem(newLen);
+			memcpy(__a, 0, newarr, 1, length);
 			__byte_length = newLen;
 			__a = newarr;
 
 			this.__a = cast newarr;
 		} else {
-			CString.memmove(__a, __a+1, length << 0);
-		}
-
-		this.__a[0] = cast x;
-		++this.length;
-	}
-
-	private function unshift_16( x : Int ) : Void
-	{
-		var __a:Pointer<Short> = cast this.__a;
-		var length = length;
-		if (length >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_16(newLen);
-			memcpy_16(__a, 0, newarr, 1, length);
-			__byte_length = newLen;
-			__a = newarr;
-
-			this.__a = cast newarr;
-		} else {
-			CString.memmove(__a, __a+1, length << 1);
-		}
-
-		this.__a[0] = cast x;
-		++this.length;
-	}
-
-
-	private function unshift_32( x : Int ) : Void
-	{
-		var __a:Pointer<Int> = cast this.__a;
-		var length = length;
-		if (length >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_32(newLen);
-			memcpy_32(__a, 0, newarr, 1, length);
-			__byte_length = newLen;
-			__a = newarr;
-
-			this.__a = cast newarr;
-		} else {
-			CString.memmove(__a, __a+1, length << 2);
-		}
-
-		this.__a[0] = cast x;
-		++this.length;
-	}
-
-	private function unshift_64( x : c.NInt.Int64 ) : Void
-	{
-		var __a:Pointer<c.NInt.Int64> = cast this.__a;
-		var length = length;
-		if (length >= __byte_length)
-		{
-			var newLen = (length << 1) + 1;
-			var newarr = __alloc_mem_64(newLen);
-			memcpy_64(__a, 0, newarr, 1, length);
-			__byte_length = newLen;
-			__a = newarr;
-
-			this.__a = cast newarr;
-		} else {
-			CString.memmove(__a, __a+1, length << 3);
+			CString.memmove(__a, __a + elementSize, length << 2);
 		}
 
 		this.__a[0] = cast x;
@@ -1225,195 +429,35 @@ import c.gc.GC;
 		// return ret;
 	}
 
-	@:keep private function __get(idx:Int):T
+	@:keep
+	@:specialize
+	private function __get(idx:Int):T
 	{
-		return cast null;
-	}
-
-	@:keep private function __get_8(idx:Int):Char
-	{
-		var __a:Pointer<Char> = cast __a;
 		if (idx >= length || idx < 0)
-			return 0;
+			return cast 0;
 
 		return __a[idx];
 	}
 
-	@:keep private function __get_16(idx:Int):Int
+	@:specialize
+	@:keep
+	private function __set(idx:Int, v:T):T
 	{
-		var __a:Pointer<Short> = cast __a;
-		if (idx >= length || idx < 0)
-			return 0;
-
-		return __a[idx];
-	}
-
-	@:keep private function __get_32(idx:Int):Int
-	{
-		var __a:Pointer<Int> = cast __a;
-		if (idx >= length || idx < 0)
-			return 0;
-
-		return __a[idx];
-	}
-
-	@:keep private function __get_64(idx:Int):c.NInt.Int64
-	{
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		if (idx >= length || idx < 0)
-			return 0;
-
-		return __a[idx];
-	}
-
-	@:keep private function __set(idx:Int, v:T):T
-	{
-		return null;
-	}
-
-	@:keep private function __set_8(idx:Int, v:Char):Char
-	{
-		var __a:Pointer<Char> = cast __a;
-
 		if (idx >= __byte_length)
 		{
 			var newl = idx + 1;
 			if (idx == __byte_length)
 				newl = (idx << 1) + 1;
-			var newArr = __alloc_mem_8(newl);
+			var newArr = __alloc_mem(newl);
 			__byte_length = newl;
 			if (length > 0)
-				memcpy_8(__a, 0, newArr, 0, length);
+				memcpy(__a, 0, newArr, 0, length);
 			this.__a = cast (__a = newArr);
 		}
 
 		if (idx >= length)
 			this.length = idx + 1;
 
-		return __a[idx] = v;
-	}
-
-	@:keep private function __set_16(idx:Int, v:Int):Int
-	{
-		var __a:Pointer<Short> = cast __a;
-
-		if (idx >= __byte_length)
-		{
-			var newl = idx + 1;
-			if (idx == __byte_length)
-				newl = (idx << 1) + 1;
-			var newArr = __alloc_mem_16(newl);
-			__byte_length = newl;
-			if (length > 0)
-				memcpy_16(__a, 0, newArr, 0, length);
-			this.__a = cast (__a = newArr);
-		}
-
-		if (idx >= length)
-			this.length = idx + 1;
-
-		return __a[idx] = v;
-	}
-
-	@:keep private function __set_32(idx:Int, v:Int):Int
-	{
-		var __a:Pointer<Int> = cast __a;
-
-		if (idx >= __byte_length)
-		{
-			var newl = idx + 1;
-			if (idx == __byte_length)
-				newl = (idx << 1) + 1;
-			var newArr = __alloc_mem_32(newl);
-			__byte_length = newl;
-			if (length > 0)
-				memcpy_32(__a, 0, newArr, 0, length);
-			this.__a = cast (__a = newArr);
-		}
-
-		if (idx >= length)
-			this.length = idx + 1;
-
-		return __a[idx] = v;
-	}
-
-	@:keep private function __set_64(idx:Int, v:c.NInt.Int64):c.NInt.Int64
-	{
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-
-		if (idx >= __byte_length)
-		{
-			var newl = idx + 1;
-			if (idx == __byte_length)
-				newl = (idx << 1) + 1;
-			var newArr = __alloc_mem_64(newl);
-			__byte_length = newl;
-			if (length > 0)
-				memcpy_64(__a, 0, newArr, 0, length);
-			this.__a = cast (__a = newArr);
-		}
-
-		if (idx >= length)
-			this.length = idx + 1;
-
-		return __a[idx] = v;
-	}
-
-	private inline function __unsafe_get(idx:Int):T
-	{
-		return cast null;
-	}
-
-	private inline function __unsafe_get_8(idx:Int):Char
-	{
-		var __a:Pointer<Char> = cast __a;
-		return __a[idx];
-	}
-
-	private inline function __unsafe_get_16(idx:Int):Short
-	{
-		var __a:Pointer<Short> = cast __a;
-		return __a[idx];
-	}
-
-	private inline function __unsafe_get_32(idx:Int):Int
-	{
-		var __a:Pointer<Int> = cast __a;
-		return __a[idx];
-	}
-
-	private inline function __unsafe_get_64(idx:Int):c.NInt.Int64
-	{
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		return __a[idx];
-	}
-
-	private inline function __unsafe_set(idx:Int, val:T):T
-	{
-		return cast null;
-	}
-
-	private inline function __unsafe_set_8(idx:Int, val:Char):Char
-	{
-		var __a:Pointer<Char> = cast __a;
-		return __a[idx] = val;
-	}
-
-	private inline function __unsafe_set_16(idx:Int, val:Short):Short
-	{
-		var __a:Pointer<Short> = cast __a;
-		return __a[idx] = val;
-	}
-
-	private inline function __unsafe_set_32(idx:Int, val:Int):Int
-	{
-		var __a:Pointer<Int> = cast __a;
-		return __a[idx] = val;
-	}
-
-	private inline function __unsafe_set_64(idx:Int, val:c.NInt.Int64):c.NInt.Int64
-	{
-		var __a:Pointer<c.NInt.Int64> = cast __a;
-		return __a[idx] = val;
+		return __a[idx] = cast v;
 	}
 }

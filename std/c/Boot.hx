@@ -7,8 +7,10 @@ import c.NInt;
 import String;
 import c.Closure;
 import c.VTable;
+#if !llvm
 import c.gc.GC;
 import c.gc.Alloc;
+#end
 
 @:headerCode('
 
@@ -52,7 +54,11 @@ class Boot {
 		Boot.argc = argc;
 		Boot.argv = argv;
 		typeReferences = [];
+		#if llvm
+		c.Lib.initializeStatics();
+		#else
 		c.Init._hx_init();
+		#end
 		try {
 			c.Lib.callMain();
 			return 0;
@@ -61,4 +67,16 @@ class Boot {
 			return 1;
 		}
 	}
+
+	//@:plain static function personality(data:Exc) {
+		//return 0;
+	//}
 }
+
+//typedef Exc = {
+	//i1: Int,
+	//i2: Int,
+	//i3: c.NInt.Int64,
+	//p1: Pointer<Char>,
+	//p2: Pointer<Char>
+//}

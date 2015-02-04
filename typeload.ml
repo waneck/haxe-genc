@@ -865,7 +865,10 @@ let check_overriding ctx c =
 				if has_meta Meta.Final f2.cf_meta then display_error ctx ("Cannot override @:final method " ^ i) p;
 				try
 					let t = apply_params csup.cl_params params t in
-					valid_redefinition ctx f f.cf_type f2 t
+					valid_redefinition ctx f f.cf_type f2 t;
+					(* TODO: get rid of this *)
+					if defined ctx.com Define.Llvm && not (Meta.has (Meta.Custom ":overridden") f2.cf_meta) then
+						f2.cf_meta <- ((Meta.Custom ":overridden",[],f2.cf_pos) :: f2.cf_meta)
 				with
 					Unify_error l ->
 						display_error ctx ("Field " ^ i ^ " overloads parent class with different or incomplete type") p;

@@ -744,7 +744,10 @@ module AbstractCast = struct
 			do_check_cast ctx tleft eright p
 		with Not_found ->
 			unify_raise ctx eright.etype tleft p;
-			eright
+(* 			if not (type_iseq eright.etype tleft) then
+				mk (TCast(eright,None)) tleft p
+			else *)
+				eright
 
 	let cast_or_unify ctx tleft eright p =
 		try
@@ -1710,7 +1713,7 @@ module UnificationCallback = struct
 				{e with eexpr = TCall(e1,el)}
 			| TNew(c,tl,el) ->
 				begin try
-					let tcf,_ = get_constructor (fun cf -> apply_params c.cl_params tl cf.cf_type) c in
+					let tcf,_ = get_constructor (fun cf -> cf.cf_type) c in
 					let el = check_call f el tcf in
 					{e with eexpr = TNew(c,tl,el)}
 				with Not_found ->
@@ -1741,6 +1744,8 @@ module UnificationCallback = struct
 					| tf :: _ -> { e with eexpr = TReturn (Some (f e1 tf.tf_type))}
 					| _ -> e
 				end
+			| TCast(e1,None) ->
+				{e with eexpr = TCast(f e1 e.etype,None)}
 			| _ ->
 				e
 		in

@@ -1066,6 +1066,10 @@ try
 		("-python",Arg.String (fun dir ->
 			set_platform Python dir;
 		),"<file> : generate Python code as target file");
+		("-llvm",Arg.String (fun dir ->
+			Common.define com Define.Llvm;
+			set_platform C dir;
+		),"<file> : generate LLVM code into target directory");
 		("-xml",Arg.String (fun file ->
 			Parser.use_doc := true;
 			xml_out := Some file
@@ -1560,6 +1564,9 @@ try
 		| Java ->
 			Common.log com ("Generating Java in : " ^ com.file);
 			Genjava.generate com;
+		| C when Common.defined com Define.Llvm ->
+			Common.log com ("Generating LLVM in : " ^ com.file);
+			Genllvm.generate com;
 		| C ->
 			Common.log com ("Generating C in : " ^ com.file);
 			Genc.generate com;

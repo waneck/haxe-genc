@@ -18,5 +18,9 @@ extern class Lib {
 
 	public static function callMain():Void;
 
+	#if llvm
+	public static function initializeStatics():Void;
+	#end
+
 	public static function callCMacro<T>(name:ConstPointer<Char>, rest:Array<VarArg>):T;
 }

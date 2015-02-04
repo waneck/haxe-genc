@@ -24,12 +24,12 @@ class TypeReference<T> {
 	/**
 		Pointer to the constructor of this type.
 	**/
-	public var constructor:FunctionPointer<haxe.Constraints.Function>;
+	public var constructor:FunctionPointer<Void -> T>;
 
 	/**
 		Pointer to the allocator of this type.
 	**/
-	public var allocator:FunctionPointer<Void -> Pointer<Void>>;
+	public var allocator:FunctionPointer<Void -> T>;
 
 	/**
 		Reference to the `TypeReference` of the parent class if exists.

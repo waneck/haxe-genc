@@ -71,7 +71,7 @@ enum ValueType {
 	}
 
 	public static function createInstance<T>( cl : Class<T>, args : Array<Dynamic> ) : T {
-		var t:c.TypeReference<Dynamic> = cast cl;
+		var t:c.TypeReference<T> = cast cl;
 		var ctor:Dynamic = t.constructor;
 		if (ctor == null) {
 			return null;
@@ -85,8 +85,8 @@ enum ValueType {
 		}
 	}
 
-	public static function createEmptyInstance<T>( cl : Class<T> ) : T untyped {
-		var t:c.TypeReference<Dynamic> = cast cl;
+	public static function createEmptyInstance<T>( cl : Class<T> ) : T {
+		var t:c.TypeReference<T> = cast cl;
 		if (t.allocator == null) {
 			return null;
 		}
@@ -136,6 +136,4 @@ enum ValueType {
 	public static function allEnums<T>( e : Enum<T> ) : Array<T> {
 		return null;
 	}
-
 }
-

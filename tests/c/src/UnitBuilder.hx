@@ -33,7 +33,7 @@ class UnitBuilder {
 	static var isFalse = macro Main.isFalse;
 	static var equals = macro Main.equals;
 	static var equalsNot = macro Main.equalsNot;
-	static var equalsFloat = macro Main.equalsFloat;
+	static var equalsFloat = macro Main.equals_Float;
 
 	static public macro function build(basePath:String):Array<Field> {
 		var ret = Context.getBuildFields();
@@ -55,6 +55,8 @@ class UnitBuilder {
 					cl.name = name;
 					cl.pack = ["unit"];
 					Context.defineType(cl);
+					var s = 'Running ' + name;
+					calls.push(macro trace($v{s}));
 					calls.push(macro unit.$name.run());
 				} else if (sys.FileSystem.isDirectory(filePath)) {
 					readDir(filePath);
@@ -154,7 +156,7 @@ class UnitBuilder {
 					case EBinop(OpEq, e1, e2):
 						mkEq(e1, e2, e.pos);
 					case EBinop(OpNotEq, e1, e2):
-						macro $isTrue($e1 != $e2);
+						macro @:pos(e.pos) $isTrue($e1 != $e2);
 					case EBinop(OpGt | OpGte | OpLt | OpLte, _, _):
 						{
 							expr: (macro t($e)).expr,

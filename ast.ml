@@ -114,6 +114,7 @@ module Meta = struct
 		| NoDebug
 		| NoDoc
 		| NoExpr
+		| NoFollow
 		| NoImportGlobal
 		| NoPackageRestrict
 		| NoStack

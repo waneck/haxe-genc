@@ -67,13 +67,14 @@ import c.CString.memcmp;
 
 	public function charCodeAt( index : Int):Null<Int> {
 		if (index >= 0 && index < length)
-			return untyped __a[index]; // Field charCodeAt has different type than in core type
+			return cast __a[index]; // Field charCodeAt has different type than in core type
 									 // index : Int -> Null<Int> should be index : Int -> Int ??
 		return null; // TODO this is *definitely* wrong here, null (0) is a valid char code
 	}
 
 
 	public function indexOf( str : String, ?startIndex:Int = 0 ):Int {
+		var startIndex:Int = startIndex;
 		if (str.length == 0){
 			return 0;
 		}
@@ -81,7 +82,7 @@ import c.CString.memcmp;
 			return -1;
 		}
 		var p_tmp0 = __a + startIndex; // TODO inlining produces garbage
-		var ret = memmem(p_tmp0,
+		var ret:Int = memmem(p_tmp0,
 						length-startIndex,
 						str.__a,
 						str.length );
@@ -121,7 +122,7 @@ import c.CString.memcmp;
 			return ret;
 		}
 		var start = 0;
-		var cur = indexOf(delimiter);
+		var cur = indexOf(delimiter, 0);
 		if (cur == -1){
 			var ret = new Array();
 			ret.push(this);
@@ -178,7 +179,7 @@ import c.CString.memcmp;
 
 	public static function fromCharCode( code : Int ):String {
 		var ret = stringOfSize(1);
-		ret.__a[0] = untyped code; //TODO int->Int8 conv
+		ret.__a[0] = (code : Char); //TODO int->Int8 conv
 		return ret;
 	}
 
@@ -202,7 +203,8 @@ import c.CString.memcmp;
 				var pchr:Pointer<Char> = c.CString.memchr(p0+pos,first,l0-pos);
 				//untyped __c('printf("mm %d \\n",pos)');
 				if (pchr != new Pointer(0)){
-					pos = cast ((pchr - p0).value());
+					var pdiff = (pchr - p0); // TODO: weird type inference
+					pos = cast pdiff.value();
 					if (memcmp(pchr,p1,l1) == 0){
 						return pos;
 					} else {
@@ -270,7 +272,7 @@ import c.CString.memcmp;
 		return ofPointerCopy(len,p); // keep 0x00 for C-compat TODO: do we want that?
 	}
 
-	@:keep private static function ofPointerCopy(len:Int, p:ConstPointer<Char>):String {
+	@:keep private static function ofPointerCopy<T>(len:Int, p:ConstPointer<Char>):String {
 		var ret = new String(null);
 		ret.__a = cast c.CStdlib.calloc(len, 8 /*TODO*/);
 		FixedArray.copy(p,0,ret.__a,0,len);

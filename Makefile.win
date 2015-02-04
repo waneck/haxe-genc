@@ -24,7 +24,9 @@ endif
 # use make MSVC=1 -f Makefile.win to build for OCaml/MSVC
 
 ifeq (${MSVC}, 1)
-NATIVE_LIBS = shell32.lib libs/extc/extc_stubs.obj libs/extc/zlib/zlib.lib libs/objsize/c_objsize.obj
+NATIVE_LIBS = shell32.lib libs/extc/extc_stubs.obj libs/extc/zlib/zlib.lib libs/objsize/c_objsize.obj \
+	libs/llvm/llvm_ocaml.obj libs/llvm/analysis_ocaml.obj libs/llvm/LLVMSupport.lib libs/llvm/LLVMCore.lib libs/llvm/LLVMAnalysis.lib \
+	libs/llvm/LLVMTarget.lib
 endif
 
 ifeq (${MSVC_OUTPUT}, 1)
