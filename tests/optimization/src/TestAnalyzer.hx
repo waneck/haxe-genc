@@ -3,6 +3,12 @@ private enum E {
 	B(?i:Int);
 }
 
+@:forward
+private abstract Vec2({x:Float, y:Float}) from {x:Float, y:Float} {
+	@:commutative @:op(A * B) static inline function mul(a:Vec2, b:Float):Vec2
+		return {x: a.x * b, y: a.y * b};
+}
+
 class TestAnalyzer extends TestBase {
 
 	static function main() {
@@ -674,6 +680,51 @@ class TestAnalyzer extends TestBase {
 				assertEqualsConst(0, i);
 			case A(_):
 		}
+	}
+
+	function testIssue3869() {
+        var v1:Vec2 = {x: 1., y: 2.};
+        var r = v1 * 2;
+		assertEqualsConst(2., r.x);
+		assertEqualsConst(4., r.y);
+
+        var v2:Vec2 = {x: 1., y: 2.};
+        var r2 = 2 * v2;
+		assertEqualsConst(2., r2.x);
+		assertEqualsConst(4., r2.y);
+	}
+
+	function testApiInline() {
+		var i = 65;
+		var f = 3.5;
+		var s = "foo";
+		var bTrue = true;
+		var bFalse = false;
+		var eBreak = haxe.macro.Expr.ExprDef.EBreak;
+
+		var floor = Math.floor(f);
+		assertEqualsConst(3, floor);
+
+		var ceil = Math.ceil(f);
+		assertEqualsConst(4, ceil);
+
+		var int = Std.int(f);
+		assertEqualsConst(3, int);
+
+		var string = Std.string(s);
+		assertEqualsConst("foo", string);
+
+		var string = Std.string(bTrue);
+		assertEqualsConst("true", string);
+
+		var string = Std.string(bFalse);
+		assertEqualsConst("false", string);
+
+		var fromCharCode = String.fromCharCode(i);
+		assertEqualsConst("A", fromCharCode);
+
+		var enumIndex = Type.enumIndex(eBreak);
+		assertEqualsConst(20, enumIndex);
 	}
 
 	function cond1() {

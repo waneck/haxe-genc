@@ -23,10 +23,10 @@ package haxe.io;
 
 #if neko
 	typedef BytesData =	neko.NativeString;
-#elseif flash9
+#elseif flash
 	typedef BytesData =	flash.utils.ByteArray;
 #elseif php
-	typedef BytesData =	php.NativeString;
+	typedef BytesData = php.BytesData;
 #elseif cpp
 	extern class Unsigned_char__ { }
 	typedef BytesData = Array<Unsigned_char__>;
@@ -37,9 +37,9 @@ package haxe.io;
 #elseif c
 	typedef BytesData = c.FixedArray<c.Types.UInt8>
 #elseif python
-	typedef BytesData = python.lib.ByteArray;
+	typedef BytesData = python.Bytearray;
 #elseif js
-	typedef BytesData = js.html.Uint8Array;
+	typedef BytesData = js.html.ArrayBuffer;
 #else
 	typedef BytesData = Array<Int>;
 #end

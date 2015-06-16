@@ -5,13 +5,48 @@ open Typecore
 
 (* PASS 1 begin *)
 
-let rec verify_ast e = match e.eexpr with
-	| TField(_) ->
+let rec verify_ast ctx e =
+	let not_null e e1 = match e1.eexpr with
+		| TConst TNull ->
+			(* TODO: https://github.com/HaxeFoundation/haxe/issues/4072 *)
+			(* display_error ctx ("Invalid null expression: " ^ (s_expr_pretty "" (s_type (print_context())) e)) e.epos *)
+			()
+		| _ -> ()
+	in
+	let rec loop e = match e.eexpr with
+	| TField(e1,_) ->
+		not_null e e1;
 		()
-	| TTypeExpr(TClassDecl {cl_kind = KAbstractImpl _}) ->
+	| TArray(e1,e2) ->
+		not_null e e1;
+		loop e1;
+		loop e2
+	| TCall(e1,el) ->
+		not_null e e1;
+		loop e1;
+		List.iter loop el
+	| TUnop(_,_,e1) ->
+		not_null e e1;
+		loop e1
+	(* probably too messy *)
+(* 	| TBinop((OpEq | OpNotEq),e1,e2) ->
+		loop e1;
+		loop e2
+	| TBinop((OpAssign | OpAssignOp _),e1,e2) ->
+		not_null e e1;
+		loop e1;
+		loop e2
+	| TBinop(op,e1,e2) ->
+		not_null e e1;
+		not_null e e2;
+		loop e1;
+		loop e2 *)
+	| TTypeExpr(TClassDecl {cl_kind = KAbstractImpl a}) when not (Meta.has Meta.RuntimeValue a.a_meta) ->
 		error "Cannot use abstract as value" e.epos
 	| _ ->
-		Type.iter verify_ast e
+		Type.iter loop e
+	in
+	loop e
 
 (*
 	Wraps implicit blocks in TIf, TFor, TWhile, TFunction and TTry with real ones
@@ -59,11 +94,11 @@ let promote_complex_rhs com e =
 				| [] -> e
 			end
 		| TSwitch(es,cases,edef) ->
-			{e with eexpr = TSwitch(es,List.map (fun (el,e) -> List.map find el,loop f e) cases,match edef with None -> None | Some e -> Some (loop f e)); etype = com.basic.tvoid}
+			{e with eexpr = TSwitch(es,List.map (fun (el,e) -> List.map find el,loop f e) cases,match edef with None -> None | Some e -> Some (loop f e)); }
 		| TIf(eif,ethen,eelse) ->
-			{e with eexpr = TIf(find eif, loop f ethen, match eelse with None -> None | Some e -> Some (loop f e)); etype = com.basic.tvoid}
+			{e with eexpr = TIf(find eif, loop f ethen, match eelse with None -> None | Some e -> Some (loop f e)); }
 		| TTry(e1,el) ->
-			{e with eexpr = TTry(loop f e1, List.map (fun (el,e) -> el,loop f e) el); etype = com.basic.tvoid}
+			{e with eexpr = TTry(loop f e1, List.map (fun (el,e) -> el,loop f e) el); }
 		| TParenthesis e1 when not (Common.defined com Define.As3) ->
 			{e with eexpr = TParenthesis(loop f e1)}
 		| TMeta(m,e1) ->
@@ -81,6 +116,7 @@ let promote_complex_rhs com e =
 			| TVar(v,eo) ->
 				begin match eo with
 					| Some e when is_complex e ->
+						let e = find e in
 						r := (loop (fun e -> mk (TBinop(OpAssign,mk (TLocal v) v.v_type e.epos,e)) v.v_type e.epos) e)
 							:: ((mk (TVar (v,None)) com.basic.tvoid e.epos))
 							:: !r
@@ -137,6 +173,26 @@ let rec add_final_return e =
 			) in
 			{ e with eexpr = TFunction f }
 		| _ -> e
+
+let rec wrap_js_exceptions com e =
+	let rec is_error t =
+		match follow t with
+		| TInst ({cl_path = (["js"],"Error")},_) -> true
+		| TInst ({cl_super = Some (csup,tl)}, _) -> is_error (TInst (csup,tl))
+		| _ -> false
+	in
+	let rec loop e =
+		match e.eexpr with
+		| TThrow eerr when not (is_error eerr.etype) ->
+			let terr = List.find (fun mt -> match mt with TClassDecl {cl_path = ["js";"_Boot"],"HaxeError"} -> true | _ -> false) com.types in
+			let cerr = match terr with TClassDecl c -> c | _ -> assert false in
+			let ewrap = { eerr with eexpr = TNew (cerr,[],[eerr]) } in
+			{ e with eexpr = TThrow ewrap }
+		| _ ->
+			Type.map_expr loop e
+	in
+
+	loop e
 
 (* -------------------------------------------------------------------------- *)
 (* CHECK LOCAL VARS INIT *)
@@ -338,13 +394,13 @@ let captured_vars com e =
 			method captured_type t = TInst (cnativearray,[t])
 
 			method mk_ref v ve p =
-				let earg = match ve with
-					| None ->
-						let t = match v.v_type with TInst (_, [t]) -> t | _ -> assert false in
-						mk (TConst TNull) t p (* generator will do the right thing for the non-nullable types *)
-					| Some e -> e
-				in
-				{ (Optimizer.mk_untyped_call "__array__" p [earg]) with etype = v.v_type }
+				match ve with
+				| None ->
+					let eone = mk (TConst (TInt (Int32.of_int 1))) t.tint p in
+					let t = match v.v_type with TInst (_, [t]) -> t | _ -> assert false in
+					mk (TNew (cnativearray,[t],[eone])) v.v_type p
+				| Some e ->
+					{ (Optimizer.mk_untyped_call "__array__" p [e]) with etype = v.v_type }
 
 			method mk_ref_access e v =
 				mk (TArray ({ e with etype = v.v_type }, mk (TConst (TInt 0l)) t.tint e.epos)) e.etype e.epos
@@ -630,7 +686,7 @@ let rename_local_vars ctx e =
 			let old = save() in
 			(* we have to look ahead for vars on these targets (issue #3344) *)
 			begin match ctx.com.platform with
-				| Js | Flash8 ->
+				| Js ->
 					let rec check_var e = match e.eexpr with
 						| TVar (v,eo) ->
 							(match eo with None -> () | Some e -> loop e);
@@ -681,13 +737,7 @@ let rename_local_vars ctx e =
 	loop e;
 	e
 
-let check_unification com e t =
-	begin match follow e.etype,follow t with
-		| TEnum _,TDynamic _ ->
-			add_feature com "may_print_enum";
-		| _ ->
-			()
-	end;
+let check_unification ctx e t =
 	begin match e.eexpr,t with
 		| TLocal v,TType({t_path = ["cs"],("Ref" | "Out")},_) ->
 			(* TODO: this smells of hack, but we have to deal with it somehow *)
@@ -715,31 +765,68 @@ let check_unification com e t =
 (* Saves a class state so it can be restored later, e.g. after DCE or native path rewrite *)
 let save_class_state ctx t = match t with
 	| TClassDecl c ->
-		let meta = c.cl_meta and path = c.cl_path and ext = c.cl_extern in
-		let fl = c.cl_fields and ofl = c.cl_ordered_fields and st = c.cl_statics and ost = c.cl_ordered_statics in
-		let cst = c.cl_constructor and over = c.cl_overrides in
-		let oflk = List.map (fun f -> f.cf_kind,f.cf_expr,f.cf_type) ofl in
-		let ostk = List.map (fun f -> f.cf_kind,f.cf_expr,f.cf_type) ost in
+		let mk_field_restore f =
+			let rec mk_overload_restore f =
+				f.cf_name,f.cf_kind,f.cf_expr,f.cf_type,f.cf_meta,f.cf_params
+			in
+			( f,mk_overload_restore f, List.map (fun f -> f,mk_overload_restore f) f.cf_overloads )
+		in
+		let restore_field (f,res,overloads) =
+			let restore_field (f,(name,kind,expr,t,meta,params)) =
+				f.cf_name <- name; f.cf_kind <- kind; f.cf_expr <- expr; f.cf_type <- t; f.cf_meta <- meta; f.cf_params <- params;
+				f
+			in
+			let f = restore_field (f,res) in
+			f.cf_overloads <- List.map restore_field overloads;
+			f
+		in
+		let mk_pmap lst =
+			List.fold_left (fun pmap f -> PMap.add f.cf_name f pmap) PMap.empty lst
+		in
+
+		let meta = c.cl_meta and path = c.cl_path and ext = c.cl_extern and over = c.cl_overrides in
+		let sup = c.cl_super and impl = c.cl_implements in
+		let csr = Option.map (mk_field_restore) c.cl_constructor in
+		let ofr = List.map (mk_field_restore) c.cl_ordered_fields in
+		let osr = List.map (mk_field_restore) c.cl_ordered_statics in
+		let init = c.cl_init in
 		c.cl_restore <- (fun() ->
+			c.cl_super <- sup;
+			c.cl_implements <- impl;
 			c.cl_meta <- meta;
 			c.cl_extern <- ext;
 			c.cl_path <- path;
-			c.cl_fields <- fl;
-			c.cl_ordered_fields <- ofl;
-			c.cl_statics <- st;
-			c.cl_ordered_statics <- ost;
-			c.cl_constructor <- cst;
+			c.cl_init <- init;
+			c.cl_ordered_fields <- List.map restore_field ofr;
+			c.cl_ordered_statics <- List.map restore_field osr;
+			c.cl_fields <- mk_pmap c.cl_ordered_fields;
+			c.cl_statics <- mk_pmap c.cl_ordered_statics;
+			c.cl_constructor <- Option.map restore_field csr;
 			c.cl_overrides <- over;
-			(* DCE might modify the cf_kind, so let's restore it as well *)
-			List.iter2 (fun f (k,e,t) -> f.cf_kind <- k; f.cf_expr <- e; f.cf_type <- t;) ofl oflk;
-			List.iter2 (fun f (k,e,t) -> f.cf_kind <- k; f.cf_expr <- e; f.cf_type <- t;) ost ostk;
 		)
 	| _ ->
 		()
 
 (* PASS 2 begin *)
 
-let is_removable_class c = c.cl_kind = KGeneric && (Codegen.has_ctor_constraint c || Meta.has Meta.Remove c.cl_meta)
+let rec is_removable_class c =
+	match c.cl_kind with
+	| KGeneric ->
+		(Meta.has Meta.Remove c.cl_meta ||
+		(match c.cl_super with
+			| Some (c,_) -> is_removable_class c
+			| _ -> false) ||
+		List.exists (fun (_,t) -> match follow t with
+			| TInst(c,_) ->
+				Codegen.has_ctor_constraint c || Meta.has Meta.Const c.cl_meta
+			| _ ->
+				false
+		) c.cl_params)
+	| KTypeParameter _ ->
+		(* this shouldn't happen, have to investigate (see #4092) *)
+		true
+	| _ ->
+		false
 
 let remove_generic_base ctx t = match t with
 	| TClassDecl c when is_removable_class c ->
@@ -835,7 +922,7 @@ let apply_native_paths ctx t =
 			let meta,path = get_real_path e.e_meta e.e_path in
 			e.e_meta <- meta :: e.e_meta;
 			e.e_path <- path;
-		| TAbstractDecl a ->
+		| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
 			let meta,path = get_real_path a.a_meta a.a_path in
 			a.a_meta <- meta :: a.a_meta;
 			a.a_path <- path;
@@ -945,8 +1032,25 @@ let add_meta_field ctx t = match t with
 		| Some e ->
 			let f = mk_field "__meta__" t_dynamic c.cl_pos in
 			f.cf_expr <- Some e;
-			c.cl_ordered_statics <- f :: c.cl_ordered_statics;
-			c.cl_statics <- PMap.add f.cf_name f c.cl_statics)
+			let can_deal_with_interface_metadata () = match ctx.com.platform with
+				| Flash when Common.defined ctx.com Define.As3 -> false
+				| Php -> false
+				| _ -> true
+			in
+			if c.cl_interface && not (can_deal_with_interface_metadata()) then begin
+				(* borrowed from gencommon, but I did wash my hands afterwards *)
+				let path = fst c.cl_path,snd c.cl_path ^ "_HxMeta" in
+				let ncls = mk_class c.cl_module path c.cl_pos in
+				let cf = mk_field "__meta__" e.etype e.epos in
+				cf.cf_expr <- Some e;
+				ncls.cl_statics <- PMap.add "__meta__" cf ncls.cl_statics;
+				ncls.cl_ordered_statics <- cf :: ncls.cl_ordered_statics;
+				ctx.com.types <- (TClassDecl ncls) :: ctx.com.types;
+				c.cl_meta <- (Meta.Custom ":hasMetadata",[],e.epos) :: c.cl_meta
+			end else begin
+				c.cl_ordered_statics <- f :: c.cl_ordered_statics;
+				c.cl_statics <- PMap.add f.cf_name f c.cl_statics
+			end)
 	| _ ->
 		()
 
@@ -967,6 +1071,37 @@ let check_void_field ctx t = match t with
 		List.iter check c.cl_ordered_statics;
 	| _ ->
 		()
+
+(* Interfaces have no 'super', but can extend many other interfaces.
+   This makes the first extended (implemented) interface the super for efficiency reasons (you can get one for 'free')
+   and leaves the remaining ones as 'implemented' *)
+let promote_first_interface_to_super ctx t = match t with
+	| TClassDecl c when c.cl_interface ->
+		begin match c.cl_implements with
+		| ({ cl_path = ["cpp";"rtti"],_ },_ ) :: _ -> ()
+		| first_interface  :: remaining ->
+			c.cl_super <- Some first_interface;
+			c.cl_implements <- remaining
+		| _ -> ()
+		end
+	| _ ->
+		()
+
+let commit_features ctx t =
+	let m = (t_infos t).mt_module in
+	Hashtbl.iter (fun k v ->
+		Common.add_feature ctx.com k;
+	) m.m_extra.m_features
+
+let check_reserved_type_paths ctx t =
+	let check path pos =
+		if List.mem path ctx.com.config.pf_reserved_type_paths then
+			ctx.com.warning ("Type path " ^ (s_type_path path) ^ " is reserved on this target") pos
+	in
+	match t with
+	| TClassDecl c when not c.cl_extern -> check c.cl_path c.cl_pos
+	| TEnumDecl e when not e.e_extern -> check e.e_path e.e_pos
+	| _ -> ()
 
 (* PASS 3 end *)
 
@@ -1041,7 +1176,7 @@ let run com tctx main =
 	if use_static_analyzer then begin
 		(* PASS 1: general expression filters *)
 		let filters = [
-			Codegen.UnificationCallback.run (check_unification com);
+			Codegen.UnificationCallback.run (check_unification tctx);
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			Optimizer.inline_constructors tctx;
 			Optimizer.reduce_expression tctx;
@@ -1050,21 +1185,24 @@ let run com tctx main =
 		] in
 		List.iter (run_expression_filters tctx filters) new_types;
 		Analyzer.Run.run_on_types tctx new_types;
-		List.iter (iter_expressions [verify_ast]) new_types;
+		List.iter (iter_expressions [verify_ast tctx]) new_types;
 		let filters = [
 			Optimizer.sanitize com;
 			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
+			if com.platform = Js then wrap_js_exceptions com else (fun e -> e);
 			rename_local_vars tctx;
 		] in
 		List.iter (run_expression_filters tctx filters) new_types;
 	end else begin
 		(* PASS 1: general expression filters *)
 		let filters = [
-			Codegen.UnificationCallback.run (check_unification com);
+			Codegen.UnificationCallback.run (check_unification tctx);
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			blockify_ast;
+			check_local_vars_init;
+			Optimizer.inline_constructors tctx;
 			( if (Common.defined com Define.NoSimplify) || (Common.defined com Define.Cppia) ||
-						( match com.platform with Cpp | Flash8 | C -> defined com Define.Llvm | _ -> true ) then
+						( match com.platform with Cpp | C -> defined com Define.Llvm | _ -> true ) then
 					fun e -> e
 				else
 					fun e ->
@@ -1074,15 +1212,15 @@ let run com tctx main =
 						timer();
 						save();
 					e );
-			if com.foptimize then (fun e -> Optimizer.reduce_expression tctx (Optimizer.inline_constructors tctx e)) else Optimizer.sanitize com;
-			check_local_vars_init;
+			if com.foptimize then (fun e -> Optimizer.reduce_expression tctx e) else Optimizer.sanitize com;
 			captured_vars com;
 			promote_complex_rhs com;
 			if com.config.pf_add_final_return then add_final_return else (fun e -> e);
+			if com.platform = Js then wrap_js_exceptions com else (fun e -> e);
 			rename_local_vars tctx;
 		] in
 		List.iter (run_expression_filters tctx filters) new_types;
-		List.iter (iter_expressions [verify_ast]) new_types;
+		List.iter (iter_expressions [verify_ast tctx]) new_types;
 	end;
 	next_compilation();
 	List.iter (fun f -> f()) (List.rev com.filters); (* macros onGenerate etc. *)
@@ -1096,7 +1234,7 @@ let run com tctx main =
 	(* check @:remove metadata before DCE so it is ignored there (issue #2923) *)
 	List.iter (check_remove_metadata tctx) com.types;
 	(* DCE *)
-	let dce_mode = if Common.defined com Define.As3 || Common.defined com Define.DocGen then
+	let dce_mode = if Common.defined com Define.As3 then
 		"no"
 	else
 		(try Common.defined_value com Define.Dce with _ -> "no")
@@ -1116,7 +1254,7 @@ let run com tctx main =
 				not (Meta.has Meta.Enum cf.cf_meta)
 			in
 			(* also filter abstract implementation classes that have only @:enum fields (issue #2858) *)
-			if not (Meta.has Meta.Used c.cl_meta || Common.defined com Define.As3) || not (List.exists is_runtime_field c.cl_ordered_statics) then
+			if not (List.exists is_runtime_field c.cl_ordered_statics) then
 				c.cl_extern <- true
 		| _ -> ()
 	) com.types;
@@ -1128,5 +1266,8 @@ let run com tctx main =
 		(match com.platform with | Java | Cs -> (fun _ _ -> ()) | _ -> add_field_inits);
 		add_meta_field;
 		check_void_field;
+		(match com.platform with | Cpp -> promote_first_interface_to_super | _ -> (fun _ _ -> ()) );
+		commit_features;
+		(if com.config.pf_reserved_type_paths <> [] then check_reserved_type_paths else (fun _ _ -> ()));
 	] in
 	List.iter (fun t -> List.iter (fun f -> f tctx t) type_filters) com.types

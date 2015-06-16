@@ -47,7 +47,7 @@ import cs.internal.Exceptions;
 				return true;
 		}
 
-		return clt.IsAssignableFrom(cs.Lib.nativeType(v));
+		return clt.IsAssignableFrom(cs.Lib.getNativeType(v));
 	}
 
 	public static function string( s : Dynamic ) : String {
@@ -81,7 +81,7 @@ import cs.internal.Exceptions;
 			}
 		}
 
-		var foundAny = false;
+		var foundAny = i != -1;
 		var isNeg = false;
 		while (++i < len)
 		{
@@ -134,103 +134,48 @@ import cs.internal.Exceptions;
 	public static function parseFloat( x : String ) : Float {
 		if (x == null) return Math.NaN;
 		x = StringTools.ltrim(x);
-
-		var ret = 0.0;
-		var div = 0.0;
-		var e = 0.0;
-
-		var len = x.length;
-		var foundAny = false;
-		var isNeg = false;
+		var found = false, hasDot = false, hasSign = false,
+		    hasE = false, hasESign = false, hasEData = false;
 		var i = -1;
-		while (++i < len)
-		{
-			var c = cast(untyped x[i], Int); //fastCodeAt
-			if (!foundAny)
-			{
-				switch(c)
-				{
-					case '-'.code:
-						isNeg = true;
-						continue;
-					case ' '.code, '\t'.code, '\n'.code, '\r'.code, '+'.code:
-						if (isNeg)
-							return Math.NaN;
-						continue;
-				}
-			}
+		inline function getch(i:Int):Int return cast ((untyped x : cs.system.String)[i]);
 
-			if (c == '.'.code)
+		while (++i < x.length)
+		{
+			var chr = getch(i);
+			if (chr >= '0'.code && chr <= '9'.code)
 			{
-				if (div != 0.0)
+				if (hasE)
+				{
+					hasEData = true;
+				}
+				found = true;
+			} else switch (chr) {
+				case 'e'.code | 'E'.code if(!hasE):
+					hasE = true;
+				case '.'.code if (!hasDot):
+					hasDot = true;
+				case '-'.code, '+'.code if (!found && !hasSign):
+					hasSign = true;
+				case '-'.code | '+'.code if (found && !hasESign && hasE && !hasEData):
+					hasESign = true;
+				case _:
 					break;
-				div = 1.0;
-				foundAny = true;
-
-				continue;
-			}
-
-			if (c >= '0'.code && c <= '9'.code)
-			{
-				if (!foundAny && c == '0'.code)
-				{
-					foundAny = true;
-					continue;
-				}
-
-				ret *= 10; foundAny = true; div *= 10;
-
-				ret += c - '0'.code;
-			} else if (foundAny && (c == 'e'.code || c == 'E'.code)) {
-				var eNeg = false;
-				var eFoundAny = false;
-				if (i + 1 < len)
-				{
-					var next = untyped cast(x[i + 1], Int);
-					if (next == '-'.code)
-					{
-						eNeg = true;
-						i++;
-					} else if (next == '+'.code) {
-						i++;
-					}
-				}
-
-				while (++i < len)
-				{
-					c = untyped cast(x[i], Int);
-					if (c >= '0'.code && c <= '9'.code)
-					{
-						if (!eFoundAny && c == '0'.code)
-							continue;
-						eFoundAny = true;
-						e *= 10;
-						e += c - '0'.code;
-					} else {
-						break;
-					}
-				}
-
-				if (eNeg) e = -e;
-			} else {
-				break;
 			}
 		}
-
-		if (div == 0.0) div = 1.0;
-
-		if (foundAny)
+		if (hasE && !hasEData)
 		{
-			ret = isNeg ? -(ret / div) : (ret / div);
-			if (e != 0.0)
-			{
-				return ret * Math.pow(10.0, e);
-			} else {
-				return ret;
-			}
-		} else {
-			return Math.NaN;
+			i--;
+			if (hasESign)
+				i--;
 		}
+		if (i != x.length)
+		{
+			x = x.substr(0,i);
+		}
+		return try
+			cs.system.Double.Parse(x, cs.system.globalization.CultureInfo.InvariantCulture)
+		catch(e:Dynamic)
+			Math.NaN;
 	}
 
 	@:extern inline public static function instance<T:{},S:T>( value : T, c : Class<S> ) : S {

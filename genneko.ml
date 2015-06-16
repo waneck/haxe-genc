@@ -332,6 +332,7 @@ and gen_expr ctx e =
 				let path = (match follow v.v_type with
 					| TInst (c,_) -> Some c.cl_path
 					| TEnum (e,_) -> Some e.e_path
+					| TAbstract (a,_) -> Some a.a_path
 					| TDynamic _ -> None
 					| _ -> assert false
 				) in
@@ -662,7 +663,14 @@ let generate_libs_init = function
 			var @b = if( @s == "Windows" )
 				@env("HAXEPATH") + "\\lib\\"
 				else try $loader.loadprim("std@file_contents",1)(@env("HOME")+"/.haxelib") + "/"
-				catch e if( @s == "Linux" ) "/usr/lib/haxe/lib/" else "/usr/local/lib/haxe/lib/";
+				catch e
+					if( @s == "Linux" )
+						if( $loader(loadprim("std@sys_exists",1))("/usr/lib/haxe/lib") )
+							"/usr/lib/haxe/lib"
+						else
+							"/usr/share/haxe/lib/"
+					else
+						"/usr/local/lib/haxe/lib/";
 			if( try $loader.loadprim("std@sys_file_type",1)(".haxelib") == "dir" catch e false ) @b = $loader.loadprim("std@file_full_path",1)(".haxelib") + "/";
 			if( $loader.loadprim("std@sys_is64",0)() ) @s = @s + 64;
 			@b = @b + "/"
@@ -685,7 +693,9 @@ let generate_libs_init = function
 						op "+" (call p (loadp "file_contents" 1) [op "+" (call p (ident p "@env") [str p "HOME"]) (str p "/.haxelib")]) (str p "/"),
 						"e",
 						(EIf (op "==" es (str p "Linux"),
-							str p "/usr/lib/haxe/lib/",
+							(EIf (call p (loadp "sys_exists" 1) [ str p "/usr/lib/haxe/lib" ],
+								str p "/usr/lib/haxe/lib/",
+								Some (str p "/usr/share/haxe/lib/")),p),
 							Some (str p "/usr/local/lib/haxe/lib/")
 						),p)
 					),p)
@@ -773,7 +783,6 @@ let build ctx types =
 
 let generate com =
 	let ctx = new_context com (if Common.defined com Define.NekoV1 then 1 else 2) false in
-	let t = Common.timer "neko generation" in
 	let libs = (EBlock (generate_libs_init com.neko_libs) , { psource = "<header>"; pline = 1; }) in
 	let el = build ctx com.types in
 	let emain = (match com.main with None -> [] | Some e -> [gen_expr ctx e]) in
@@ -809,5 +818,4 @@ let generate com =
 		if command ("nekoc -p \"" ^ neko_file ^ "\"") <> 0 then failwith "Failed to print neko code";
 		Sys.remove neko_file;
 		Sys.rename ((try Filename.chop_extension com.file with _ -> com.file) ^ "2.neko") neko_file;
-	end;
-	t()
+	end

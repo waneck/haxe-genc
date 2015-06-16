@@ -22,7 +22,7 @@
 
 /**
 	The `Lambda` class is a collection of methods to support functional
-	programming. It is ideally used with 'using Lambda' and then acts as an
+	programming. It is ideally used with `using Lambda` and then acts as an
 	extension to Iterable types.
 
 	On static platforms, working with the Iterable structure might be slower
@@ -85,6 +85,30 @@ class Lambda {
 		for( x in it )
 			l.add(f(i++,x));
 		return l;
+	}
+	
+	/** 
+		Concatenate a list of lists.
+		
+		The order of elements is preserved.
+	**/
+	public static function flatten<A>( it : Iterable<Iterable<A>> ) : List<A> {
+		var l = new List<A>();
+		for (e in it)
+			for (x in e)
+				l.add(x);
+		return l;
+	}
+	
+	/** 
+		A composition of map and flatten.
+		
+		The order of elements is preserved.
+		
+		If `f` is null, the result is unspecified.
+	**/
+	public static function flatMap<A,B>( it : Iterable<A>, f: A -> Iterable<B> ) : List<B> {
+		return Lambda.flatten(Lambda.map(it, f));
 	}
 
 	/**

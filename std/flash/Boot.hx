@@ -51,7 +51,6 @@ class Boot extends flash.display.MovieClip {
 	public static var skip_constructor = false;
 
 	function start() {
-		#if (mt && !doc_gen) mt.flash.Init.check(); #end
 		#if dontWaitStage
 			init();
 		#else
@@ -80,12 +79,19 @@ class Boot extends flash.display.MovieClip {
 		throw "assert";
 	}
 
+	static var IN_E = 0;
 	public static function enum_to_string( e : { tag : String, params : Array<Dynamic> } ) {
 		if( e.params == null )
 			return e.tag;
 		var pstr = [];
-		for( p in e.params )
-			pstr.push(__string_rec(p,""));
+		if( IN_E > 15 ) {
+			pstr.push("...");
+		} else {
+			IN_E++;
+			for( p in e.params )
+				pstr.push(__string_rec(p, ""));
+			IN_E--;
+		}
 		return e.tag+"("+pstr.join(",")+")";
 	}
 

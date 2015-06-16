@@ -24,11 +24,13 @@ class TestSpod extends Test
 		try cnx.request('DROP TABLE NullableSpodClass') catch(e:Dynamic) {}
 		try cnx.request('DROP TABLE ClassWithStringId') catch(e:Dynamic) {}
 		try cnx.request('DROP TABLE ClassWithStringIdRef') catch(e:Dynamic) {}
+		try cnx.request('DROP TABLE IssueC3828') catch(e:Dynamic) {}
 		TableCreate.create(MySpodClass.manager);
 		TableCreate.create(OtherSpodClass.manager);
 		TableCreate.create(NullableSpodClass.manager);
 		TableCreate.create(ClassWithStringId.manager);
 		TableCreate.create(ClassWithStringIdRef.manager);
+		TableCreate.create(IssueC3828.manager);
 	}
 
 	private function setManager()
@@ -58,6 +60,24 @@ class TestSpod extends Test
 		scls.anEnum = SecondValue;
 
 		return scls;
+	}
+
+	public function testIssue3828()
+	{
+		setManager();
+		var u1 = new IssueC3828();
+		u1.insert();
+		var u2 = new IssueC3828();
+		u2.refUser = u1;
+		u2.insert();
+		var u1id = u1.id, u2id = u2.id;
+		u1 = null; u2 = null;
+		Manager.cleanup();
+
+		var u1 = IssueC3828.manager.get(u1id);
+		var u2 = IssueC3828.manager.search($refUser == u1).first();
+		eq(u1.id, u1id);
+		eq(u2.id, u2id);
 	}
 
 	public function testStringIdRel()
@@ -122,15 +142,21 @@ class TestSpod extends Test
 		c2.insert();
 
 		var scls = getDefaultClass();
+		var scls1 = scls;
 		scls.relation = c1;
 		scls.insert();
 		var id1 = scls.theId;
 		scls = getDefaultClass();
 		scls.relation = c1;
 		scls.insert();
+
+		scls1.next = scls;
+		scls1.update();
+
 		var id2 = scls.theId;
 		scls = getDefaultClass();
 		scls.relation = c1;
+		scls.next = scls1;
 		scls.anEnum = FirstValue;
 		scls.insert();
 		var id3 = scls.theId;
@@ -142,6 +168,8 @@ class TestSpod extends Test
 		var r2s = MySpodClass.manager.search($anEnum == FirstValue);
 		eq(r2s.length,1);
 		eq(r2s.first().theId,id3);
+		eq(r2s.first().next.theId,id1);
+		eq(r2s.first().next.next.theId,id2);
 
 		var fv = getSecond();
 		var r1s = [ for (c in MySpodClass.manager.search($anEnum == fv,{orderBy:theId})) c.theId ];
@@ -149,6 +177,11 @@ class TestSpod extends Test
 		var r2s = MySpodClass.manager.search($anEnum == getFirst());
 		eq(r2s.length,1);
 		eq(r2s.first().theId,id3);
+
+		var ids = [id1,id2,id3];
+		var s = [ for (c in MySpodClass.manager.search( $anEnum == SecondValue || $theId in ids )) c.theId ];
+		s.sort(Reflect.compare);
+		eq([id1,id2,id3].join(','),s.join(','));
 
 		r2s.first().delete();
 		for (v in MySpodClass.manager.search($anEnum == fv)) v.delete();
@@ -221,8 +254,13 @@ class TestSpod extends Test
 		eq(scls.relationNullable,null);
 		eq(scls.abstractType,null);
 		eq(scls.anEnum,null);
-		scls.delete();
+		Manager.cleanup();
 
+		scls = new NullableSpodClass();
+		scls.theId = id;
+		t( untyped NullableSpodClass.manager.getUpdateStatement( scls ) != null );
+
+		scls.delete();
 	}
 
 	public function testSpodTypes()
@@ -252,28 +290,28 @@ class TestSpod extends Test
 		f(cls1 == scls,pos());
 		scls = null;
 
-		t(Std.is(cls1.int, Int),pos());
+		t((cls1.int is Int),pos());
 		eq(cls1.int, 1,pos());
-		t(Std.is(cls1.double, Float),pos());
+		t((cls1.double is Float),pos());
 		eq(cls1.double, 2.0,pos());
-		t(Std.is(cls1.boolean, Bool),pos());
+		t((cls1.boolean is Bool),pos());
 		eq(cls1.boolean, true,pos());
-		t(Std.is(cls1.string, String),pos());
+		t((cls1.string is String),pos());
 		eq(cls1.string, "some string",pos());
-		t(Std.is(cls1.abstractType, String),pos());
+		t((cls1.abstractType is String),pos());
 		eq(cls1.abstractType.get(), "other string",pos());
 		t(cls1.date != null,pos());
-		t(Std.is(cls1.date, Date),pos());
+		t((cls1.date is Date),pos());
 		eq(cls1.date.getTime(), new Date(2012, 7, 30, 0, 0, 0).getTime(),pos());
 
-		t(Std.is(cls1.binary, Bytes),pos());
+		t((cls1.binary is Bytes),pos());
 		eq(cls1.binary.compare(Bytes.ofString("\x01\n\r'\x02")), 0,pos());
 		t(cls1.enumFlags.has(FirstValue),pos());
 		f(cls1.enumFlags.has(SecondValue),pos());
 		t(cls1.enumFlags.has(ThirdValue),pos());
 
-		t(Std.is(cls1.data, Array),pos());
-		t(Std.is(cls1.data[0], ComplexClass),pos());
+		t((cls1.data is Array),pos());
+		t((cls1.data[0] is ComplexClass),pos());
 
 		eq(cls1.data[0].val.name, "test",pos());
 		eq(cls1.data[0].val.array.length, 4,pos());
@@ -283,7 +321,7 @@ class TestSpod extends Test
 		eq(cls1.relationNullable.name, "second spod",pos());
 
 		eq(cls1.anEnum, SecondValue,pos());
-		t(Std.is(cls1.anEnum, SpodEnum),pos());
+		t((cls1.anEnum is SpodEnum),pos());
 
 		eq(cls1, MySpodClass.manager.select($anEnum == SecondValue),pos());
 
@@ -313,6 +351,10 @@ class TestSpod extends Test
 			c.delete();
 		for (c in OtherSpodClass.manager.all())
 			c.delete();
+
+		//issue #3598
+		var inexistent = MySpodClass.manager.get(1000,false);
+		eq(inexistent,null);
 	}
 
 	public function testDateQuery()

@@ -21,6 +21,19 @@
  */
 package js;
 
+private class HaxeError extends js.Error {
+
+	var val:Dynamic;
+
+	public function new(val:Dynamic) untyped {
+		super();
+		this.val = __define_feature__("js.Boot.HaxeError", val);
+		this.message = String(val);
+		if (js.Error.captureStackTrace) js.Error.captureStackTrace(this, HaxeError);
+	}
+}
+
+@:dox(hide)
 class Boot {
 
 	private static function __unhtml(s : String) {
@@ -67,7 +80,7 @@ class Boot {
 		return untyped __define_feature__("js.Boot.isEnum", e.__ename__);
 	}
 
-	static inline function getClass(o:Dynamic) : Dynamic {
+	static function getClass(o:Dynamic) : Dynamic {
 		if (Std.is(o, Array))
 			return Array;
 		else {
@@ -81,7 +94,7 @@ class Boot {
 		}
 	}
 
-	@:ifFeature("may_print_enum")
+	@:ifFeature("has_enum")
 	private static function __string_rec(o,s:String) {
 		untyped {
 			if( o == null )
@@ -229,12 +242,9 @@ class Boot {
 		return __nativeClassName(o) != null;
 	}
 
-	// resolve native JS class (with window or global):
+	// resolve native JS class in the global scope:
 	static function __resolveNativeClass(name:String) untyped {
-		if (__js__("typeof window") != "undefined")
-			return window[name];
-		else
-			return global[name];
+		return untyped Function('return typeof $name != "undefined" ? $name : null')();
 	}
 
 }

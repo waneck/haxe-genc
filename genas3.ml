@@ -54,6 +54,28 @@ let is_var_field f =
 	| _ ->
 		false
 
+let is_special_compare e1 e2 =
+	match e1.eexpr, e2.eexpr with
+	| TConst TNull, _  | _ , TConst TNull -> None
+	| _ ->
+	match follow e1.etype, follow e2.etype with
+	| TInst ({ cl_path = ["flash"],"NativeXml" } as c,_) , _ | _ , TInst ({ cl_path = ["flash"],"NativeXml" } as c,_) -> Some c
+	| _ -> None
+
+let is_fixed_override cf t =
+	let is_type_parameter c = match c.cl_kind with
+		| KTypeParameter _ -> true
+		| _ -> false
+	in
+	match follow cf.cf_type,follow t with
+	| TFun(_,r1),TFun(_,r2) ->
+		begin match follow r1,follow r2 with
+		| TInst(c1,_),TInst(c2,_) when c1 != c2 && not (is_type_parameter c1) && not (is_type_parameter c2) -> true
+		| _ -> false
+		end
+	| _ ->
+		false
+
 let protect name =
 	match name with
 	| "Error" | "Namespace" -> "_" ^ name
@@ -322,6 +344,7 @@ let generate_resources infos =
 		let dir = (infos.com.file :: ["__res"]) in
 		create_dir [] dir;
 		let add_resource name data =
+			let name = Base64.str_encode name in
 			let ch = open_out_bin (String.concat "/" (dir @ [name])) in
 			output_string ch data;
 			close_out ch
@@ -336,9 +359,9 @@ let generate_resources infos =
 		Hashtbl.iter (fun name _ ->
 			let varname = ("v" ^ (string_of_int !k)) in
 			k := !k + 1;
-			print ctx "\t\t[Embed(source = \"__res/%s\", mimeType = \"application/octet-stream\")]\n" name;
+			print ctx "\t\t[Embed(source = \"__res/%s\", mimeType = \"application/octet-stream\")]\n" (Base64.str_encode name);
 			print ctx "\t\tpublic static var %s:Class;\n" varname;
-			inits := ("list[\"" ^name^ "\"] = " ^ varname ^ ";") :: !inits;
+			inits := ("list[\"" ^ Ast.s_escape name ^ "\"] = " ^ varname ^ ";") :: !inits;
 		) infos.com.resources;
 		spr ctx "\t\tstatic public function __init__():void {\n";
 		spr ctx "\t\t\tlist = new Dictionary();\n";
@@ -512,6 +535,14 @@ let rec gen_call ctx e el r =
 		spr ctx "(";
 		concat ctx "," (gen_value ctx) el;
 		spr ctx ")"
+	| TField (e1,FInstance(_,_,cf)),el when is_fixed_override cf e.etype ->
+		let s = type_str ctx r e.epos in
+		spr ctx "((";
+		gen_value ctx e;
+		spr ctx "(";
+		concat ctx "," (gen_value ctx) el;
+		spr ctx ")";
+		print ctx ") as %s)" s
 	| _ ->
 		gen_value ctx e;
 		spr ctx "(";
@@ -578,6 +609,9 @@ and gen_expr ctx e =
 		spr ctx "[";
 		gen_value ctx e2;
 		spr ctx "]";
+	| TBinop (Ast.OpEq,e1,e2) when (match is_special_compare e1 e2 with Some c -> true | None -> false) ->
+		let c = match is_special_compare e1 e2 with Some c -> c | None -> assert false in
+		gen_expr ctx (mk (TCall (mk (TField (mk (TTypeExpr (TClassDecl c)) t_dynamic e.epos,FDynamic "compare")) t_dynamic e.epos,[e1;e2])) ctx.inf.com.basic.tbool e.epos);
 	(* what is this used for? *)
 (* 	| TBinop (op,{ eexpr = TField (e1,s) },e2) ->
 		gen_value_op ctx e1;
@@ -1012,8 +1046,11 @@ let generate_field ctx static f =
 		let gen_init () = match f.cf_expr with
 			| None -> ()
 			| Some e ->
-				print ctx " = ";
-				gen_value ctx e
+				if not static || (match e.eexpr with | TConst _ | TFunction _ | TTypeExpr _ -> true | _ -> false) then begin
+					print ctx " = ";
+					gen_value ctx e
+				end else
+					Codegen.ExtClass.add_static_init ctx.curclass f e e.epos
 		in
 		if is_getset then begin
 			let t = type_str ctx f.cf_type p in
@@ -1088,13 +1125,33 @@ let generate_class ctx c =
 	);
 	List.iter (generate_field ctx false) c.cl_ordered_fields;
 	List.iter (generate_field ctx true) c.cl_ordered_statics;
+	let has_init = match c.cl_init with
+		| None -> false
+		| Some e ->
+			newline ctx;
+			spr ctx "static static_init function init() : void";
+			gen_expr ctx (mk_block e);
+			true;
+	in
 	cl();
 	newline ctx;
 	print ctx "}";
 	pack();
 	newline ctx;
 	print ctx "}";
-	newline ctx
+	if has_init then begin
+		newline ctx;
+		spr ctx "namespace static_init";
+		newline ctx;
+		print ctx "%s.static_init::init()" (s_path ctx true ctx.curclass.cl_path Ast.null_pos);
+	end;
+	newline ctx;
+	if c.cl_interface && Ast.Meta.has (Ast.Meta.Custom ":hasMetadata") c.cl_meta then begin
+		(* we have to reference the metadata class in order for it to be compiled *)
+		let path = fst c.cl_path,snd c.cl_path ^ "_HxMeta" in
+		spr ctx (Ast.s_type_path path);
+		newline ctx
+	end
 
 let generate_main ctx inits =
 	ctx.curclass <- { null_class with cl_path = [],"__main__" };
@@ -1202,11 +1259,10 @@ let generate com =
 				| ["flash"],"FlashXml__" -> { c with cl_path = [],"Xml" }
 				| (pack,name) -> { c with cl_path = (pack,protect name) }
 			) in
-			(match c.cl_init with
-			| None -> ()
-			| Some e -> inits := e :: !inits);
 			if c.cl_extern then
-				()
+				(match c.cl_init with
+				| None -> ()
+				| Some e -> inits := e :: !inits)
 			else
 				let ctx = init infos c.cl_path in
 				generate_class ctx c;

@@ -31,7 +31,7 @@ private enum FileKind {
 class FileSystem {
 
 	public static function exists( path : String ) : Bool {
-		return sys_exists(haxe.io.Path.removeTrailingSlashes(path));
+		return sys_exists(makeCompatiblePath(path));
 	}
 
 	public static function rename( path : String, newPath : String ) : Void {
@@ -40,7 +40,7 @@ class FileSystem {
 	}
 
 	public static function stat( path : String ) : FileStat {
-		var s : FileStat = sys_stat(path);
+		var s : FileStat = sys_stat(makeCompatiblePath(path));
 		if (s==null)
 			return { gid:0, uid:0, atime:Date.fromTime(0), mtime:Date.fromTime(0), ctime:Date.fromTime(0), dev:0, ino:0, nlink:0, rdev:0, size:0, mode:0 };
 		s.atime = Date.fromTime(1000.0*(untyped s.atime));
@@ -53,13 +53,13 @@ class FileSystem {
 		return new String(file_full_path(relPath));
 	}
 
-	public static function absPath ( relPath : String ) : String {
+	public static function absolutePath ( relPath : String ) : String {
 		if (haxe.io.Path.isAbsolute(relPath)) return relPath;
 		return haxe.io.Path.join([Sys.getCwd(), relPath]);
 	}
 
 	static function kind( path : String ) : FileKind {
-		var k:String = sys_file_type(haxe.io.Path.removeTrailingSlashes(path));
+		var k:String = sys_file_type(makeCompatiblePath(path));
 		return switch(k) {
 		case "file": kfile;
 		case "dir": kdir;
@@ -68,7 +68,11 @@ class FileSystem {
 	}
 
 	public static function isDirectory( path : String ) : Bool {
-		return kind(path) == kdir;
+		return try {
+			kind(path) == kdir;
+		} catch(e:Dynamic) {
+			false;
+		}
 	}
 
 	public static function createDirectory( path : String ) : Void {
@@ -97,6 +101,14 @@ class FileSystem {
 
 	public static function readDirectory( path : String ) : Array<String> {
 		return sys_read_dir(path);
+	}
+
+	private static inline function makeCompatiblePath(path:String):String {
+		return if (path.charCodeAt(1) == ":".code && path.length <= 3) {
+			haxe.io.Path.addTrailingSlash(path);
+		} else {
+			haxe.io.Path.removeTrailingSlashes(path);
+		}
 	}
 
 	private static var sys_exists = cpp.Lib.load("std","sys_exists",1);

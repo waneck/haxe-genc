@@ -9,7 +9,7 @@ var dynmap:Dynamic = map;
 var map2:haxe.Constraints.IMap<Dynamic,Dynamic> = dynmap;
 var map3:haxe.Constraints.IMap<String, Dynamic> = dynmap;
 var map4:haxe.Constraints.IMap<String, Int> = dynmap;
-Std.is(map, haxe.ds.StringMap) == true;
+(map is haxe.ds.StringMap) == true;
 map.exists("foo") == true;
 map.exists("bar") == true;
 map.exists("baz") == true;
@@ -49,7 +49,7 @@ map.get(1) == null;
 map.set(1, 1);
 map.set(2, 2);
 map.set(3, 3);
-Std.is(map, haxe.ds.IntMap) == true;
+(map is haxe.ds.IntMap) == true;
 map.exists(1) == true;
 map.exists(2) == true;
 map.exists(3) == true;
@@ -149,7 +149,6 @@ map.exists(c) == true;
 map.get(b) == null;
 
 // [] access
-/*
 var map = new Map();
 map["foo"] == null;
 map["foo"] = 12;
@@ -165,4 +164,12 @@ map[(function(s) return s + "o")("fo")] == 1;
 map["bar"] = map["foo"] = 9;
 map["bar"] == 9;
 map["foo"] == 9;
-*/
+
+#if !(java || cs)
+['' => ''].keys().next() == '';
+['' => ''].iterator().next() == '';
+[2 => 3].keys().next() == 2;
+[2 => 3].iterator().next() == 3;
+//[a => b].keys().next() == a;
+//[a => b].iterator().next() == b;
+#end

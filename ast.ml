@@ -26,8 +26,11 @@ type pos = {
 	pmax : int;
 }
 
+module IntMap = Map.Make(struct type t = int let compare a b = a - b end)
+
 module Meta = struct
 	type strict_meta =
+		| Abi
 		| Abstract
 		| Access
 		| Accessor
@@ -48,9 +51,11 @@ module Meta = struct
 		| Comma
 		| Commutative
 		| CompilerGenerated
+		| Const
 		| CoreApi
 		| CoreType
 		| CppFileCode
+		| CppInclude
 		| CppNamespaceCode
 		| CsNative
 		| Dce
@@ -60,6 +65,7 @@ module Meta = struct
 		| Delegate
 		| Depend
 		| Deprecated
+		| DirectlyUsed
 		| DynamicObject
 		| Enum
 		| EnumConstructorParam
@@ -81,9 +87,11 @@ module Meta = struct
 		| GenericInstance
 		| Getter
 		| Hack
+		| HasUntyped
 		| HaxeGeneric
 		| HeaderClassCode
 		| HeaderCode
+		| HeaderInclude
 		| HeaderNamespaceCode
 		| HxCNoHeader
 		| HxCSpecialize
@@ -91,6 +99,7 @@ module Meta = struct
 		| IfFeature
 		| Impl
 		| PythonImport
+		| ImplicitCast
 		| Include
 		| InitPackage
 		| Internal
@@ -101,6 +110,7 @@ module Meta = struct
 		| Keep
 		| KeepInit
 		| KeepSub
+		| LibType
 		| Meta
 		| Macro
 		| MaybeUsed
@@ -110,13 +120,16 @@ module Meta = struct
 		| NativeChildren
 		| NativeGen
 		| NativeGeneric
+		| NativeProperty
 		| NoCompletion
 		| NoDebug
 		| NoDoc
 		| NoExpr
 		| NoFollow
 		| NoImportGlobal
+		| NonVirtual
 		| NoPackageRestrict
+		| NoPrivateAccess
 		| NoStack
 		| NotNull
 		| NoUsing
@@ -130,13 +143,13 @@ module Meta = struct
 		| Protected
 		| Public
 		| PublicFields
+		| QuotedField
 		| ReadOnly
-		| ReallyUsed
 		| RealPath
 		| Remove
 		| Require
 		| RequiresAssign
-		(* | Resolve *)
+		| Resolve
 		| ReplaceReflection
 		| Rtti
 		| Runtime
@@ -146,6 +159,9 @@ module Meta = struct
 		| SkipCtor
 		| SkipReflection
 		| Sound
+		| SourceFile
+		| StoredTypedExpr
+		| Strict
 		| Struct
 		| StructAccess
 		| SuppressWarnings
@@ -356,6 +372,7 @@ and type_param = {
 	tp_name : string;
 	tp_params :	type_param list;
 	tp_constraints : complex_type list;
+	tp_meta : metadata;
 }
 
 and documentation = string option
@@ -427,17 +444,21 @@ type import_mode =
 	| IAsName of string
 	| IAll
 
+type import = (string * pos) list * import_mode
+
 type type_def =
 	| EClass of (class_flag, class_field list) definition
 	| EEnum of (enum_flag, enum_constructor list) definition
 	| ETypedef of (enum_flag, complex_type) definition
 	| EAbstract of (abstract_flag, class_field list) definition
-	| EImport of (string * pos) list * import_mode
+	| EImport of import
 	| EUsing of type_path
 
 type type_decl = type_def * pos
 
 type package = string list * type_decl list
+
+exception Error of string * pos
 
 let is_lower_ident i =
 	let rec loop p =
@@ -689,7 +710,7 @@ let map_expr loop (e,p) =
 		| CTExtend (tl,fl) -> CTExtend (List.map tpath tl, List.map cfield fl)
 		| CTOptional t -> CTOptional (ctype t)
 	and tparamdecl t =
-		{ tp_name = t.tp_name; tp_constraints = List.map ctype t.tp_constraints; tp_params = List.map tparamdecl t.tp_params }
+		{ tp_name = t.tp_name; tp_constraints = List.map ctype t.tp_constraints; tp_params = List.map tparamdecl t.tp_params; tp_meta = t.tp_meta }
 	and func f =
 		{
 			f_params = List.map tparamdecl f.f_params;
@@ -718,7 +739,7 @@ let map_expr loop (e,p) =
 	| EIf (e,e1,e2) -> EIf (loop e, loop e1, opt loop e2)
 	| EWhile (econd,e,f) -> EWhile (loop econd, loop e, f)
 	| ESwitch (e,cases,def) -> ESwitch (loop e, List.map (fun (el,eg,e) -> List.map loop el, opt loop eg, opt loop e) cases, opt (opt loop) def)
-	| ETry (e, catches) -> ETry (loop e, List.map (fun (n,t,e) -> n,ctype t,loop e) catches)
+	| ETry (e,catches) -> ETry (loop e, List.map (fun (n,t,e) -> n,ctype t,loop e) catches)
 	| EReturn e -> EReturn (opt loop e)
 	| EBreak -> EBreak
 	| EContinue -> EContinue
@@ -733,16 +754,119 @@ let map_expr loop (e,p) =
 	) in
 	(e,p)
 
-let rec s_expr (e,_) =
-	match e with
-	| EConst c -> s_constant c
-	| EParenthesis e -> "(" ^ (s_expr e) ^ ")"
-	| EArrayDecl el -> "[" ^ (String.concat "," (List.map s_expr el)) ^ "]"
-	| EObjectDecl fl -> "{" ^ (String.concat "," (List.map (fun (n,e) -> n ^ ":" ^ (s_expr e)) fl)) ^ "}"
-	| EBinop (op,e1,e2) -> s_expr e1 ^ s_binop op ^ s_expr e2
-	| ECall (e,el) -> s_expr e ^ "(" ^ (String.concat ", " (List.map s_expr el)) ^ ")"
-	| EField (e,f) -> s_expr e ^ "." ^ f
-	| _ -> "'???'"
+let s_expr e =
+	let rec s_expr_inner tabs (e,_) =
+		match e with
+		| EConst c -> s_constant c
+		| EArray (e1,e2) -> s_expr_inner tabs e1 ^ "[" ^ s_expr_inner tabs e2 ^ "]"
+		| EBinop (op,e1,e2) -> s_expr_inner tabs e1 ^ " " ^ s_binop op ^ " " ^ s_expr_inner tabs e2
+		| EField (e,f) -> s_expr_inner tabs e ^ "." ^ f
+		| EParenthesis e -> "(" ^ (s_expr_inner tabs e) ^ ")"
+		| EObjectDecl fl -> "{ " ^ (String.concat ", " (List.map (fun (n,e) -> n ^ " : " ^ (s_expr_inner tabs e)) fl)) ^ " }"
+		| EArrayDecl el -> "[" ^ s_expr_list tabs el ", " ^ "]"
+		| ECall (e,el) -> s_expr_inner tabs e ^ "(" ^ s_expr_list tabs el ", " ^ ")"
+		| ENew (t,el) -> "new " ^ s_complex_type_path tabs t ^ "(" ^ s_expr_list tabs el ", " ^ ")"
+		| EUnop (op,Postfix,e) -> s_expr_inner tabs e ^ s_unop op
+		| EUnop (op,Prefix,e) -> s_unop op ^ s_expr_inner tabs e
+		| EFunction (Some n,f) -> "function " ^ n ^ s_func tabs f
+		| EFunction (None,f) -> "function" ^ s_func tabs f
+		| EVars vl -> "var " ^ String.concat ", " (List.map (s_var tabs) vl)
+		| EBlock [] -> "{ }"
+		| EBlock el -> s_block tabs el "{" "\n" "}"
+		| EFor (e1,e2) -> "for (" ^ s_expr_inner tabs e1 ^ ") " ^ s_expr_inner tabs e2
+		| EIn (e1,e2) -> s_expr_inner tabs e1 ^ " in " ^ s_expr_inner tabs e2
+		| EIf (e,e1,None) -> "if (" ^ s_expr_inner tabs e ^ ") " ^ s_expr_inner tabs e1
+		| EIf (e,e1,Some e2) -> "if (" ^ s_expr_inner tabs e ^ ") " ^ s_expr_inner tabs e1 ^ " else " ^ s_expr_inner tabs e2
+		| EWhile (econd,e,NormalWhile) -> "while (" ^ s_expr_inner tabs econd ^ ") " ^ s_expr_inner tabs e
+		| EWhile (econd,e,DoWhile) -> "do " ^ s_expr_inner tabs e ^ " while (" ^ s_expr_inner tabs econd ^ ")"
+		| ESwitch (e,cases,def) -> "switch " ^ s_expr_inner tabs e ^ " {\n\t" ^ tabs ^ String.concat ("\n\t" ^ tabs) (List.map (s_case tabs) cases) ^
+			(match def with None -> "" | Some def -> "\n\t" ^ tabs ^ "default:" ^
+			(match def with None -> "" | Some def -> s_expr_omit_block tabs def)) ^ "\n" ^ tabs ^ "}"
+		| ETry (e,catches) -> "try " ^ s_expr_inner tabs e ^ String.concat "" (List.map (s_catch tabs) catches)
+		| EReturn e -> "return" ^ s_opt_expr tabs e " "
+		| EBreak -> "break"
+		| EContinue -> "continue"
+		| EUntyped e -> "untyped " ^ s_expr_inner tabs e
+		| EThrow e -> "throw " ^ s_expr_inner tabs e
+		| ECast (e,Some t) -> "cast (" ^ s_expr_inner tabs e ^ ", " ^ s_complex_type tabs t ^ ")"
+		| ECast (e,None) -> "cast " ^ s_expr_inner tabs e
+		| ETernary (e1,e2,e3) -> s_expr_inner tabs e1 ^ " ? " ^ s_expr_inner tabs e2 ^ " : " ^ s_expr_inner tabs e3
+		| ECheckType (e,t) -> "(" ^ s_expr_inner tabs e ^ " : " ^ s_complex_type tabs t ^ ")"
+		| EMeta (m,e) -> s_metadata tabs m ^ " " ^ s_expr_inner tabs e
+		| _ -> ""
+	and s_expr_list tabs el sep =
+		(String.concat sep (List.map (s_expr_inner tabs) el))
+	and s_complex_type_path tabs t =
+		(String.concat "." t.tpackage) ^ if List.length t.tpackage > 0 then "." else "" ^
+		t.tname ^
+		match t.tsub with
+		| Some s -> "." ^ s
+		| None -> "" ^
+		s_type_param_or_consts tabs t.tparams
+	and s_type_param_or_consts tabs pl =
+		if List.length pl > 0
+		then "<" ^ (String.concat "," (List.map (s_type_param_or_const tabs) pl)) ^ ">"
+		else ""
+	and s_type_param_or_const tabs p =
+		match p with
+		| TPType t -> s_complex_type tabs t
+		| TPExpr e -> s_expr_inner tabs e
+	and s_complex_type tabs ct =
+		match ct with
+		| CTPath t -> s_complex_type_path tabs t
+		| CTFunction (cl,c) -> if List.length cl > 0 then String.concat " -> " (List.map (s_complex_type tabs) cl) else "Void" ^ " -> " ^ s_complex_type tabs c
+		| CTAnonymous fl -> "{ " ^ String.concat "; " (List.map (s_class_field tabs) fl) ^ "}";
+		| CTParent t -> "(" ^ s_complex_type tabs t ^ ")"
+		| CTOptional t -> "?" ^ s_complex_type tabs t
+		| CTExtend (tl, fl) -> "{> " ^ String.concat " >, " (List.map (s_complex_type_path tabs) tl) ^ ", " ^ String.concat ", " (List.map (s_class_field tabs) fl) ^ " }"
+	and s_class_field tabs f =
+		match f.cff_doc with
+		| Some s -> "/**\n\t" ^ tabs ^ s ^ "\n**/\n"
+		| None -> "" ^
+		if List.length f.cff_meta > 0 then String.concat ("\n" ^ tabs) (List.map (s_metadata tabs) f.cff_meta) else "" ^
+		if List.length f.cff_access > 0 then String.concat " " (List.map s_access f.cff_access) else "" ^
+		match f.cff_kind with
+		| FVar (t,e) -> "var " ^ f.cff_name ^ s_opt_complex_type tabs t " : " ^ s_opt_expr tabs e " = "
+		| FProp (get,set,t,e) -> "var " ^ f.cff_name ^ "(" ^ get ^ "," ^ set ^ ")" ^ s_opt_complex_type tabs t " : " ^ s_opt_expr tabs e " = "
+		| FFun func -> "function " ^ f.cff_name ^ s_func tabs func
+	and s_metadata tabs (s,e,_) =
+		"@" ^ Meta.to_string s ^ if List.length e > 0 then "(" ^ s_expr_list tabs e ", " ^ ")" else ""
+	and s_opt_complex_type tabs t pre =
+		match t with
+		| Some s -> pre ^ s_complex_type tabs s
+		| None -> ""
+	and s_opt_expr tabs e pre =
+		match e with
+		| Some s -> pre ^ s_expr_inner tabs s
+		| None -> ""
+	and s_func tabs f =
+		s_type_param_list tabs f.f_params ^
+		"(" ^ String.concat ", " (List.map (s_func_arg tabs) f.f_args) ^ ")" ^
+		s_opt_complex_type tabs f.f_type ":" ^
+		s_opt_expr tabs f.f_expr " "
+	and s_type_param tabs t =
+		t.tp_name ^ s_type_param_list tabs t.tp_params ^
+		if List.length t.tp_constraints > 0 then ":(" ^ String.concat ", " (List.map (s_complex_type tabs) t.tp_constraints) ^ ")" else ""
+	and s_type_param_list tabs tl =
+		if List.length tl > 0 then "<" ^ String.concat ", " (List.map (s_type_param tabs) tl) ^ ">" else ""
+	and s_func_arg tabs (n,o,t,e) =
+		if o then "?" else "" ^ n ^ s_opt_complex_type tabs t ":" ^ s_opt_expr tabs e " = "
+	and s_var tabs (n,t,e) =
+		n ^ s_opt_complex_type tabs t ":" ^ s_opt_expr tabs e " = "
+	and s_case tabs (el,e1,e2) =
+		"case " ^ s_expr_list tabs el ", " ^
+		(match e1 with None -> ":" | Some e -> " if (" ^ s_expr_inner tabs e ^ "):") ^
+		(match e2 with None -> "" | Some e -> s_expr_omit_block tabs e)
+	and s_catch tabs (n,t,e) =
+		" catch(" ^ n ^ ":" ^ s_complex_type tabs t ^ ") " ^ s_expr_inner tabs e
+	and s_block tabs el opn nl cls =
+		 opn ^ "\n\t" ^ tabs ^ (s_expr_list (tabs ^ "\t") el (";\n\t" ^ tabs)) ^ ";" ^ nl ^ tabs ^ cls
+	and s_expr_omit_block tabs e =
+		match e with
+		| (EBlock [],_) -> ""
+		| (EBlock el,_) -> s_block (tabs ^ "\t") el "" "" ""
+		| _ -> s_expr_inner (tabs ^ "\t") e ^ ";"
+	in s_expr_inner "" e
 
 let get_value_meta meta =
 	try
@@ -752,3 +876,43 @@ let get_value_meta meta =
 		end
 	with Not_found ->
 		PMap.empty
+
+(* Type path related functions *)
+
+let rec string_list_of_expr_path_raise (e,p) =
+	match e with
+	| EConst (Ident i) -> [i]
+	| EField (e,f) -> f :: string_list_of_expr_path_raise e
+	| _ -> raise Exit
+
+let expr_of_type_path (sl,s) p =
+	match sl with
+	| [] -> (EConst(Ident s),p)
+	| s1 :: sl ->
+		let e1 = (EConst(Ident s1),p) in
+		let e = List.fold_left (fun e s -> (EField(e,s),p)) e1 sl in
+		EField(e,s),p
+
+let match_path recursive sl sl_pattern =
+	let rec loop sl1 sl2 = match sl1,sl2 with
+		| [],[] ->
+			true
+		(* always recurse into types of package paths *)
+		| (s1 :: s11 :: _),[s2] when is_lower_ident s2 && not (is_lower_ident s11)->
+			s1 = s2
+		| [_],[""] ->
+			true
+		| _,([] | [""]) ->
+			recursive
+		| [],_ ->
+			false
+		| (s1 :: sl1),(s2 :: sl2) ->
+			s1 = s2 && loop sl1 sl2
+	in
+	loop sl sl_pattern
+
+let full_dot_path mpath tpath =
+	if mpath = tpath then
+		(fst tpath) @ [snd tpath]
+	else
+		(fst mpath) @ [snd mpath;snd tpath]

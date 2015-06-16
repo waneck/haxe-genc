@@ -87,7 +87,7 @@ class TestReflect extends Test {
 		"null","Int","String","Bool","Float",
 		"Array",u("haxe.ds.StringMap"),u("List"),"Date","Xml","Math",
 		u2("unit","MyEnum"),u2("unit","MyClass"),u2("unit","MySubClass"),
-		#if !flash9 u #end("Class"), u("Enum"), u("Dynamic"),
+		#if !flash u #end("Class"), u("Enum"), u("Dynamic"),
 		u2("unit","MyInterface")
 	];
 
@@ -150,7 +150,14 @@ class TestReflect extends Test {
 			eq( Std.is(v,c), c != null && (c == t1 || c == t2) || (c == Dynamic), pos );
 		}
 		infos(null);
-		t( Std.is(v,Dynamic), pos );
+		t( (v is Dynamic), pos );
+	}
+
+	public function testTypeEq()
+	{
+		eq(cast Array, Type.resolveClass("Array"));
+		eq(cast Array, Type.getClass([]));
+		eq(cast Array, Type.getClass([1]));
 	}
 
 	public function testTypeof() {
@@ -180,8 +187,8 @@ class TestReflect extends Test {
 		typeof(function() {},TFunction);
 		typeof(MyClass,TObject);
 		typeof(MyEnum,TObject);
-		#if !flash9
-		// on flash9, Type.typeof(Class) is crashing the player
+		#if !flash
+		// on flash, Type.typeof(Class) is crashing the player
 		typeof(Class,TObject);
 		typeof(Enum,TObject);
 		#end
@@ -215,13 +222,13 @@ class TestReflect extends Test {
 
 	function testCreate() {
 		var i = Type.createInstance(MyClass,[33]);
-		t( Std.is(i,MyClass) );
+		t( (i is MyClass) );
 		eq( i.get(), 33 );
 		eq( i.intValue, 55 );
 		var i = Type.createEmptyInstance(MyClass);
-		t( Std.is(i,MyClass) );
-		eq( i.get(), #if (flash9 || cpp || java || cs) 0 #else null #end );
-		eq( i.intValue, #if (flash9 || cpp || java || cs) 0 #else null #end );
+		t( (i is MyClass) );
+		eq( i.get(), #if (flash || cpp || java || cs) 0 #else null #end );
+		eq( i.intValue, #if (flash || cpp || java || cs) 0 #else null #end );
 		var e : MyEnum = Type.createEnum(MyEnum,__unprotect__("A"));
 		eq( e, MyEnum.A );
 		var e : MyEnum = Type.createEnum(MyEnum,__unprotect__("C"),[55,"hello"]);

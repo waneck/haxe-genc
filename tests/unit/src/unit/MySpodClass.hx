@@ -18,6 +18,7 @@ import sys.db.Types;
 
   @:relation(rid) public var relation:OtherSpodClass;
   @:relation(rnid) public var relationNullable:Null<OtherSpodClass>;
+	@:relation(spid) public var next:Null<MySpodClass>;
 
   public var data:SData<Array<ComplexClass>>;
   public var anEnum:SEnum<SpodEnum>;
@@ -80,4 +81,15 @@ abstract AbstractSpodTest<A>(A) from A
 {
 	public var id:SId;
 	@:relation(ref_id) public var ref:ClassWithStringId;
+}
+
+
+//issue #3828
+@:keep @:skip class BaseIssueC3828 extends sys.db.Object {
+    public var id : SInt;
+    @:relation(ruid)
+    public var refUser : SNull<IssueC3828>;
+}
+
+@:keep class IssueC3828 extends BaseIssueC3828 {
 }

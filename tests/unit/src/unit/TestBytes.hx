@@ -1,5 +1,7 @@
 ﻿package unit;
 
+import haxe.io.Bytes.fastGet as fget;
+
 class TestBytes extends Test {
 
 	function test() {
@@ -69,8 +71,7 @@ class TestBytes extends Test {
 		unspec(function() bs.getString(1,5)); // the handling of \0 might vary
 		/**
 		 	HANDLING of 0x00 in string :
-				Flash8 : ignore
-				Flash9 : cut string
+				Flash : cut string
 				JS/FFOX, JS/IE7, Neko : ok (\0 displayed as ? on Firefox, string cut on IE7)
 				JS/IE6 : todo
 				JS/Safari : todo
@@ -98,25 +99,44 @@ class TestBytes extends Test {
 		exc(function() bs.sub(1,10));
 	}
 
-	function testBuffer() {
-		var out = new haxe.io.BytesBuffer();
-		eq( out.length, 0 );
-		out.add( haxe.io.Bytes.ofString("ABCDEF") );
-		for( i in 1...6 )
-			out.addByte(i);
-		out.addBytes( haxe.io.Bytes.ofString("ABCDEF"),1,3 );
-		eq( out.length, 14 );
-		var b = out.getBytes();
-		var str = "ABCDEF\x01\x02\x03\x04\x05BCD";
-		eq( b.length, str.length );
-		for( i in 0...str.length )
-			eq( b.get(i), str.charCodeAt(i) );
-	}
-
 	function testInput() {
 		var bs = haxe.io.Bytes.ofString("One é accent");
 		var input = new haxe.io.BytesInput(bs);
 		//readAll
 		eq(input.readAll().toString(), "One é accent");
 	}
+
+	#if !php // https://github.com/HaxeFoundation/haxe/issues/4060
+	function testFastGet() {
+		var b = haxe.io.Bytes.alloc(10);
+		var bd = b.getData();
+		for( i in 0...10 )
+			eq(fget(bd, i),0);
+		b.set(1,20);
+		eq(fget(bd, 1), 20);
+		b.set(1,0xF756);
+		eq(fget(bd, 1), 0x56);
+		var b2 = haxe.io.Bytes.ofString("ABCD");
+		var bd2 = b2.getData();
+		eq(fget(bd2, 0), "A".code);
+		eq(fget(bd2, 1), "B".code);
+		eq(fget(bd2, 2), "C".code);
+		eq(fget(bd2, 3), "D".code);
+		var b3 = haxe.io.Bytes.ofString("é");
+		var bd3 = b3.getData();
+		eq(fget(bd3, 0), 0xC3);
+		eq(fget(bd3, 1), 0xA9);
+	}
+
+	function testBytesDataEquality () {
+		var b1 = haxe.io.Bytes.ofString("AB");
+		var x = b1.getData();
+		var b2 = haxe.io.Bytes.ofData(x);
+
+		b2.set(0, "C".code);
+
+		eq(b1.getString(0,2), b2.getString(0,2));
+
+	}
+	#end
 }

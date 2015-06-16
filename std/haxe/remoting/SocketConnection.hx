@@ -22,6 +22,9 @@
 package haxe.remoting;
 import haxe.remoting.SocketProtocol.Socket;
 
+/**
+	Allows remoting communications over a socket connection
+*/
 class SocketConnection implements AsyncConnection implements Dynamic<AsyncConnection> {
 
 	var __path : Array<String>;
@@ -30,11 +33,9 @@ class SocketConnection implements AsyncConnection implements Dynamic<AsyncConnec
 		results : List<{ onResult : Dynamic -> Void, onError : Dynamic -> Void }>,
 		log : Array<String> -> Array<Dynamic> -> Dynamic -> Void,
 		error : Dynamic -> Void,
-		#if !flash9
-		#if (flash || js)
+		#if js
 		queue : Array<Void -> Void>,
 		timer : haxe.Timer,
-		#end
 		#end
 	};
 
@@ -125,16 +126,14 @@ class SocketConnection implements AsyncConnection implements Dynamic<AsyncConnec
 			results : new List(),
 			error : function(e) throw e,
 			log : null,
-			#if !flash9
-			#if (flash || js)
+			#if js
 			queue : [],
 			timer : null,
-			#end
 			#end
 		};
 		var sc = new SocketConnection(data,[]);
 		data.log = sc.defaultLog;
-		#if flash9
+		#if flash
 		s.addEventListener(flash.events.DataEvent.DATA, function(e : flash.events.DataEvent) {
 			var data = e.data;
 			var msgLen = sc.__data.protocol.messageLength(data.charCodeAt(0),data.charCodeAt(1));
@@ -144,7 +143,7 @@ class SocketConnection implements AsyncConnection implements Dynamic<AsyncConnec
 			}
 			sc.processMessage(e.data.substr(2,e.data.length-2));
 		});
-		#elseif (flash || js)
+		#elseif js
 		// we can't deliver directly the message
 		// since it might trigger a blocking action on JS side
 		// and in that case this will trigger a Flash bug

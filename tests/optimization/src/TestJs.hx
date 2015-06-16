@@ -1,3 +1,14 @@
+private enum Tree<T> {
+	Node(l:Tree<T>, r:Tree<T>);
+	Leaf(v:T);
+}
+
+private enum Some {
+    one(s1:String);
+    pair(s1:String, s2:String);
+    triad(s1:String, s2:String, s3:String);
+}
+
 class TestJs {
 	//@:js('var x = 10;"" + x;var x1 = 10;"" + x1;var x2 = 10.0;"" + x2;var x3 = "10";x3;var x4 = true;"" + x4;')
 	//static function testStdString() {
@@ -63,13 +74,61 @@ class TestJs {
 		forEach(function(x) trace(x + 2));
 	}
 
-	@:js('var a = "";var tmp;var __ex0 = a;var _g = __ex0.toLowerCase();switch(_g) {case "e":tmp = 0;break;default:throw false;}var e = tmp;')
+	@:js('var a = "";var tmp;var __ex0 = a;var _g = __ex0.toLowerCase();switch(_g) {case "e":tmp = 0;break;default:throw new Error();}var e = tmp;')
 	@:analyzer(no_const_propagation, no_local_dce)
 	static function testRValueSwitchWithExtractors() {
 		var a = "";
 		var e = switch (a) {
 			case _.toLowerCase() => "e": 0;
-			default: throw false;
+			default: throw new js.Error();
 		}
 	}
+
+	@:js('console.log("1" + "2" + "3" + "4");')
+	static function testEnumValuePropagation1() {
+		var n = Node(Node(Leaf("1"), Node(Leaf("2"), Leaf("3"))), Leaf("4"));
+		switch (n) {
+			case Node(Node(Leaf(s1), Node(Leaf(s2), Leaf(s3))), Leaf(s4)):
+				trace(s1 + s2 + s3 + s4);
+			case _:
+		}
+	}
+
+	@:js('false;')
+	static function testEnumValuePropagation2() {
+		var v = pair("foo", "bar");
+		var x = switch (v) {
+			case one(s1): verify(s1);
+			case pair(s1, s2): verify(s1) && verify(s2);
+			case triad(s1, s2, s3): verify(s1) && verify(s2) && verify(s3);
+		}
+	}
+
+	static inline function verify(s1) return s1 == "foo";
+
+	@:js('
+		var object = { \'hello\' : "world"};
+		TestJs["use"](object);
+	')
+	static function testQuotedStructureFields1() {
+		var object = {
+			"hello": "world"
+		}
+		use(object);
+	}
+
+	@:js('
+		var object = { \'hello\' : "world", world : "hello", \'another\' : "quote"};
+		TestJs["use"](object);
+	')
+	static function testQuotedStructureFields2() {
+		var object = {
+			'hello': "world",
+			world: "hello",
+			"another": "quote"
+		}
+		use(object);
+	}
+
+	static function use<T>(t:T) { }
 }

@@ -4798,17 +4798,19 @@ let rec generate_call ctx e need_val e1 el = match e1.eexpr,el with
 			generate_expr ctx true e1;
 			spr ctx ")"
 		| "cCode" ->
-			let code = match e1.eexpr with
+			let rec loop e1 = match e1.eexpr with
 				| TConst (TString s) -> s
-				| TCast ({eexpr = TConst (TString s) },None) -> s
+				| TCast (e1, None) -> loop e1
+				| TMeta (_, e1) -> loop e1
 				| TCall({eexpr = TField(_,FStatic({cl_path = [],"String"},
 					{cf_name = ("HX_STR"|"raw")}))},
 					[{eexpr = TConst (TString s)}]) -> s
 				| _ ->
 				let _ = print_endline (s_expr (Type.s_type (print_context())) e ) in
 				let _ = print_endline (s_expr (Type.s_type (print_context())) e1 ) in
-				assert false
+					assert false
 			in
+			let code = loop e1 in
 			spr ctx code;
 		| "callCMacro" ->
 			begin match e1.eexpr,el with

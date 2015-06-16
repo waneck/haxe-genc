@@ -309,14 +309,23 @@ class TestMisc extends Test {
 	}
 
 	function testBaseCode() {
+		// alternative base64
 		var b = new haxe.crypto.BaseCode(haxe.io.Bytes.ofString("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-"));
 		eq( b.encodeString("Héllow"), "iceFr6NLtM" );
 		eq( b.decodeString("iceFr6NLtM"), "Héllow" );
+
+		// base32-hex
+		var b = new haxe.crypto.BaseCode(haxe.io.Bytes.ofString("0123456789ABCDEFGHIJKLMNOPQRSTUV"));
+		eq( b.encodeString("foo"), "CPNMU" );
+		eq( b.decodeString("CPNMU"), "foo" );
 	}
 
 	function testUrlEncode() {
 		eq( StringTools.urlEncode("é"), "%C3%A9" );
 		eq( StringTools.urlDecode("%C3%A9"), "é" );
+
+		eq( StringTools.urlEncode("a/b+c"), "a%2Fb%2Bc");
+		eq( StringTools.urlDecode("a%2Fb%2Bc"), "a/b+c");
 	}
 
 	function opt1( ?x : Int, ?y : String ) {
@@ -348,7 +357,7 @@ class TestMisc extends Test {
 		eq( opt2().x, 5 );
 		eq( opt2().y, "hello" );
 
-		#if !(flash9 || cpp || cs || java)
+		#if !(flash || cpp || cs || java)
 		eq( opt2(null, null).x, 5 );
 		#end
 		eq( opt2(0, null).y, "hello" );
@@ -371,14 +380,14 @@ class TestMisc extends Test {
 		eq( opt3(7.4).y, 7.4 );
 
 		eq( opt4(), 11 );
-		#if !(flash9 || cpp || cs || java)
+		#if !(flash || cpp || cs || java)
 		eq( opt4(null), 11 );
 		#end
 
 		var opt4b : ?Int -> Null<Int> = opt4;
 		eq( opt4b(), 11 );
 		eq( opt4b(3), 4 );
-		#if !(flash9 || cpp || cs || java)
+		#if !(flash || cpp || cs || java)
 		eq( opt4b(null), 11 );
 		#end
 

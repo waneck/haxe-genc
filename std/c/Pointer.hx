@@ -105,13 +105,8 @@ abstract ConstPointer<T> {
 }
 
 @:callable
-#if llvm
 @:noFollow
 abstract FunctionPointer<T:haxe.Constraints.Function>(T) from T {}
-#else
-@:coreType
-abstract FunctionPointer<T:haxe.Constraints.Function> from T {}
-#end
 
 @:coreType
 abstract VarArg from Dynamic to Dynamic { }

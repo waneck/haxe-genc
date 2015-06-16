@@ -12,9 +12,6 @@ class TestJson extends Test {
         t( parts.remove('"wor\'\\"\\n\\t\\rd"]') );
         eq( parts.join("#"), "" );
 
-        // no support for regexps
-        #if !flash8
-
         function id(v:Dynamic,?pos:haxe.PosInfos) eq(haxe.Json.parse(haxe.Json.stringify(v)),v, pos);
         function deepId(v:Dynamic) {
             var str = haxe.Json.stringify(v);
@@ -47,11 +44,15 @@ class TestJson extends Test {
         eq(haxe.Json.stringify(Math.NaN), "null");
 
         return;
-        #end
     }
 
     // TODO: test pretty-printing (also with objects with skipped function fields!)
     function testHaxeJson() {
+        #if php
+        // php's haxe.Utf8 uses mbstring
+        if (untyped __call__("extension_loaded", "mbstring")) {
+        #end
+
         var str = haxe.format.JsonPrinter.print( { x : -4500, y : 1.456, a : ["hello", "wor'\"\n\t\rd"], b : function() {} } );
         str = str.substr(1, str.length - 2); // remove {}
         var parts = str.split(",");
@@ -60,9 +61,6 @@ class TestJson extends Test {
         t( parts.remove('"a":["hello"') );
         t( parts.remove('"wor\'\\"\\n\\t\\rd"]') );
         eq( parts.join("#"), "" );
-
-        // no support for regexps
-        #if !flash8
 
         function id(v:Dynamic,?pos:haxe.PosInfos) eq(haxe.format.JsonParser.parse(haxe.format.JsonPrinter.print(v)),v);
         function deepId(v:Dynamic) {
@@ -97,7 +95,8 @@ class TestJson extends Test {
         eq(haxe.format.JsonPrinter.print(function() {}), "\"<fun>\"");
         eq(haxe.format.JsonPrinter.print({a: function() {}, b: 1}), "{\"b\":1}");
 
-        return;
+        #if php
+        }
         #end
     }
 

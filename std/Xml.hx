@@ -19,27 +19,79 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
-
+ 
+/**
+	Xml node types.
+**/
 @:enum abstract XmlType(Int) {
+	/**
+		Represents an XML element type.
+	**/
 	var Element = 0;
+	/**
+		Represents XML parsed character data type.
+	**/
 	var PCData = 1;
+	/**
+		Represents XML character data type.
+	**/
 	var CData = 2;
+	/**
+		Represents an XML comment type.
+	**/
 	var Comment = 3;
+	/**
+		Represents an XML doctype element type.
+	**/
 	var DocType = 4;
+	/**
+	 	Represents an XML processing instruction type.
+	**/
 	var ProcessingInstruction = 5;
+	/**
+		Represents an XML document type.
+	**/
 	var Document = 6;
 }
 
+/**
+	Crossplatform Xml API.
+	
+	@see http://haxe.org/manual/std-Xml.html
+**/
 class Xml {
-
+	/**
+		XML element type.
+	**/
 	static public var Element(default,null) = XmlType.Element;
+	/**
+		XML parsed character data type.
+	**/
 	static public var PCData(default,null) = XmlType.PCData;
+	/**
+		XML character data type.
+	**/
 	static public var CData(default,null) = XmlType.CData;
+	/**
+		XML comment type.
+	**/
 	static public var Comment(default,null) = XmlType.Comment;
+	/**
+		XML doctype element type.
+	**/
 	static public var DocType(default,null) = XmlType.DocType;
+	/**
+	 	XML processing instruction type.
+	**/
 	static public var ProcessingInstruction(default,null) = XmlType.ProcessingInstruction;
+	/**
+		XML document type.
+	**/
 	static public var Document(default,null) = XmlType.Document;
 
+	/**
+		Parses the String into an Xml document. 
+	**/
 	static public function parse( str : String ) : Xml {
 		return haxe.xml.Parser.parse(str);
 	}
@@ -265,13 +317,13 @@ class Xml {
 
 	/**
 		Adds a child node to the Document or Element.
-		One node can only be inside one given node which is indicated by the [parent] property.
+		A child node can only be inside one given parent node, which is indicated by the [parent] property.
+		If the child is already inside this Document or Element, it will be moved to the last position among the Document or Element's children.
+		If the child node was previously inside a different node, it will be moved to this Document or Element.
 	**/
 	public function addChild( x : Xml ) : Void {
 		ensureElementType();
-		if (x.parent == this) {
-			return;
-		} else if (x.parent != null) {
+		if (x.parent != null) {
 			x.parent.removeChild(x);
 		}
 		children.push(x);
@@ -284,15 +336,26 @@ class Xml {
 	**/
 	public function removeChild( x : Xml ) : Bool {
 		ensureElementType();
-		return children.remove(x);
+		if (children.remove(x)) {
+			x.parent = null;
+			return true;
+		}
+		return false;
 	}
 
 	/**
 		Inserts a child at the given position among the other childs.
+		A child node can only be inside one given parent node, which is indicated by the [parent] property.
+		If the child is already inside this Document or Element, it will be moved to the new position among the Document or Element's children.
+		If the child node was previously inside a different node, it will be moved to this Document or Element.
 	**/
 	public function insertChild( x : Xml, pos : Int ) : Void {
 		ensureElementType();
+		if (x.parent != null) {
+			x.parent.children.remove(x);
+		}
 		children.insert(pos, x);
+		x.parent = this;
 	}
 
 	/**

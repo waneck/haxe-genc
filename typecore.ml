@@ -87,6 +87,7 @@ and typer_module = {
 	mutable module_using : tclass list;
 	mutable module_globals : (string, (module_type * string)) PMap.t;
 	mutable wildcard_packages : string list list;
+	mutable module_imports : Ast.import list;
 }
 
 and typer = {
@@ -97,7 +98,7 @@ and typer = {
 	mutable meta : metadata;
 	mutable this_stack : texpr list;
 	mutable with_type_stack : with_type list;
-	mutable constructor_argument_stack : Ast.expr list list;
+	mutable call_argument_stack : Ast.expr list list;
 	(* variable *)
 	mutable pass : typer_pass;
 	(* per-module *)
@@ -124,7 +125,7 @@ and typer = {
 }
 
 type call_error =
-	| Not_enough_arguments
+	| Not_enough_arguments of (string * bool * t) list
 	| Too_many_arguments
 	| Could_not_unify of error_msg
 	| Cannot_skip_non_nullable of string
@@ -254,7 +255,7 @@ let unify_error_msg ctx = function
 		msg
 
 let rec error_msg = function
-	| Module_not_found m -> "Class not found : " ^ Ast.s_type_path m
+	| Module_not_found m -> "Type not found : " ^ Ast.s_type_path m
 	| Type_not_found (m,t) -> "Module " ^ Ast.s_type_path m ^ " does not define type " ^ t
 	| Unify l ->
 		let ctx = print_context() in
@@ -265,7 +266,9 @@ let rec error_msg = function
 	| Call_error err -> s_call_error err
 
 and s_call_error = function
-	| Not_enough_arguments -> "Not enough arguments"
+	| Not_enough_arguments tl ->
+		let pctx = print_context() in
+		"Not enough arguments, expected " ^ (String.concat ", " (List.map (fun (n,_,t) -> n ^ ":" ^ (short_type pctx t)) tl))
 	| Too_many_arguments -> "Too many arguments"
 	| Could_not_unify err -> error_msg err
 	| Cannot_skip_non_nullable s -> "Cannot skip non-nullable argument " ^ s
@@ -369,6 +372,9 @@ let rec flush_pass ctx p (where:string) =
 
 let make_pass ctx f = f
 
+let init_class_done ctx =
+	ctx.pass <- PTypeField
+
 let exc_protect ctx f (where:string) =
 	let rec r = ref (fun() ->
 		try
@@ -410,6 +416,10 @@ let context_ident ctx =
 
 let debug ctx str =
 	if Common.raw_defined ctx.com "cdebug" then prerr_endline (context_ident ctx ^ !delay_tabs ^ str)
+
+let init_class_done ctx =
+	debug ctx ("init_class_done " ^ Ast.s_type_path ctx.curclass.cl_path);
+	init_class_done ctx
 
 let ctx_pos ctx =
 	let inf = Ast.s_type_path ctx.m.curmod.m_path in

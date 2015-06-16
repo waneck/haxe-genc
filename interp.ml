@@ -47,12 +47,13 @@ and vobject = {
 }
 
 and vabstract =
+	| ADeallocated of int ref
 	| AKind of vabstract
 	| AHash of (value, value) Hashtbl.t
 	| ARandom of Random.State.t ref
 	| ABuffer of Buffer.t
 	| APos of Ast.pos
-	| AFRead of in_channel
+	| AFRead of (in_channel * bool ref)
 	| AFWrite of out_channel
 	| AReg of regexp
 	| AZipI of zlib
@@ -67,6 +68,7 @@ and vabstract =
 	| ACacheRef of value
 	| AInt32Kind
 	| ATls of value ref
+	| AProcess of Process.process
 
 and vfunction =
 	| Fun0 of (unit -> value)
@@ -104,6 +106,7 @@ type extern_api = {
 	on_type_not_found : (string -> value) -> unit;
 	parse_string : string -> Ast.pos -> bool -> Ast.expr;
 	type_expr : Ast.expr -> Type.texpr;
+	store_typed_expr : Type.texpr -> Ast.expr;
 	get_display : string -> string;
 	allow_package : string -> unit;
 	type_patch : string -> string -> bool -> string option -> unit;
@@ -111,8 +114,9 @@ type extern_api = {
 	set_js_generator : (value -> unit) -> unit;
 	get_local_type : unit -> t option;
 	get_expected_type : unit -> t option;
-	get_constructor_arguments : unit -> Ast.expr list option;
+	get_call_arguments : unit -> Ast.expr list option;
 	get_local_method : unit -> string;
+	get_local_imports : unit -> Ast.import list;
 	get_local_using : unit -> tclass list;
 	get_local_vars : unit -> (string, Type.tvar) PMap.t;
 	get_build_fields : unit -> value;
@@ -209,6 +213,7 @@ let make_complex_type_ref = ref (fun _ -> assert false)
 let encode_tvar_ref = ref (fun _ -> assert false)
 let decode_path_ref = ref (fun _ -> assert false)
 let decode_import_ref = ref (fun _ -> assert false)
+let encode_import_ref = ref (fun _ -> assert false)
 let get_ctx() = (!get_ctx_ref)()
 let enc_array (l:value list) : value = (!enc_array_ref) l
 let dec_array (l:value) : value list = (!dec_array_ref) l
@@ -226,7 +231,8 @@ let enc_string (s:string) : value = (!enc_string_ref) s
 let make_complex_type (t:Type.t) : Ast.complex_type = (!make_complex_type_ref) t
 let encode_tvar (v:tvar) : value = (!encode_tvar_ref) v
 let decode_path (v:value) : Ast.type_path = (!decode_path_ref) v
-let decode_import (v:value) : ((string * Ast.pos) list * Ast.import_mode) = (!decode_import_ref) v
+let encode_import (i:Ast.import) : value = (!encode_import_ref) i
+let decode_import (v:value) : Ast.import = (!decode_import_ref) v
 
 let to_int f = Int32.of_float (mod_float f 2147483648.0)
 let need_32_bits i = Int32.compare (Int32.logand (Int32.add i 0x40000000l) 0x80000000l) Int32.zero <> 0
@@ -273,8 +279,8 @@ let constants =
 	"$";"add";"remove";"has";"__t";"module";"isPrivate";"isPublic";"isExtern";"isInterface";"exclude";
 	"constructs";"names";"superClass";"interfaces";"fields";"statics";"constructor";"init";"t";
 	"gid";"uid";"atime";"mtime";"ctime";"dev";"ino";"nlink";"rdev";"size";"mode";"pos";"len";
-	"binops";"unops";"from";"to";"array";"op";"isPostfix";"impl";
-	"id";"capture";"extra";"v";"ids";"vars";"en";"overrides";"status"];
+	"binops";"unops";"from";"to";"array";"op";"isPostfix";"impl";"resolve";
+	"id";"capture";"extra";"v";"ids";"vars";"en";"overrides";"status";"overloads";"path"];
 	h
 
 let h_get = hash "__get" and h_set = hash "__set"
@@ -1050,6 +1056,11 @@ let builtins =
 (* ---------------------------------------------------------------------- *)
 (* STD LIBRARY *)
 
+let free_abstract a =
+	match a with
+	| VAbstract vp -> Obj.set_tag (Obj.repr vp) 0 (* this will mute it as Deallocated *)
+	| _ -> assert false
+
 let std_lib =
 	let p = { psource = "<stdlib>"; pline = 0 } in
 	let error() =
@@ -1418,8 +1429,8 @@ let std_lib =
 			| VString f, VString r ->
 				let perms = 0o666 in
 				VAbstract (match r with
-					| "r" -> AFRead (open_in_gen [Open_rdonly] 0 f)
-					| "rb" -> AFRead (open_in_gen [Open_rdonly;Open_binary] 0 f)
+					| "r" -> AFRead (open_in_gen [Open_rdonly] 0 f,ref false)
+					| "rb" -> AFRead (open_in_gen [Open_rdonly;Open_binary] 0 f,ref false)
 					| "w" -> AFWrite (open_out_gen [Open_wronly;Open_creat;Open_trunc] perms f)
 					| "wb" -> AFWrite (open_out_gen [Open_wronly;Open_creat;Open_trunc;Open_binary] perms f)
 					| "a" -> AFWrite (open_out_gen [Open_append] perms f)
@@ -1427,10 +1438,10 @@ let std_lib =
 					| _ -> error())
 			| _ -> error()
 		);
-		"file_close", Fun1 (fun f ->
-			(match f with
-			| VAbstract (AFRead f) -> close_in f
-			| VAbstract (AFWrite f) -> close_out f
+		"file_close", Fun1 (fun vf ->
+			(match vf with
+			| VAbstract (AFRead (f,_)) -> close_in f; free_abstract vf;
+			| VAbstract (AFWrite f) -> close_out f; free_abstract vf;
 			| _ -> error());
 			VNull
 		);
@@ -1442,9 +1453,12 @@ let std_lib =
 		);
 		"file_read", Fun4 (fun f s p l ->
 			match f, s, p, l with
-			| VAbstract (AFRead f), VString s, VInt p, VInt l ->
+			| VAbstract (AFRead (f,r)), VString s, VInt p, VInt l ->
 				let n = input f s p l in
-				if n = 0 then exc (VArray [|VString "file_read"|]);
+				if n = 0 then begin
+					r := true;
+					exc (VArray [|VString "file_read"|]);
+				end;
 				VInt n
 			| _ -> error()
 		);
@@ -1455,34 +1469,30 @@ let std_lib =
 		);
 		"file_read_char", Fun1 (fun f ->
 			match f with
-			| VAbstract (AFRead f) -> VInt (int_of_char (try input_char f with _ -> exc (VArray [|VString "file_read_char"|])))
+			| VAbstract (AFRead (f,r)) -> VInt (int_of_char (try input_char f with _ -> r := true; exc (VArray [|VString "file_read_char"|])))
 			| _ -> error()
 		);
 		"file_seek", Fun3 (fun f pos mode ->
 			match f, pos, mode with
-			| VAbstract (AFRead f), VInt pos, VInt mode ->
-				seek_in f (match mode with 0 -> pos | 1 -> pos_in f + pos | 2 -> in_channel_length f - pos | _ -> error());
+			| VAbstract (AFRead (f,r)), VInt pos, VInt mode ->
+				r := false;
+				seek_in f (match mode with 0 -> pos | 1 -> pos_in f + pos | 2 -> in_channel_length f + pos | _ -> error());
 				VNull;
 			| VAbstract (AFWrite f), VInt pos, VInt mode ->
-				seek_out f (match mode with 0 -> pos | 1 -> pos_out f + pos | 2 -> out_channel_length f - pos | _ -> error());
+				seek_out f (match mode with 0 -> pos | 1 -> pos_out f + pos | 2 -> out_channel_length f + pos | _ -> error());
 				VNull;
 			| _ -> error()
 		);
 		"file_tell", Fun1 (fun f ->
 			match f with
-			| VAbstract (AFRead f) -> VInt (pos_in f)
+			| VAbstract (AFRead (f,_)) -> VInt (pos_in f)
 			| VAbstract (AFWrite f) -> VInt (pos_out f)
 			| _ -> error()
 		);
 		"file_eof", Fun1 (fun f ->
 			match f with
-			| VAbstract (AFRead f) ->
-				VBool (try
-					ignore(input_char f);
-					seek_in f (pos_in f - 1);
-					false
-				with End_of_file ->
-					true)
+			| VAbstract (AFRead (f,r)) ->
+				VBool !r
 			| _ -> error()
 		);
 		"file_flush", Fun1 (fun f ->
@@ -1496,7 +1506,7 @@ let std_lib =
 			| VString f -> VString (Std.input_file ~bin:true f)
 			| _ -> error()
 		);
-		"file_stdin", Fun0 (fun() -> VAbstract (AFRead Pervasives.stdin));
+		"file_stdin", Fun0 (fun() -> VAbstract (AFRead (Pervasives.stdin, ref false)));
 		"file_stdout", Fun0 (fun() -> VAbstract (AFWrite Pervasives.stdout));
 		"file_stderr", Fun0 (fun() -> VAbstract (AFWrite Pervasives.stderr));
 	(* serialize *)
@@ -1508,9 +1518,9 @@ let std_lib =
 			| VBool b -> VAbstract (ASocket (Unix.socket PF_INET (if b then SOCK_DGRAM else SOCK_STREAM) 0));
 			| _ -> error()
 		);
-		"socket_close", Fun1 (fun s ->
-			match s with
-			| VAbstract (ASocket s) -> Unix.close s; VNull
+		"socket_close", Fun1 (fun vs ->
+			match vs with
+			| VAbstract (ASocket s) -> Unix.close s; free_abstract vs; VNull
 			| _ -> error()
 		);
 		"socket_send_char", Fun2 (fun s c ->
@@ -1832,6 +1842,47 @@ let std_lib =
 			| _ -> error();
 		);
 		(* lock, mutex, deque : not implemented *)
+	(* process *)
+		"process_run", (Fun2 (fun p args ->
+			match p, args with
+			| VString p, VArray args -> VAbstract (AProcess (Process.run p (Array.map vstring args)))
+			| _ -> error()
+		));
+		"process_stdout_read", (Fun4 (fun p str pos len ->
+			match p, str, pos, len with
+			| VAbstract (AProcess p), VString str, VInt pos, VInt len -> VInt (Process.read_stdout p str pos len)
+			| _ -> error()
+		));
+		"process_stderr_read", (Fun4 (fun p str pos len ->
+			match p, str, pos, len with
+			| VAbstract (AProcess p), VString str, VInt pos, VInt len -> VInt (Process.read_stderr p str pos len)
+			| _ -> error()
+		));
+		"process_stdin_write", (Fun4 (fun p str pos len ->
+			match p, str, pos, len with
+			| VAbstract (AProcess p), VString str, VInt pos, VInt len -> VInt (Process.write_stdin p str pos len)
+			| _ -> error()
+		));
+		"process_stdin_close", (Fun1 (fun p ->
+			match p with
+			| VAbstract (AProcess p) -> Process.close_stdin p; VNull
+			| _ -> error()
+		));
+		"process_exit", (Fun1 (fun p ->
+			match p with
+			| VAbstract (AProcess p) -> VInt (Process.exit p)
+			| _ -> error()
+		));
+		"process_pid", (Fun1 (fun p ->
+			match p with
+			| VAbstract (AProcess p) -> VInt (Process.pid p)
+			| _ -> error()
+		));
+		"process_close", (Fun1 (fun vp ->
+			match vp with
+			| VAbstract (AProcess p) -> Process.close p; free_abstract vp; VNull
+			| _ -> error()
+		));
 	(* xml *)
 		"parse_xml", (match neko with
 		| None -> Fun2 (fun str o ->
@@ -1877,24 +1928,8 @@ let std_lib =
 	@ (match neko with
 	| None -> []
 	| Some neko ->
-		let p_run = neko.load "std@process_run" 2 in
-		let p_stdout_read = neko.load "std@process_stdout_read" 4 in
-		let p_stderr_read = neko.load "std@process_stderr_read" 4 in
-		let p_stdin_write = neko.load "std@process_stdin_write" 4 in
-		let p_stdin_close = neko.load "std@process_stdin_close" 1 in
-		let p_exit = neko.load "std@process_exit" 1 in
-		let p_pid = neko.load "std@process_pid" 1 in
-		let p_close = neko.load "std@process_close" 1 in
 		let win_ec = (try Some (neko.load "std@win_env_changed" 0) with _ -> None) in
 	[
-		"process_run", (Fun2 (fun a b -> neko.call p_run [a;b]));
-		"process_stdout_read", (Fun4 (fun a b c d -> neko.call p_stdout_read [a;VAbstract (ANekoBuffer b);c;d]));
-		"process_stderr_read", (Fun4 (fun a b c d -> neko.call p_stderr_read [a;VAbstract (ANekoBuffer b);c;d]));
-		"process_stdin_write", (Fun4 (fun a b c d -> neko.call p_stdin_write [a;b;c;d]));
-		"process_stdin_close", (Fun1 (fun p -> neko.call p_stdin_close [p]));
-		"process_exit", (Fun1 (fun p -> neko.call p_exit [p]));
-		"process_pid", (Fun1 (fun p -> neko.call p_pid [p]));
-		"process_close", (Fun1 (fun p -> neko.call p_close [p]));
 		"win_env_changed", (Fun0 (fun() -> match win_ec with None -> error() | Some f -> neko.call f []));
 	]))
 
@@ -2038,14 +2073,14 @@ let z_lib =
 			let z = Extc.zlib_deflate_init (match f with VInt i -> i | _ -> error()) in
 			VAbstract (AZipD { z = z; z_flush = Extc.Z_NO_FLUSH })
 		);
-		"deflate_end", Fun1 (fun z ->
-			match z with
-			| VAbstract (AZipD z) -> Extc.zlib_deflate_end z.z; VNull;
+		"deflate_end", Fun1 (fun vz ->
+			match vz with
+			| VAbstract (AZipD z) -> Extc.zlib_deflate_end z.z; free_abstract vz; VNull;
 			| _ -> error()
 		);
-		"inflate_end", Fun1 (fun z ->
-			match z with
-			| VAbstract (AZipI z) -> Extc.zlib_inflate_end z.z; VNull;
+		"inflate_end", Fun1 (fun vz ->
+			match vz with
+			| VAbstract (AZipI z) -> Extc.zlib_inflate_end z.z; free_abstract vz; VNull;
 			| _ -> error()
 		);
 		"set_flush_mode", Fun2 (fun z f ->
@@ -2180,7 +2215,7 @@ let macro_lib =
 		);
 		"on_generate", Fun1 (fun f ->
 			match f with
-			| VFunction (Fun1 _) ->
+			| VFunction (Fun1 _) | VClosure _ ->
 				let ctx = get_ctx() in
 				ctx.curapi.on_generate (fun tl ->
 					ignore(catch_errors ctx (fun() -> ctx.do_call VNull f [enc_array (List.map encode_type tl)] null_pos));
@@ -2379,7 +2414,7 @@ let macro_lib =
 			VString (Type.s_type (print_context()) (decode_type v))
 		);
 		"s_expr", Fun2 (fun v b ->
-			let f = match b with VBool true -> Type.s_expr_pretty "" | _ -> Type.s_expr in
+			let f = match b with VBool true -> Type.s_expr_pretty "" | _ -> Type.s_expr_ast true "" in
 			VString (f (Type.s_type (print_context())) (decode_texpr v))
 		);
 		"is_fmt_string", Fun1 (fun v ->
@@ -2478,8 +2513,8 @@ let macro_lib =
 			| None -> VNull
 			| Some t -> encode_type t
 		);
-		"constructor_arguments", Fun0 (fun() ->
-			match (get_ctx()).curapi.get_constructor_arguments() with
+		"call_arguments", Fun0 (fun() ->
+			match (get_ctx()).curapi.get_call_arguments() with
 			| None -> VNull
 			| Some el -> enc_array (List.map encode_expr el)
 		);
@@ -2488,6 +2523,9 @@ let macro_lib =
 		);
 		"local_using", Fun0 (fun() ->
 			enc_array (List.map encode_clref ((get_ctx()).curapi.get_local_using()))
+		);
+		"local_imports", Fun0 (fun() ->
+			enc_array (List.map encode_import ((get_ctx()).curapi.get_local_imports()))
 		);
 		"local_vars", Fun1 (fun as_var ->
 			let as_var = match as_var with
@@ -2595,6 +2633,10 @@ let macro_lib =
 		"get_typed_expr", Fun1 (fun e ->
 			let e = decode_texpr e in
 			encode_expr (make_ast e)
+		);
+		"store_typed_expr", Fun1 (fun e ->
+			let e = try decode_texpr e with Invalid_expr -> error() in
+			encode_expr ((get_ctx()).curapi.store_typed_expr e)
 		);
 		"get_output", Fun0 (fun() ->
 			VString (ccom()).file
@@ -3541,8 +3583,9 @@ let create com api =
 
 
 
-let do_reuse ctx =
-	ctx.is_reused <- false
+let do_reuse ctx api =
+	ctx.is_reused <- false;
+	ctx.curapi <- api
 
 let can_reuse ctx types =
 	let has_old_version t =
@@ -3626,6 +3669,7 @@ type enum_index =
 	| IModuleType
 	| IFieldAccess
 	| IAnonStatus
+	| IImportMode
 
 let enum_name = function
 	| IExpr -> "ExprDef"
@@ -3646,9 +3690,10 @@ let enum_name = function
 	| IModuleType -> "ModuleType"
 	| IFieldAccess -> "FieldAccess"
 	| IAnonStatus -> "AnonStatus"
+	| IImportMode -> "ImportMode"
 
 let init ctx =
-	let enums = [IExpr;IBinop;IUnop;IConst;ITParam;ICType;IField;IType;IFieldKind;IMethodKind;IVarAccess;IAccess;IClassKind;ITypedExpr;ITConstant;IModuleType;IFieldAccess;IAnonStatus] in
+	let enums = [IExpr;IBinop;IUnop;IConst;ITParam;ICType;IField;IType;IFieldKind;IMethodKind;IVarAccess;IAccess;IClassKind;ITypedExpr;ITConstant;IModuleType;IFieldAccess;IAnonStatus;IImportMode] in
 	let get_enum_proto e =
 		match get_path ctx ["haxe";"macro";enum_name e] null_pos with
 		| VObject e ->
@@ -3773,6 +3818,18 @@ let encode_unop op =
 	in
 	enc_enum IUnop tag []
 
+let encode_import (path,mode) =
+	let tag,pl = match mode with
+		| INormal -> 0, []
+		| IAsName s -> 1, [enc_string s]
+		| IAll -> 2,[]
+	in
+	let mode = enc_enum IImportMode tag pl in
+	enc_obj [
+		"path", enc_array (List.map (fun (name,p) -> enc_obj [ "pos", encode_pos p; "name", enc_string name]) path);
+		"mode", mode
+	]
+
 let rec encode_path t =
 	let fields = [
 		"pack", enc_array (List.map enc_string t.tpackage);
@@ -3846,6 +3903,7 @@ and encode_tparam_decl tp =
 		"name", enc_string tp.tp_name;
 		"params", enc_array (List.map encode_tparam_decl tp.tp_params);
 		"constraints", enc_array (List.map encode_ctype tp.tp_constraints);
+		"meta", encode_meta_content tp.tp_meta;
 	]
 
 and encode_fun f =
@@ -4082,6 +4140,7 @@ and decode_tparam_decl v =
 		tp_name = dec_string (field v "name");
 		tp_constraints = (match field v "constraints" with VNull -> [] | a -> List.map decode_ctype (dec_array a));
 		tp_params = decode_tparams (field v "params");
+		tp_meta = decode_meta_content (field v "meta");
 	}
 
 and decode_fun v =
@@ -4334,6 +4393,7 @@ and encode_tabstract a =
 		"from", enc_array ((List.map (fun t -> enc_obj [ "t",encode_type t; "field",VNull]) a.a_from) @ (List.map (fun (t,cf) -> enc_obj [ "t",encode_type t; "field",encode_cfield cf]) a.a_from_field));
 		"to", enc_array ((List.map (fun t -> enc_obj [ "t",encode_type t; "field",VNull]) a.a_to) @ (List.map (fun (t,cf) -> enc_obj [ "t",encode_type t; "field",encode_cfield cf]) a.a_to_field));
 		"array", enc_array (List.map encode_cfield a.a_array);
+		"resolve", (match a.a_resolve with None -> VNull | Some cf -> encode_cfref cf)
 	]
 
 and encode_efield f =
@@ -4358,6 +4418,7 @@ and encode_cfield f =
 		"kind", encode_field_kind f.cf_kind;
 		"pos", encode_pos f.cf_pos;
 		"doc", null enc_string f.cf_doc;
+		"overloads", encode_ref f.cf_overloads (encode_array encode_cfield) (fun() -> "overloads");
 	]
 
 and encode_field_kind k =
@@ -4403,7 +4464,7 @@ and encode_class_kind k =
 	enc_enum IClassKind tag pl
 
 and encode_tclass c =
-	c.cl_build();
+	ignore(c.cl_build());
 	encode_mtype (TClassDecl c) [
 		"kind", encode_class_kind c.cl_kind;
 		"isExtern", VBool c.cl_extern;
@@ -4566,6 +4627,7 @@ and encode_tvar v =
 		"capture", VBool v.v_capture;
 		"extra", vopt f_extra v.v_extra;
 		"meta", encode_meta_content v.v_meta;
+		"$", VAbstract (AUnsafe (Obj.repr v));
 	]
 
 and encode_module_type mt =
@@ -4590,12 +4652,18 @@ and encode_tfunc func =
 	]
 
 and encode_field_access fa =
+	let encode_instance c tl =
+		enc_obj [
+			"c",encode_clref c;
+			"params",encode_tparams tl
+		]
+	in
 	let tag,pl = match fa with
-		| FInstance(c,_,cf) -> 0,[encode_clref c;encode_cfref cf] (* TODO: breaking change, kind of *)
+		| FInstance(c,tl,cf) -> 0,[encode_clref c;encode_tparams tl;encode_cfref cf]
 		| FStatic(c,cf) -> 1,[encode_clref c;encode_cfref cf]
 		| FAnon(cf) -> 2,[encode_cfref cf]
 		| FDynamic(s) -> 3,[enc_string s]
-		| FClosure(co,cf) -> 4,[(match co with Some (c,_) -> encode_clref c | None -> VNull);encode_cfref cf] (* TODO: breaking change, kind of, too *)
+		| FClosure(co,cf) -> 4,[(match co with Some (c,tl) -> encode_instance c tl | None -> VNull);encode_cfref cf]
 		| FEnum(en,ef) -> 5,[encode_enref en;encode_efield ef]
 	in
 	enc_enum IFieldAccess tag pl
@@ -4675,17 +4743,9 @@ let decode_type_params v =
 	List.map (fun v -> dec_string (field v "name"),decode_type (field v "t")) (dec_array v)
 
 let decode_tvar v =
-	let f_extra v =
-		decode_type_params (field v "params"),opt decode_texpr (field v "expr")
-	in
-	{
-		v_id = (match (field v "id") with VInt i -> i | _ -> raise Invalid_expr);
-		v_name = dec_string (field v "name");
-		v_type = decode_type (field v "t");
-		v_capture = dec_bool (field v "capture");
-		v_extra = opt f_extra (field v "extra");
-		v_meta = decode_meta_content (field v "meta")
-	}
+	match field v "$" with
+	| VAbstract (AUnsafe t) -> Obj.obj t
+	| _ -> raise Invalid_expr
 
 let decode_var_access v =
 	match decode_enum v with
@@ -4723,7 +4783,7 @@ let decode_cfield v =
 		cf_kind = decode_field_kind (field v "kind");
 		cf_params = decode_type_params (field v "params");
 		cf_expr = None;
-		cf_overloads = [];
+		cf_overloads = decode_ref (field v "overloads");
 	}
 
 let decode_efield v =
@@ -4739,13 +4799,18 @@ let decode_efield v =
 
 let decode_field_access v =
 	match decode_enum v with
-	| 0, [c;cf] ->
+	| 0, [c;tl;cf] ->
 		let c = decode_ref c in
-		FInstance(c,List.map snd c.cl_params,decode_ref cf) (* TODO: breaking change? *)
+		FInstance(c,List.map decode_type (dec_array tl),decode_ref cf)
 	| 1, [c;cf] -> FStatic(decode_ref c,decode_ref cf)
 	| 2, [cf] -> FAnon(decode_ref cf)
 	| 3, [s] -> FDynamic(dec_string s)
-	| 4, [co;cf] -> FClosure(opt decode_ref co,decode_ref cf)
+	| 4, [co;cf] ->
+		let co = match co with
+			| VNull -> None
+			| _ -> Some (decode_ref (field co "c"),List.map decode_type (dec_array (field co "params")))
+		in
+		FClosure(co,decode_ref cf)
 	| 5, [e;ef] -> FEnum(decode_ref e,decode_efield ef)
 	| _ -> raise Invalid_expr
 
@@ -4968,26 +5033,7 @@ let rec make_ast e =
 		in
 		if snd mp = snd p then p else (fst mp) @ [snd mp],snd p
 	in
-	let mk_path (pack,name) p =
-		match List.rev pack with
-		| [] -> (EConst (Ident name),p)
-		| pl ->
-			let rec loop = function
-				| [] -> assert false
-				| [n] -> (EConst (Ident n),p)
-				| n :: l -> (EField (loop l, n),p)
-			in
-			(EField (loop pl,name),p)
-	in
-	let mk_const = function
-		| TInt i -> Int (Int32.to_string i)
-		| TFloat s -> Float s
-		| TString s -> String s
-		| TBool b -> Ident (if b then "true" else "false")
-		| TNull -> Ident "null"
-		| TThis -> Ident "this"
-		| TSuper -> Ident "super"
-	in
+	let mk_path = expr_of_type_path in
 	let mk_ident = function
 		| "`trace" -> Ident "trace"
 		| n -> Ident n
@@ -4995,7 +5041,7 @@ let rec make_ast e =
 	let eopt = function None -> None | Some e -> Some (make_ast e) in
 	((match e.eexpr with
 	| TConst c ->
-		EConst (mk_const c)
+		EConst (tconst_to_const c)
 	| TLocal v -> EConst (mk_ident v.v_name)
 	| TArray (e1,e2) -> EArray (make_ast e1,make_ast e2)
 	| TBinop (op,e1,e2) -> EBinop (op, make_ast e1, make_ast e2)
@@ -5008,7 +5054,7 @@ let rec make_ast e =
 	| TNew (c,pl,el) -> ENew ((match (try make_type (TInst (c,pl)) with Exit -> make_type (TInst (c,[]))) with CTPath p -> p | _ -> assert false),List.map make_ast el)
 	| TUnop (op,p,e) -> EUnop (op,p,make_ast e)
 	| TFunction f ->
-		let arg (v,c) = v.v_name, false, mk_ot v.v_type, (match c with None -> None | Some c -> Some (EConst (mk_const c),e.epos)) in
+		let arg (v,c) = v.v_name, false, mk_ot v.v_type, (match c with None -> None | Some c -> Some (EConst (tconst_to_const c),e.epos)) in
 		EFunction (None,{ f_params = []; f_args = List.map arg f.tf_args; f_type = mk_ot f.tf_type; f_expr = Some (make_ast f.tf_expr) })
 	| TVar (v,eo) ->
 		EVars ([v.v_name, mk_ot v.v_type, eopt eo])
@@ -5062,3 +5108,4 @@ decode_texpr_ref := decode_texpr;
 encode_tvar_ref := encode_tvar;
 decode_path_ref := decode_path;
 decode_import_ref := decode_import;
+encode_import_ref := encode_import;

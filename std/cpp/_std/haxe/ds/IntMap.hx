@@ -35,12 +35,20 @@ package haxe.ds;
   inline void set(int key, double value) { __int_hash_set_float(h,key,value); }
   inline void set(int key, ::String value) { __int_hash_set_string(h,key,value); }
 
+  template<typename V, typename H>
+  inline void set(int key, const ::cpp::Struct<V,H> &value) {__int_hash_set(h,key,value); }
+  template<typename F>
+  inline void set(int key, const ::cpp::Function<F> &value) {__int_hash_set(h,key,value); }
+  template<typename V>
+  inline void set(int key, const ::cpp::Pointer<V> &value) {__int_hash_set(h,key,(Dynamic)value ); }
+
   template<typename VALUE>
   inline Void set(Dynamic &key, const VALUE &value) { set( (int)key, value ); return null(); }
 ")
 @:coreApi class IntMap<T> implements haxe.Constraints.IMap<Int,T> {
 
-	@:ifFeature("haxe.ds.IntMap.*") private var h : Dynamic;
+	@:ifFeature("haxe.ds.IntMap.*")
+	private var h : Dynamic;
 
 	public function new() : Void { }
 
