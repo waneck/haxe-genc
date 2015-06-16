@@ -232,7 +232,7 @@ let rec follow t =
 	| TType (t,tl) ->
 		follow (apply_params t.t_params tl t.t_type)
 	| TAbstract({a_path= (["c"],"Struct")},_) -> t
-	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
+	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) && not (Meta.has Meta.NoFollow a.a_meta) ->
 		follow (Abstract.get_underlying_type a pl)
 	| _ -> t
 
@@ -2068,7 +2068,7 @@ module GC = struct
 	| TType (t,tl) ->
 		follow (apply_params t.t_params tl t.t_type)
 	| TAbstract({a_path= (["c"],"Struct")},[tp]) -> t (*TAbstract(a,[follow tp])*)
-	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) ->
+	| TAbstract(a,pl) when not (Meta.has Meta.CoreType a.a_meta) && not (Meta.has Meta.NoFollow a.a_meta) ->
 		follow (Abstract.get_underlying_type a pl)
 	| _ -> t
 

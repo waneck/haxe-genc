@@ -247,6 +247,9 @@ module Simplifier = struct
 			| TCall({eexpr = TLocal v | TField({eexpr = TLocal v},_)},_) | TField({eexpr = TLocal v},_) | TLocal v when Meta.has Meta.Unbound v.v_meta && v.v_name <> "`trace" ->
 				has_unbound := true;
 				e
+			| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))} as e1, e2 :: el) ->
+				let e2 = bind e2 in
+				{e with eexpr = TCall(e1,e2 :: el)}
 			| TBlock el ->
 				{e with eexpr = TBlock (block loop el)}
 			| TCall({eexpr = TField(_,(FStatic(c,cf) | FInstance(c,_,cf)))},el) when has_analyzer_option cf.cf_meta flag_no_simplification || has_analyzer_option c.cl_meta flag_no_simplification ->
