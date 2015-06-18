@@ -253,12 +253,6 @@ module ExtType = struct
 		| TAbstract({a_path=[],"Void"},_) -> true
 		| _ -> false
 
-	let iseq_strict a b =
-		try
-			type_eq EqDoNotFollowNull a b;
-			true
-		with Unify_error _ ->
-			false
 end
 
 (* Static extensions for functions *)
@@ -374,7 +368,7 @@ module TypeChecker = struct
 			e
 		| _,(TAbstract({a_path=["c"],"VarArg"},_)) when ExtType.is_runtime_string_type e.etype ->
 			ExprBuilder.make_library_call com ([],"String") "raw" [e] e.epos
-		| _,(TFun(tl,tr) as t2) when not (ExtType.iseq_strict e.etype t2) ->
+		| _,(TFun(tl,tr) as t2) when not (type_iseq_strict e.etype t2) ->
 			Codegen.UnificationCallback.run (run com) (make_adapter_function e tl tr)
 		| TConst TNull,_ when not (is_null t) ->
 			e
@@ -382,7 +376,7 @@ module TypeChecker = struct
 			let e = mk (TCast(e,None)) t e.epos in
 			e
 		| _ ->
-			if not (ExtType.iseq_strict e.etype t) then
+			if not (type_iseq_strict e.etype t) then
 				mk (TCast(e,None)) t e.epos
 			else
 				e

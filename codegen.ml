@@ -1814,7 +1814,7 @@ module UnificationCallback = struct
 
 	let rec run ff e =
 		let f e t =
-			if not (type_iseq e.etype t) then
+			if not (type_iseq_strict e.etype t) then
 				ff e t
 			else
 				e

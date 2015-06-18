@@ -1051,7 +1051,7 @@ module ConstPropagation = struct
 		with Not_found ->
 			-1
 
-	let can_be_inlined com v0 e = type_iseq v0.v_type e.etype && match e.eexpr with
+	let can_be_inlined com v0 e = type_iseq_strict v0.v_type e.etype && match e.eexpr with
 		| TConst ct ->
 			begin match ct with
 				| TThis | TSuper -> false

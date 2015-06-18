@@ -1447,6 +1447,13 @@ let type_iseq a b =
 	with
 		Unify_error _ -> false
 
+let type_iseq_strict a b =
+	try
+		type_eq EqDoNotFollowNull a b;
+		true
+	with Unify_error _ ->
+		false
+
 let unify_stack = ref []
 let abstract_cast_stack = ref []
 let unify_new_monos = ref []
