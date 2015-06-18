@@ -1081,6 +1081,7 @@ try
 		),"<file> : generate Python code as target file");
 		("-llvm",Arg.String (fun dir ->
 			Common.define com Define.Llvm;
+			Common.define com Define.Analyzer;
 			set_platform C dir;
 		),"<file> : generate LLVM code into target directory");
 		("-xml",Arg.String (fun file ->
