@@ -1,23 +1,20 @@
 (*
- * Copyright (C)2005-2013 Haxe Foundation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
 
 (*
@@ -260,9 +257,9 @@ let path_s path =
 	| TMono r -> (match !r with | Some t -> t_to_md t | None -> assert false)
 	| _ -> assert false
 
-let get_cl mt = match mt with | TClassDecl cl -> cl | _ -> failwith ("Unexpected module type of '" ^ path_s (t_path mt) ^ "'")
+let get_cl mt = match mt with | TClassDecl cl -> cl | _ -> failwith (Printf.sprintf "Unexpected module type (class expected) for %s: %s" (path_s (t_path mt)) (s_module_type_kind mt))
 
-let get_abstract mt = match mt with | TAbstractDecl a -> a | _ -> failwith ("Unexpected module type of '" ^ path_s (t_path mt) ^ "'")
+let get_abstract mt = match mt with | TAbstractDecl a -> a | _ -> failwith (Printf.sprintf "Unexpected module type (abstract expected) for %s: %s" (path_s (t_path mt)) (s_module_type_kind mt))
 
 let get_tdef mt = match mt with | TTypeDecl t -> t | _ -> assert false
 
@@ -4846,6 +4843,7 @@ struct
 						| TClassDecl ({ cl_params = hd :: tl } as cl) when set_hxgeneric gen md ->
 							let iface = mk_class cl.cl_module cl.cl_path cl.cl_pos in
 							iface.cl_array_access <- Option.map (apply_params (cl.cl_params) (List.map (fun _ -> t_dynamic) cl.cl_params)) cl.cl_array_access;
+							iface.cl_extern <- cl.cl_extern;
 							iface.cl_module <- cl.cl_module;
 							iface.cl_meta <-
 								(Meta.HxGen, [], cl.cl_pos)
@@ -10979,9 +10977,13 @@ struct
 			match md with
 				| TClassDecl ({ cl_kind = KAbstractImpl a } as c) ->
 						List.iter (function
+							| ({ cf_name = "_new" } as cf) ->
+								cf.cf_params <- cf.cf_params @ a.a_params
 							| cf when Meta.has Meta.Impl cf.cf_meta ->
-									(* add type parameters to all implementation functions *)
-									cf.cf_params <- cf.cf_params @ a.a_params
+								(match cf.cf_expr with
+									| Some({ eexpr = TFunction({ tf_args = (v, _) :: _ }) }) when Meta.has Meta.This v.v_meta ->
+										cf.cf_params <- cf.cf_params @ a.a_params
+									| _ -> ())
 							| _ -> ()
 						) c.cl_ordered_statics;
 						Some md
@@ -11126,17 +11128,12 @@ struct
 										etype = real_ftype;
 										epos = p;
 									};
-									(* delayed: add to class *)
-									let delay () =
-										try
-											let fm = PMap.find f.cf_name c.cl_fields in
-											fm.cf_overloads <- newf :: fm.cf_overloads
-										with | Not_found ->
-											c.cl_fields <- PMap.add f.cf_name newf c.cl_fields;
-											c.cl_ordered_fields <- newf :: c.cl_ordered_fields
-									in
-									(* gen.gafter_filters_ended <- delay :: gen.gafter_filters_ended *)
-									delay();
+									(try
+										let fm = PMap.find name c.cl_fields in
+										fm.cf_overloads <- newf :: fm.cf_overloads
+									with | Not_found ->
+										c.cl_fields <- PMap.add name newf c.cl_fields;
+										c.cl_ordered_fields <- newf :: c.cl_ordered_fields)
 								| _ -> assert false
 							end
 						with | Not_found -> ()

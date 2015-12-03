@@ -5,6 +5,10 @@
 	all : support @:resolve on abstracts (#3753)
 	all : support completion on { if the expected type is a structure (#3907)
 	all : support (expr is Type) with mandatory parentheses (#2976)
+	all : allowed passing package dot-paths on command line (#4227)
+	js : introduced new jQuery extern (js.jquery.*) for jQuery 1.11.3 / 2.1.4 (#4377)
+	js : introduced new SWFObject extern (js.swfobject.SWFObject) for SWFObject 2.3.20130521 (#4451)
+	js : added js.Lib.rethrow (#4551)
 
 	Bugfixes:
 
@@ -25,6 +29,7 @@
 	all : allowed creating closures on abstract inline methods (#4165)
 	all : type parameter declarations can now have metadata (#3836)
 	all : optimize Math.ceil/floor on constant arguments (#4223)
+	all : allowed extern classes to have field names being used for both static and instance (#4376)
 	python : use spaces instead of tabs to indent the output (#4299)
 
 	Standard Library:
@@ -33,6 +38,7 @@
 
 	Macro features and changes:
 
+	macro : added Context.eval (#2278)
 	macro : added overloads field to ClassField (#3460)
 	macro : added Context.getLocalImports (#3560)
 

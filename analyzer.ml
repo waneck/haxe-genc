@@ -1,3 +1,22 @@
+(*
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ *)
+
 open Ast
 open Type
 open Common
@@ -902,13 +921,8 @@ module Ssa = struct
 						close join;
 						Some e
 					| None ->
-						begin match e1.eexpr with
-							| TMeta((Meta.Exhaustive,_,_),_)
-							| TParenthesis({eexpr = TMeta((Meta.Exhaustive,_,_),_)}) ->
-								()
-							| _ ->
-								add_branch join ctx.cur_data e.epos;
-						end;
+						if not (Optimizer.is_exhaustive e1) then
+							add_branch join ctx.cur_data e.epos;
 						None
 				in
 				close_join_node ctx join e.epos;
@@ -1051,7 +1065,7 @@ module ConstPropagation = struct
 		with Not_found ->
 			-1
 
-	let can_be_inlined com v0 e = type_iseq_strict v0.v_type e.etype && match e.eexpr with
+	let rec can_be_inlined com v0 e = type_iseq_strict v0.v_type e.etype && match e.eexpr with
 		| TConst ct ->
 			begin match ct with
 				| TThis | TSuper -> false
@@ -1075,6 +1089,9 @@ module ConstPropagation = struct
 			Ssa.get_var_usage_count v0 <= 1
 		| TField(_,FEnum _) ->
 			Ssa.get_var_usage_count v0 <= 1
+		| TCast(e1,None) ->
+			(* We can inline an unsafe cast if the variable is only used once. *)
+			can_be_inlined com v0 {e1 with etype = e.etype} && Ssa.get_var_usage_count v0 <= 1
 		| _ ->
 			false
 

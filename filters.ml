@@ -1,3 +1,22 @@
+(*
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ *)
+
 open Ast
 open Common
 open Type
@@ -186,8 +205,15 @@ let rec wrap_js_exceptions com e =
 		| TThrow eerr when not (is_error eerr.etype) ->
 			let terr = List.find (fun mt -> match mt with TClassDecl {cl_path = ["js";"_Boot"],"HaxeError"} -> true | _ -> false) com.types in
 			let cerr = match terr with TClassDecl c -> c | _ -> assert false in
-			let ewrap = { eerr with eexpr = TNew (cerr,[],[eerr]) } in
-			{ e with eexpr = TThrow ewrap }
+			(match eerr.etype with
+			| TDynamic _ ->
+				let eterr = Codegen.ExprBuilder.make_static_this cerr e.epos in
+				let ewrap = Codegen.fcall eterr "wrap" [eerr] t_dynamic e.epos in
+				{ e with eexpr = TThrow ewrap }
+			| _ ->
+				let ewrap = { eerr with eexpr = TNew (cerr,[],[eerr]) } in
+				{ e with eexpr = TThrow ewrap }
+			)
 		| _ ->
 			Type.map_expr loop e
 	in
@@ -211,11 +237,12 @@ let check_local_vars_init e =
 		) !vars declared;
 	in
 	let declared = ref [] in
+	let outside_vars = ref IntMap.empty in
 	let rec loop vars e =
 		match e.eexpr with
 		| TLocal v ->
 			let init = (try PMap.find v.v_id !vars with Not_found -> true) in
-			if not init then begin
+			if not init && not (IntMap.mem v.v_id !outside_vars) then begin
 				if v.v_name = "this" then error "Missing this = value" e.epos
 				else () (*error ("Local variable " ^ v.v_name ^ " used without being initialized") e.epos*)
 			end
@@ -299,6 +326,14 @@ let check_local_vars_init e =
 		| TThrow e | TReturn (Some e) ->
 			loop vars e;
 			vars := PMap.map (fun _ -> true) !vars
+		| TFunction tf ->
+			let old = !outside_vars in
+			(* Mark all known variables as "outside" so we can ignore their initialization state within the function.
+			   We cannot use `vars` directly because we still care about initializations the function might make.
+			*)
+			PMap.iter (fun i _ -> outside_vars := IntMap.add i true !outside_vars) !vars;
+			loop vars tf.tf_expr;
+			outside_vars := old;
 		| _ ->
 			Type.iter (loop vars) e
 	in
@@ -489,12 +524,27 @@ let captured_vars com e =
 				will not be overwritten in next loop iteration
 			*)
 			if com.config.pf_capture_policy = CPLoopVars then
+				(* We don't want to duplicate any variable declarations, so let's make copies (issue #3902). *)
+				let new_vars = List.map (fun v -> v.v_id,alloc_var v.v_name v.v_type) vars in
+				let rec loop e = match e.eexpr with
+					| TLocal v ->
+						begin try
+							let v' = List.assoc v.v_id new_vars in
+							v'.v_capture <- true;
+							{e with eexpr = TLocal v'}
+						with Not_found ->
+							e
+						end
+					| _ ->
+						Type.map_expr loop e
+				in
+				let e = loop e in
 				mk (TCall (
 					Codegen.mk_parent (mk (TFunction {
-						tf_args = List.map (fun v -> v, None) vars;
+						tf_args = List.map (fun (_,v) -> v, None) new_vars;
 						tf_type = e.etype;
 						tf_expr = mk_block (mk (TReturn (Some e)) e.etype e.epos);
-					}) (TFun (List.map (fun v -> v.v_name,false,v.v_type) vars,e.etype)) e.epos),
+					}) (TFun (List.map (fun (_,v) -> v.v_name,false,v.v_type) new_vars,e.etype)) e.epos),
 					List.map (fun v -> mk (TLocal v) v.v_type e.epos) vars)
 				) e.etype e.epos
 			else
@@ -922,7 +972,7 @@ let apply_native_paths ctx t =
 			let meta,path = get_real_path e.e_meta e.e_path in
 			e.e_meta <- meta :: e.e_meta;
 			e.e_path <- path;
-		| TAbstractDecl a when Meta.has Meta.CoreType a.a_meta ->
+		| TAbstractDecl a ->
 			let meta,path = get_real_path a.a_meta a.a_path in
 			a.a_meta <- meta :: a.a_meta;
 			a.a_path <- path;
@@ -1030,6 +1080,7 @@ let add_meta_field ctx t = match t with
 		(match Codegen.build_metadata ctx.com t with
 		| None -> ()
 		| Some e ->
+			add_feature ctx.com "has_metadata";
 			let f = mk_field "__meta__" t_dynamic c.cl_pos in
 			f.cf_expr <- Some e;
 			let can_deal_with_interface_metadata () = match ctx.com.platform with
@@ -1176,8 +1227,8 @@ let run com tctx main =
 	if use_static_analyzer then begin
 		(* PASS 1: general expression filters *)
 		let filters = [
-			Codegen.UnificationCallback.run (check_unification tctx);
 			Codegen.AbstractCast.handle_abstract_casts tctx;
+			check_local_vars_init;
 			Optimizer.inline_constructors tctx;
 			Optimizer.reduce_expression tctx;
 			blockify_ast;
@@ -1196,7 +1247,6 @@ let run com tctx main =
 	end else begin
 		(* PASS 1: general expression filters *)
 		let filters = [
-			Codegen.UnificationCallback.run (check_unification tctx);
 			Codegen.AbstractCast.handle_abstract_casts tctx;
 			blockify_ast;
 			check_local_vars_init;

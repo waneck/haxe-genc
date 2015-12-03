@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2012 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,6 +33,7 @@ class NativeOutput<T:IOBase> extends Output {
 	public var canSeek(get_canSeek, null):Bool;
 
 	public function new (stream:T) {
+		this.bigEndian = false;
 		this.stream = stream;
 		if (!stream.writable()) throw "Read only stream";
 	}

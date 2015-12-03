@@ -10,9 +10,12 @@
 #
 .SUFFIXES : .ml .mli .cmo .cmi .cmx .mll .mly
 
-INSTALL_DIR=/usr
+INSTALL_DIR=$(DESTDIR)/usr
 INSTALL_BIN_DIR=$(INSTALL_DIR)/bin
 INSTALL_LIB_DIR=$(INSTALL_DIR)/lib/haxe
+INSTALL_STD_DIR=$(INSTALL_LIB_DIR)/std
+PACKAGE_OUT_DIR=out
+PACKAGE_SRC_EXTENSION=.tar.gz
 
 OUTPUT=haxe
 EXTENSION=
@@ -56,8 +59,14 @@ ADD_REVISION?=0
 
 BRANCH=$(shell echo $$APPVEYOR_REPO_NAME | grep -q /haxe && echo $$APPVEYOR_REPO_BRANCH || echo $$TRAVIS_REPO_SLUG | grep -q /haxe && echo $$TRAVIS_BRANCH || git rev-parse --abbrev-ref HEAD)
 COMMIT_SHA=$(shell git rev-parse --short HEAD)
-COMMIT_DATE=$(shell git show -s --format=%ci HEAD | grep -oh ....-..-..)
-PACKAGE_FILE_NAME=haxe_$(COMMIT_DATE)_$(BRANCH)_$(COMMIT_SHA)
+COMMIT_DATE=$(shell \
+	if [ "$$(uname)" = "Darwin" ]; then \
+		date -u -r $$(git show -s --format=%ct HEAD) +%Y%m%d%H%M%S; \
+	else \
+		date -u -d @$$(git show -s --format=%ct HEAD) +%Y%m%d%H%M%S; \
+	fi \
+)
+PACKAGE_FILE_NAME=haxe_$(COMMIT_DATE)_$(COMMIT_SHA)
 
 # using $(CURDIR) on Windows will not work since it might be a Cygwin path
 ifdef SYSTEMROOT
@@ -91,12 +100,12 @@ haxelib:
 tools: haxelib
 
 install:
-	-rm -f $(INSTALL_LIB_DIR)
-	-mkdir -p $(INSTALL_LIB_DIR)
-	rm -rf $(INSTALL_LIB_DIR)/std
-	cp -rf std $(INSTALL_LIB_DIR)/std
+	rm -rf $(INSTALL_LIB_DIR)
+	mkdir -p $(INSTALL_BIN_DIR)
+	mkdir -p $(INSTALL_LIB_DIR)/lib
+	rm -rf $(INSTALL_STD_DIR)
+	cp -rf std $(INSTALL_STD_DIR)
 	cp -rf extra $(INSTALL_LIB_DIR)
-	-mkdir -p $(INSTALL_LIB_DIR)/lib
 	rm -f $(INSTALL_BIN_DIR)/haxe
 	cp haxe $(INSTALL_LIB_DIR)
 	ln -s $(INSTALL_LIB_DIR)/haxe $(INSTALL_BIN_DIR)/haxe
@@ -185,24 +194,46 @@ lexer.$(MODULE_EXT): ast.$(MODULE_EXT)
 ast.$(MODULE_EXT):
 
 version.$(MODULE_EXT):
-	$(MAKE) -f Makefile.version_extra -s ADD_REVISION=$(ADD_REVISION) BRANCH=$(BRANCH) COMMIT_SHA=$(COMMIT_SHA) COMMIT_DATE=$(COMMIT_DATE) > version.ml
+	$(MAKE) -f Makefile.version_extra -s --no-print-directory ADD_REVISION=$(ADD_REVISION) BRANCH=$(BRANCH) COMMIT_SHA=$(COMMIT_SHA) COMMIT_DATE=$(COMMIT_DATE) > version.ml
 	$(COMPILER) $(CFLAGS) -c version.ml
 
 # Package
 
+package_src:
+	mkdir -p $(PACKAGE_OUT_DIR)
+	# use git-archive-all since we have submodules
+	# https://github.com/Kentzo/git-archive-all
+	curl -s https://raw.githubusercontent.com/Kentzo/git-archive-all/1.12/git-archive-all -o extra/git-archive-all
+	python extra/git-archive-all $(PACKAGE_OUT_DIR)/$(PACKAGE_FILE_NAME)_src$(PACKAGE_SRC_EXTENSION)
+
 package_bin:
-	mkdir -p out
+	mkdir -p $(PACKAGE_OUT_DIR)
 	rm -rf $(PACKAGE_FILE_NAME) $(PACKAGE_FILE_NAME).tar.gz
 	# Copy the package contents to $(PACKAGE_FILE_NAME)
 	mkdir -p $(PACKAGE_FILE_NAME)
 	cp -r $(OUTPUT) haxelib$(EXTENSION) std extra/LICENSE.txt extra/CONTRIB.txt extra/CHANGES.txt $(PACKAGE_FILE_NAME)
 	# archive
-	tar -zcf out/$(PACKAGE_FILE_NAME).tar.gz $(PACKAGE_FILE_NAME)
+	tar -zcf $(PACKAGE_OUT_DIR)/$(PACKAGE_FILE_NAME)_bin.tar.gz $(PACKAGE_FILE_NAME)
 	rm -r $(PACKAGE_FILE_NAME)
+
+
+install_dox:
+	haxelib git hxparse https://github.com/Simn/hxparse development src
+	haxelib git hxtemplo https://github.com/Simn/hxtemplo
+	haxelib git hxargs https://github.com/Simn/hxargs
+	haxelib git markdown https://github.com/dpeek/haxe-markdown master src
+	haxelib git hxcpp https://github.com/HaxeFoundation/hxcpp
+	haxelib git hxjava https://github.com/HaxeFoundation/hxjava
+	haxelib git hxcs https://github.com/HaxeFoundation/hxcs
+	haxelib git dox https://github.com/dpeek/dox
+
+package_doc:
+	cd $$(haxelib path dox | head -n 1) && haxe run.hxml && haxe gen.hxml
+	haxelib run dox --title "Haxe API" -o $(PACKAGE_OUT_DIR)/$(PACKAGE_FILE_NAME)_doc.zip -D version "$$(haxe -version 2>&1)" -i $$(haxelib path dox | head -n 1)bin/xml -ex microsoft -ex javax -ex cs.internal -D source-path https://github.com/HaxeFoundation/haxe/blob/$(BRANCH)/std/
 
 # Clean
 
-clean: clean_libs clean_haxe clean_tools
+clean: clean_libs clean_haxe clean_tools clean_package
 
 clean_libs:
 	make -C libs/extlib clean
@@ -218,10 +249,15 @@ clean_libs:
 	make -C libs/objsize clean
 
 clean_haxe:
-	rm -f $(MODULES:=.obj) $(MODULES:=.o) $(MODULES:=.cmx) $(MODULES:=.cmi) $(MODULES:=.cmo) lexer.ml $(OUTPUT)
+	rm -f $(MODULES:=.obj) $(MODULES:=.o) $(MODULES:=.cmx) $(MODULES:=.cmi) $(MODULES:=.cmo) lexer.ml version.ml $(OUTPUT)
 
 clean_tools:
 	rm -f $(OUTPUT) haxelib
+	rm -f extra/haxelib_src/bin/haxelib.n
+	rm -f extra/haxelib_src/bin/haxelib
+
+clean_package:
+	rm -rf $(PACKAGE_OUT_DIR)
 
 # SUFFIXES
 

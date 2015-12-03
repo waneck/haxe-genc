@@ -1,4 +1,25 @@
-package java.lang;
+/*
+ * Copyright (C)2005-2015 Haxe Foundation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+ package java.lang;
 
 @:native("") // make sure the generator won't see this
 @:forward abstract Integer(IntegerClass) from IntegerClass to IntegerClass
@@ -8,13 +29,13 @@ package java.lang;
 	@:from @:extern inline public static function fromInt(b:Int):Integer
 		return IntegerClass.valueOf(b);
 
-	public static var MAX_VALUE(get,never):Int;
+	@:extern public static var MAX_VALUE(get,never):Int;
 	@:extern static inline function get_MAX_VALUE():Int return IntegerClass.MAX_VALUE;
-	public static var MIN_VALUE(get,never):Int;
+	@:extern public static var MIN_VALUE(get,never):Int;
 	@:extern static inline function get_MIN_VALUE():Int return IntegerClass.MIN_VALUE;
-	public static var SIZE(get,never):Int;
+	@:extern public static var SIZE(get,never):Int;
 	@:extern static inline function get_SIZE():Int return IntegerClass.SIZE;
-	public static var TYPE(get,set):Class<java.lang.Integer>;
+	@:extern public static var TYPE(get,set):Class<java.lang.Integer>;
 	@:extern static inline function get_TYPE():Class<java.lang.Integer> return IntegerClass.TYPE;
 	@:extern static inline function set_TYPE(val:Class<java.lang.Integer>):Class<java.lang.Integer> return IntegerClass.TYPE = val;
 	@:extern @:overload inline public static function bitCount(param1:Int):Int return IntegerClass.bitCount(param1);

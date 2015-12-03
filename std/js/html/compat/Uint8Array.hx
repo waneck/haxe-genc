@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2014 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,6 +21,7 @@
  */
 package js.html.compat;
 
+#if !nodejs
 @:keep
 class Uint8Array {
 
@@ -94,7 +95,8 @@ class Uint8Array {
 	}
 
 	static function __init__() {
-		var Uint8Array = untyped Function("return typeof Uint8Array != 'undefined' ? Uint8Array : null")() || _new;
+		var Uint8Array = untyped js.Lib.global.Uint8Array || _new;
 	}
 
 }
+#end

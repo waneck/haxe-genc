@@ -1,23 +1,20 @@
 (*
- * Copyright (C)2005-2013 Haxe Foundation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
 
 open Ast
@@ -135,6 +132,7 @@ type context = {
 	mutable get_macros : unit -> context option;
 	mutable run_command : string -> int;
 	file_lookup_cache : (string,string option) Hashtbl.t;
+	parser_cache : (string,string list * (type_def * pos) list) Hashtbl.t;
 	mutable stored_typed_exprs : (int, texpr) PMap.t;
 	(* output *)
 	mutable file : string;
@@ -145,6 +143,7 @@ type context = {
 	mutable types : Type.module_type list;
 	mutable resources : (string,string) Hashtbl.t;
 	mutable neko_libs : string list;
+	mutable include_files : (string * string) list;
 	mutable php_front : string option;
 	mutable php_lib : string option;
 	mutable php_prefix : string option;
@@ -186,6 +185,7 @@ module Define = struct
 		| Dump
 		| DumpDependencies
 		| DumpIgnoreVarIds
+		| DynamicInterfaceClosures
 		| EraseGenerics
 		| Fdb
 		| FileExtension
@@ -201,6 +201,7 @@ module Define = struct
 		| IncludePrefix
 		| Interp
 		| JavaVer
+		| JqueryVer
 		| JsClassic
 		| JsEs5
 		| JsUnflatten
@@ -226,11 +227,13 @@ module Define = struct
 		| NoSimplify
 		| NoSwfCompress
 		| NoTraces
+		| Objc
 		| PhpPrefix
 		| RealPosition
 		| ReplaceFiles
 		| Scriptable
 		| ShallowExpose
+		| SourceHeader
 		| SourceMapContent
 		| StaticAnalyzer
 		| Swc
@@ -270,6 +273,7 @@ module Define = struct
 		| Dump -> ("dump","Dump the complete typed AST for internal debugging in a dump subdirectory - use dump=pretty for Haxe-like formatting")
 		| DumpDependencies -> ("dump_dependencies","Dump the classes dependencies in a dump subdirectory")
 		| DumpIgnoreVarIds -> ("dump_ignore_var_ids","Remove variable IDs from non-pretty dumps (helps with diff)")
+		| DynamicInterfaceClosures -> ("dynamic_interface_closures","Use slow path for interface closures to save space")
 		| EraseGenerics -> ("erase_generics","Erase generic classes on C#")
 		| Fdb -> ("fdb","Enable full flash debug infos for FDB interactive debugging")
 		| FileExtension -> ("file_extension","Output filename extension for cpp source code")
@@ -286,6 +290,7 @@ module Define = struct
 		| IncludePrefix -> ("include_prefix","prepend path to generated include files")
 		| Interp -> ("interp","The code is compiled to be run with --interp")
 		| JavaVer -> ("java_ver", "<version:5-7> Sets the Java version to be targeted")
+		| JqueryVer -> ("jquery_ver", "The jQuery version supported by js.jquery.*. The version is encoded as an interger. e.g. 1.11.3 is encoded as 11103")
 		| JsClassic -> ("js_classic","Don't use a function wrapper and strict mode in JS output")
 		| JsEs5 -> ("js_es5","Generate JS for ES5-compliant runtimes")
 		| JsUnflatten -> ("js_unflatten","Generate nested objects for packages and types")
@@ -312,11 +317,13 @@ module Define = struct
 		| NoSimplify -> "no_simplify",("Disable simplification filter")
 		| NoSwfCompress -> ("no_swf_compress","Disable SWF output compression")
 		| NoTraces -> ("no_traces","Disable all trace calls")
+		| Objc -> ("objc","Sets the hxcpp output to objective-c++ classes. Must be defined for interop")
 		| PhpPrefix -> ("php_prefix","Compiled with --php-prefix")
-		| RealPosition -> ("real_position","Disables haxe source mapping when targetting C#")
+		| RealPosition -> ("real_position","Disables Haxe source mapping when targetting C#, removes position comments in Java output")
 		| ReplaceFiles -> ("replace_files","GenCommon internal")
 		| Scriptable -> ("scriptable","GenCPP internal")
 		| ShallowExpose -> ("shallow-expose","Expose types to surrounding scope of Haxe generated closure without writing to window object")
+		| SourceHeader -> ("source-header","Print value as comment on top of generated files, use '' value to disable")
 		| SourceMapContent -> ("source-map-content","Include the hx sources as part of the JS source map")
 		| StaticAnalyzer -> ("static-analyzer","Use static analyzer for optimization (experimental)")
 		| Swc -> ("swc","Output a SWC instead of a SWF")
@@ -368,6 +375,7 @@ module MetaInfo = struct
 		| Annotation -> ":annotation",("Annotation (@interface) definitions on -java-lib imports will be annotated with this metadata. Has no effect on types compiled by Haxe",[Platform Java; UsedOn TClass])
 		| ArrayAccess -> ":arrayAccess",("Allows [] access on an abstract",[UsedOnEither [TAbstract;TAbstractField]])
 		| Ast -> ":ast",("Internally used to pass the AST source into the typed AST",[Internal])
+		| AstSource -> ":astSource",("Filled by the compiler with the parsed expression of the field",[UsedOn TClassField])
 		| AutoBuild -> ":autoBuild",("Extends @:build metadata to all extending and implementing classes",[HasParam "Build macro call";UsedOn TClass])
 		| Bind -> ":bind",("Override Swf class declaration",[Platform Flash;UsedOn TClass])
 		| Bitmap -> ":bitmap",("Embeds given bitmap data into the class (must extend flash.display.BitmapData)",[HasParam "Bitmap file path";UsedOn TClass;Platform Flash])
@@ -408,6 +416,7 @@ module MetaInfo = struct
 		| FlatEnum -> ":flatEnum",("Internally used to mark an enum as being flat, i.e. having no function constructors",[UsedOn TEnum; Internal])
 		| Font -> ":font",("Embeds the given TrueType font into the class (must extend flash.text.Font)",[HasParam "TTF path";HasParam "Range String";UsedOn TClass])
 		| Forward -> ":forward",("Forwards field access to underlying type",[HasParam "List of field names";UsedOn TAbstract])
+		| ForwardStatics -> ":forwardStatics",("Forwards static field access to underlying type",[HasParam "List of field names";UsedOn TAbstract])
 		| From -> ":from",("Specifies that the field of the abstract is a cast operation from the type identified in the function",[UsedOn TAbstractField])
 		| FunctionCode -> ":functionCode",("Used to inject platform-native code into a function",[Platforms [Cpp;Java;Cs]])
 		| FunctionTailCode -> ":functionTailCode",("",[Platform Cpp])
@@ -463,6 +472,7 @@ module MetaInfo = struct
 		| NotNull -> ":notNull",("Declares an abstract type as not accepting null values",[UsedOn TAbstract])
 		| NoUsing -> ":noUsing",("Prevents a field from being used with 'using'",[UsedOn TClassField])
 		| Ns -> ":ns",("Internally used by the Swf generator to handle namespaces",[Platform Flash])
+		| Objc -> ":objc",("Declares a class or interface that is used to interoperate with Objective-C code",[Platform Cpp;UsedOn TClass])
 		| Op -> ":op",("Declares an abstract field as being an operator overload",[HasParam "The operation";UsedOn TAbstractField])
 		| Optional -> ":optional",("Marks the field of a structure as optional",[UsedOn TClassField])
 		| Overload -> ":overload",("Allows the field to be called with different argument types",[HasParam "Function specification (no expression)";UsedOn TClassField])
@@ -734,6 +744,11 @@ let memory_marker = [|Unix.time()|]
 
 let create v args =
 	let m = Type.mk_mono() in
+	let defines =
+		PMap.add "true" "1" (
+		PMap.add "source-header" "Generated by Haxe" (
+		if !display_default <> DMNone then PMap.add "display" "1" PMap.empty else PMap.empty))
+	in
 	{
 		version = v;
 		args = args;
@@ -750,7 +765,7 @@ let create v args =
 		std_path = [];
 		class_path = [];
 		main_class = None;
-		defines = PMap.add "true" "1" (if !display_default <> DMNone then PMap.add "display" "1" PMap.empty else PMap.empty);
+		defines = defines;
 		package_rules = PMap.empty;
 		file = "";
 		types = [];
@@ -770,6 +785,7 @@ let create v args =
 		net_path_map = Hashtbl.create 0;
 		c_args = [];
 		neko_libs = [];
+		include_files = [];
 		php_prefix = None;
 		js_gen = None;
 		load_extern_type = [];
@@ -789,6 +805,7 @@ let create v args =
 		file_lookup_cache = Hashtbl.create 0;
 		stored_typed_exprs = PMap.empty;
 		memory_marker = memory_marker;
+		parser_cache = Hashtbl.create 0;
 	}
 
 let log com str =
@@ -1004,10 +1021,18 @@ let find_file ctx f =
 		| None -> raise Not_found
 		| Some f -> f)
 
-
 let get_full_path f = try Extc.get_full_path f with _ -> f
 
 let unique_full_path = if Sys.os_type = "Win32" || Sys.os_type = "Cygwin" then (fun f -> String.lowercase (get_full_path f)) else get_full_path
+
+let get_path_parts f =
+	let f = String.concat "/" (ExtString.String.nsplit f "\\") in
+	let cl = ExtString.String.nsplit f "." in
+	let cl = (match List.rev cl with
+		| ["hx";path] -> ExtString.String.nsplit path "/"
+		| _ -> cl
+	) in
+	cl
 
 let normalize_path p =
 	let l = String.length p in

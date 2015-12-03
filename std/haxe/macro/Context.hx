@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2012 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -394,6 +394,15 @@ class Context {
 	}
 
 	/**
+		Follows a type, including abstracts' underlying implementation
+
+		See `haxe.macro.TypeTools.followWithAbstracts` for details.
+	**/
+	public static function followWithAbstracts(t : Type, once : Bool = false ) : Type {
+		return load("follow_with_abstracts", 2)(t,once);
+	}
+
+	/**
 		Returns the information stored in `Position` `p`.
 	**/
 	public static function getPosInfos( p : Position ) : { min : Int, max : Int, file : String } {
@@ -430,6 +439,11 @@ class Context {
 		The resource is then available using the `haxe.macro.Resource` API.
 
 		If a previous resource was bound to `name`, it is overwritten.
+		
+		Compilation server : when using the compilation server, the resource is bound
+		to the Haxe module which calls the macro, so it will be included again if
+		that module is reused. If this resource concerns several modules, prefix its
+		name with a $ sign, this will bind it to the macro module instead.
 	**/
 	public static function addResource( name : String, data : haxe.io.Bytes ) {
 		load("add_resource",2)(untyped name.__s,data.getData());
@@ -490,6 +504,34 @@ class Context {
 	@:require(haxe_ver >= 3.2)
 	public static function storeTypedExpr( t : Type.TypedExpr ) : Expr {
 		return load("store_typed_expr",1)(t);
+	}
+
+	/**
+		Evaluates `e` as macro code.
+
+		Any call to this function takes effect when the macro is executed, not
+		during typing. As a consequence, this function can not introduce new
+		local variables into the macro context and may have other restrictions.
+
+		Usage example:
+
+		```haxe
+		var e = macro function(i) return i * 2;
+		var f:Int -> Int = haxe.macro.Context.eval(e);
+		trace(f(2)); // 4
+		```
+
+		Code passed in from outside the macro cannot reference anything in its
+		context, such as local variables. However, it is possible to reference
+		static methods.
+
+		This method should be considered experimental.
+
+		If `e` is null, the result is unspecified.
+	**/
+	@:require(haxe_ver >= 3.3)
+	public static function eval( e : Expr ) : Dynamic {
+		return load("eval",1)(e);
 	}
 
 	/**

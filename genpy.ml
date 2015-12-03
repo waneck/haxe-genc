@@ -1,23 +1,20 @@
 (*
- * Copyright (C)2005-2014 Haxe Foundation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
 
 open Ast
@@ -197,18 +194,19 @@ module Transformer = struct
 		| _ ->
 			e
 
-	let dynamic_field_read e s =
-		Utils.mk_static_call_2 ((!c_reflect)()) "field" [e;mk (TConst (TString s)) !t_string e.epos] e.epos
+	let dynamic_field_read e s t =
+		let e = Utils.mk_static_call_2 ((!c_reflect)()) "field" [e;mk (TConst (TString s)) !t_string e.epos] e.epos in
+		{ e with etype = t }
 
 	let dynamic_field_write e1 s e2 =
 		Utils.mk_static_call_2 ((!c_reflect)()) "setField" [e1;mk (TConst (TString s)) !t_string e1.epos;e2] e1.epos
 
-	let dynamic_field_read_write next_id e1 s op e2 =
+	let dynamic_field_read_write next_id e1 s op e2 t =
 		let id = next_id() in
 		let temp_var = to_tvar id e1.etype in
 		let temp_var_def = mk (TVar(temp_var,Some e1)) e1.etype e1.epos in
 		let temp_local = mk (TLocal temp_var) e1.etype e1.epos in
-		let e_field = dynamic_field_read temp_local s in
+		let e_field = dynamic_field_read temp_local s t in
 		let e_op = mk (TBinop(op,e_field,e2)) e_field.etype e_field.epos in
 		let e_set_field = dynamic_field_write temp_local s e_op in
 		mk (TBlock [
@@ -405,7 +403,7 @@ module Transformer = struct
 			List.iter (fun es ->
 				match es.eexpr with
 				| TConst (TString s) ->
-					let l = String.length s in
+					let l = UTF8.length s in
 					let sl = try
 						Hashtbl.find length_map l
 					with Not_found ->
@@ -799,13 +797,13 @@ module Transformer = struct
 			end
 		(* anon field access on optional params *)
 		| (is_value, TField(e,FAnon cf)) when Meta.has Meta.Optional cf.cf_meta ->
-			let e = dynamic_field_read e cf.cf_name in
+			let e = dynamic_field_read e cf.cf_name ae.a_expr.etype in
 			transform_expr ~is_value:is_value e
 		| (is_value, TBinop(OpAssign,{eexpr = TField(e1,FAnon cf)},e2)) when Meta.has Meta.Optional cf.cf_meta ->
 			let e = dynamic_field_write e1 cf.cf_name e2 in
 			transform_expr ~is_value:is_value e
-		| (is_value, TBinop(OpAssignOp op,{eexpr = TField(e1,FAnon cf)},e2)) when Meta.has Meta.Optional cf.cf_meta ->
-			let e = dynamic_field_read_write ae.a_next_id e1 cf.cf_name op e2 in
+		| (is_value, TBinop(OpAssignOp op,{eexpr = TField(e1,FAnon cf); etype = t},e2)) when Meta.has Meta.Optional cf.cf_meta ->
+			let e = dynamic_field_read_write ae.a_next_id e1 cf.cf_name op e2 t in
 			transform_expr ~is_value:is_value e
 		(* TODO we need to deal with Increment, Decrement too!
 
@@ -835,16 +833,16 @@ module Transformer = struct
 			lift_expr ~blocks:e1.a_blocks r
 
 		| (is_value, TField(e,FDynamic s)) ->
-			let e = dynamic_field_read e s in
+			let e = dynamic_field_read e s ae.a_expr.etype in
 			transform_expr ~is_value:is_value e
 		| (is_value, TBinop(OpAssign,{eexpr = TField(e1,FDynamic s)},e2)) ->
 			let e = dynamic_field_write e1 s e2 in
 			transform_expr ~is_value:is_value e
-		| (is_value, TBinop(OpAssignOp op,{eexpr = TField(e1,FDynamic s)},e2)) ->
-			let e = dynamic_field_read_write ae.a_next_id e1 s op e2 in
+		| (is_value, TBinop(OpAssignOp op,{eexpr = TField(e1,FDynamic s); etype = t},e2)) ->
+			let e = dynamic_field_read_write ae.a_next_id e1 s op e2 t in
 			transform_expr ~is_value:is_value e
 		| (is_value, TField(e1, FClosure(Some ({cl_path = [],("str" | "list")},_),cf))) ->
-			let e = dynamic_field_read e1 cf.cf_name in
+			let e = dynamic_field_read e1 cf.cf_name ae.a_expr.etype in
 			transform_expr ~is_value:is_value e
 		| (is_value, TBinop(OpAssign, left, right))->
 			(let left = trans true [] left in
@@ -1253,6 +1251,8 @@ module Printer = struct
 					*)
 					(* Printf.sprintf "(%s %s %s)" (print_expr pctx e1) (fst ops) (print_expr pctx e2) *)
 				| TInst({cl_path = [],("list")},_), _ ->
+					Printf.sprintf "(%s %s %s)" (print_expr pctx e1) (fst ops) (print_expr pctx e2)
+				| x, _ when is_underlying_array x ->
 					Printf.sprintf "(%s %s %s)" (print_expr pctx e1) (fst ops) (print_expr pctx e2)
 				| TDynamic _, TDynamic _ ->
 					Printf.sprintf "%s(%s,%s)" (third ops) (print_expr pctx e1) (print_expr pctx e2)
@@ -1909,10 +1909,30 @@ module Generator = struct
 		begin match cf.cf_expr with
 			| Some ({eexpr = TFunction f} as ef) ->
 				let ethis = mk (TConst TThis) (TInst(c,List.map snd c.cl_params)) cf.cf_pos in
-				let member_data = List.map (fun cf ->
-					let ef = mk (TField(ethis,FInstance(c,[],cf))) cf.cf_type cf.cf_pos in (* TODO *)
-					mk (TBinop(OpAssign,ef,null ef.etype ef.epos)) ef.etype ef.epos
-				) member_inits in
+				let assigned_fields = ref [] in
+				(* Collect all fields that are assigned to but panic out as soon as `this`,
+				   `super`, `return` or `throw` appears (regardless of control flow). *)
+				let collect_assignments e =
+					let rec loop e = match e.eexpr with
+						| TBinop(OpAssign,{eexpr = TField({eexpr = TConst TThis}, FInstance(_,_,cf))},e2) ->
+							loop e2;
+							assigned_fields := cf :: !assigned_fields
+						| TConst (TSuper | TThis) | TThrow _ | TReturn _ ->
+							raise Exit
+						| _ ->
+							Type.iter loop e
+					in
+					try loop e with Exit -> ()
+				in
+				collect_assignments f.tf_expr;
+				let member_data = List.fold_left (fun acc cf ->
+					if not (List.memq cf !assigned_fields) then begin
+						let ef = mk (TField(ethis,FInstance(c,[],cf))) cf.cf_type cf.cf_pos in (* TODO *)
+						let e = mk (TBinop(OpAssign,ef,null ef.etype ef.epos)) ef.etype ef.epos in
+						e :: acc
+					end else
+						acc
+				) [] member_inits in
 				let e = concat (mk (TBlock member_data) ctx.com.basic.tvoid cf.cf_pos) f.tf_expr in
 				let ef = {ef with eexpr = TFunction {f with tf_expr = e}} in
 				cf.cf_expr <- Some ef;
@@ -2065,6 +2085,25 @@ module Generator = struct
 					with Exit -> ()
 				in
 
+				(try (
+					let real_fields =
+						List.filter (fun f -> match f.cf_kind with
+							| Method MethDynamic -> raise Exit (* if a class has dynamic method, we can't use __slots__ because python will complain *)
+							| Var _ -> not (is_extern_field f)
+							| _ -> false
+						) c.cl_ordered_fields
+					in
+					let field_names = List.map (fun f -> handle_keywords f.cf_name) real_fields in
+					let field_names = match c.cl_dynamic with Some _ -> "__dict__" :: field_names | None -> field_names in
+					use_pass := false;
+					print ctx "\n    __slots__ = (";
+					(match field_names with
+					| [] -> ()
+					| [name] -> print ctx "\"%s\"," name
+					| names -> print ctx "\"%s\"" (String.concat "\", \"" names));
+					print ctx ")";
+				) with Exit -> ());
+
 				print_field x.cfd_fields "_hx_fields" true;
 				print_field x.cfd_methods "_hx_methods" true;
 				(* TODO: It seems strange to have a separation for member fields but a plain _hx_statics for static ones *)
@@ -2131,17 +2170,14 @@ module Generator = struct
 		newline ctx;
 		newline ctx;
 		print ctx "class %s(Enum):" p;
-
-		let use_pass = ref true in
+		print ctx "\n    __slots__ = ()";
 
 		if has_feature ctx "python._hx_class_name" then begin
-			use_pass := false;
 			print ctx "\n    _hx_class_name = \"%s\"" p_name
 		end;
 		if has_feature ctx "python._hx_constructs" then begin
 			let fix = match enum_constructs with [] -> "" | _ -> "\"" in
 			let enum_constructs_str = fix ^ (String.concat ("\", \"") (List.map (fun ef -> ef.ef_name) enum_constructs)) ^ fix in
-			use_pass := false;
 			print ctx "\n    _hx_constructs = [%s]" enum_constructs_str;
 		end;
 
@@ -2177,11 +2213,8 @@ module Generator = struct
 				newline ctx;
 				print ctx "    @staticmethod\n    def %s(%s):\n" f param_str;
 				print ctx "        return %s(\"%s\", %i, [%s])" p ef.ef_name ef.ef_index args_str;
-				use_pass := false;
 			| _ -> assert false
 		) param_constructors;
-
-		if !use_pass then spr ctx "\n    pass";
 
 		List.iter (fun ef ->
 			(* TODO: haxe source has api.quoteString for ef.ef_name *)
@@ -2273,7 +2306,10 @@ module Generator = struct
 				in
 				let k_enc = Codegen.escape_res_name k false in
 				print ctx "%s\"%s\": open('%%s.%%s'%%(_file,'%s'),'rb').read()" prefix (Ast.s_escape k) k_enc;
-				Std.output_file (ctx.com.file ^ "." ^ k_enc) v
+
+				let f = open_out_bin (ctx.com.file ^ "." ^ k_enc) in
+				output_string f v;
+				close_out f
 			) ctx.com.resources;
 			spr ctx "}"
 		end
@@ -2342,8 +2378,8 @@ module Generator = struct
 			Utils.find_type ctx.com path
 		in
 		let need_anon_for_trace = (has_feature ctx "has_anon_trace") && (has_feature ctx "haxe.Log.trace") in
-		if (has_feature ctx "has_anon") || (has_feature ctx "_hx_AnonObject") || need_anon_for_trace then begin
-			let with_body = (has_feature ctx "has_anon") || need_anon_for_trace in
+		if (has_feature ctx "has_anon") || (has_feature ctx "_hx_AnonObject") || (has_feature ctx "has_metadata") || need_anon_for_trace then begin
+			let with_body = (has_feature ctx "has_anon") || (has_feature ctx "has_metadata") || need_anon_for_trace in
 			newline ctx;
 			newline ctx;
 			newline ctx;
@@ -2394,6 +2430,7 @@ module Generator = struct
 	let run com =
 		Transformer.init com;
 		let ctx = mk_context com in
+		Codegen.map_source_header com (fun s -> print ctx "# %s\n" s);
 		gen_imports ctx;
 		gen_resources ctx;
 		gen_types ctx;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2012 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -81,12 +81,11 @@ enum ValueType {
 			if (c == String) return "String";
 
 			try {
-				var s :String = Syntax.field(c, "__name__");
-			} catch (e:Dynamic) {}
+				return Syntax.field(c, "__name__");
+			} catch (e:Dynamic) {
+				return null;
+			}
 		}
-		var res = null;
-
-		return res;
 	}
 
 	public static function getEnumName( e : Enum<Dynamic> ) : String {

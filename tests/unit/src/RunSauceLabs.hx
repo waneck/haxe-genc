@@ -25,6 +25,7 @@ private typedef Promise = {
 		-browsers <browsers>		A list of browsers to test with in JSON format. Default: refer to source code
 
 	When a test finishes, it should set `window.success` to a boolean.
+	For urls with the string `-es5`, IE <= 8 will be automatically skipped.
 */
 class RunSauceLabs {
 	static function successMsg(msg:String):Void {
@@ -37,6 +38,12 @@ class RunSauceLabs {
 		console.log('\x1b[36m' + msg + '\x1b[0m');
 	}
 
+	static function isEs5(b:Dynamic):Bool {
+		return 
+			// not IE <= 8
+			!(b.browserName == "internet explorer" && Std.parseInt(b.version) <= 8);
+	}
+
 	static function main():Void {
 		var serveDomain = "localhost";
 		var servePort = "2000";
@@ -44,27 +51,35 @@ class RunSauceLabs {
 		var connectPort = "4445";
 		var urls = [];
 
+		// hide "Stop running this script?" dialogs
+		// https://support.saucelabs.com/customer/portal/articles/2057026-how-to-hide-%22stop-running-this-script-%22-dialogs
+		var hideLongRunningScriptWarning = "https://support.saucelabs.com/customer/portal/kb_article_attachments/59514/original.bat";
+
 		//https://saucelabs.com/platforms
 		var browsers:Array<Dynamic> = [
 			// {
 			// 	"browserName": "internet explorer",
 			// 	"platform": "Windows XP",
-			// 	"version": "6"
+			// 	"version": "6",
+			//  "prerun": hideLongRunningScriptWarning
 			// },
 			// {
 			// 	"browserName": "internet explorer",
 			// 	"platform": "Windows XP",
-			// 	"version": "7"
+			// 	"version": "7",
+			//  "prerun": hideLongRunningScriptWarning
 			// },
 			{
 				"browserName": "internet explorer",
 				"platform": "Windows XP",
-				"version": "8"
+				"version": "8",
+				"prerun": hideLongRunningScriptWarning
 			},
 			{
 				"browserName": "internet explorer",
 				"platform": "Windows 7",
-				"version": "9"
+				"version": "9",
+				"prerun": hideLongRunningScriptWarning
 			},
 			{
 				"browserName": "internet explorer",
@@ -86,11 +101,6 @@ class RunSauceLabs {
 			},
 			{
 				"browserName": "safari",
-				"platform": "OS X 10.6",
-				"version": "5"
-			},
-			{
-				"browserName": "safari",
 				"platform": "OS X 10.8",
 				"version": "6"
 			},
@@ -103,6 +113,11 @@ class RunSauceLabs {
 				"browserName": "safari",
 				"platform": "OS X 10.10",
 				"version": "8"
+			},
+			{
+				"browserName": "safari",
+				"platform": "OS X 10.11",
+				"version": "9"
 			},
 			{
 				"browserName": "iphone",
@@ -163,7 +178,7 @@ class RunSauceLabs {
 			tags.push("TravisCI");
 
 		var maxDuration = 60 * 5; //5 min
-		var commandTimeout = 30;  //30s
+		var commandTimeout = 60;  //60s
 
 		function testBrowser(caps:Dynamic, trials = 3):Dynamic {
 			console.log('========================================================');
@@ -190,8 +205,7 @@ class RunSauceLabs {
 						.sauceJobUpdate({ passed: true, tags: tags.concat(["errored"]) })
 						.then(function() return browser.quit())
 						.timeout(commandTimeout * 1000)
-						.fail(onErrored)
-						.then(function() return testBrowser(caps, trials));
+						.fin(function() return testBrowser(caps, trials));
 				} else {
 					allSuccess = false;
 					return null;
@@ -211,6 +225,11 @@ class RunSauceLabs {
 			}
 
 			var browserSuccess = true;
+			var urls = if (!isEs5(caps)) {
+				urls.filter(function(url:String) return url.indexOf("-es5") < 0);
+			} else {
+				urls;
+			}
 
 			return browser
 				.init(caps)
@@ -262,9 +281,9 @@ class RunSauceLabs {
 				})
 				.then(function()
 					return browser.sauceJobUpdate({ passed: browserSuccess }))
+				.fail(onErrored)
 				.then(function()
-					return browser.quit())
-				.fail(onErrored);
+					return browser.quit());
 		}
 
 		browsers
@@ -273,6 +292,9 @@ class RunSauceLabs {
 			}, q())
 			.then(function() {
 				Sys.exit(allSuccess ? 0 : 1);
+			})
+			.fail(function() {
+				Sys.exit(1);
 			});
 	}
 }

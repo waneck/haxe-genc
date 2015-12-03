@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2012 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -26,7 +26,20 @@ import haxe.macro.Expr;
 	All these methods can be called for compiler configuration macros.
 **/
 class Compiler {
+	/**
+		A conditional compiler flag can be set command line using
+		`-D key=value`.
 
+		Returns the value of a compiler flag.
+
+		If the compiler flag is defined but no value is set,
+		`Compiler.getDefine` returns `"1"` (e.g. `-D key`).
+
+		If the compiler flag is not defined, `Compiler.getDefine` returns
+		`null`.
+
+		@see http://haxe.org/manual/lf-condition-compilation.html
+	**/
 	macro static public function getDefine( key : String ) {
 		return macro $v{haxe.macro.Context.definedValue(key)};
 	}
@@ -40,23 +53,38 @@ class Compiler {
 		untyped load("allow_package", 1)(v.__s);
 	}
 
+	/**
+		Set a conditional compiler flag.
+	**/
 	public static function define( flag : String, ?value : String ) untyped {
 		var v = flag + (value == null ? "" : "=" + value);
 		load("define", 1)(v.__s);
 	}
 
+	/**
+		Removes a (static) field from a given class by name.
+		An error is thrown when className or field is invalid.
+	**/
 	public static function removeField( className : String, field : String, ?isStatic : Bool ) {
 		if( !path.match(className) ) throw "Invalid "+className;
 		if( !ident.match(field) ) throw "Invalid "+field;
 		untyped load("type_patch",4)(className.__s,field.__s,isStatic == true,null);
 	}
 
+	/**
+		Set the type of a (static) field at a given class by name.
+		An error is thrown when className or field is invalid.
+	**/
 	public static function setFieldType( className : String, field : String, type : String, ?isStatic : Bool ) {
 		if( !path.match(className) ) throw "Invalid "+className;
 		if( !ident.match((field.charAt(0) == "$") ? field.substr(1) : field) ) throw "Invalid "+field;
 		untyped load("type_patch",4)(className.__s,field.__s,isStatic == true,type.__s);
 	}
 
+	/**
+		Add metadata to a (static) field or class by name.
+		An error is thrown when className or field is invalid.
+	**/
 	public static function addMetadata( meta : String, className : String, ?field : String, ?isStatic : Bool ) {
 		if( !path.match(className) ) throw "Invalid "+className;
 		if( field != null && !ident.match(field) ) throw "Invalid "+field;
@@ -83,14 +111,14 @@ class Compiler {
 	}
 
 	/**
-		Adds a native library depending on the platform (eg : -swf-lib for Flash)
+		Adds a native library depending on the platform (e.g. `-swf-lib` for Flash)
 	**/
 	public static function addNativeLib( name : String ) {
 		untyped load("add_native_lib",1)(name.__s);
 	}
 
 	/**
-		Adds an argument to be passed to the native compiler (eg : -javac-arg for Java)
+		Adds an argument to be passed to the native compiler (e.g. `-javac-arg` for Java)
 	 **/
 	public static function addNativeArg( argument : String )
 	{
@@ -331,22 +359,41 @@ class Compiler {
 
 	#if (js || macro)
 	/**
-		Embed an on-disk javascript file (can be called into an __init__ method)
+		Embed a JavaScript file at compile time (can be called by `--macro` or within an `__init__` method).
 	**/
-	public static macro function includeFile( fileName : Expr ) {
-		var str = switch( fileName.expr ) {
-		case EConst(c):
-			switch( c ) {
-			case CString(str): str;
-			default: null;
-			}
-		default: null;
+	public static #if !macro macro #end function includeFile( file : String, position:IncludePosition = Top ) {
+		return switch ((position:String).toLowerCase()) {
+			case Inline:
+				if (Context.getLocalModule() == "")
+					Context.error("Cannot use inline mode when includeFile is called by `--macro`", Context.currentPos());
+
+				var f = try sys.io.File.getContent(Context.resolvePath(file)) catch( e : Dynamic ) Context.error(Std.string(e), Context.currentPos());
+				var p = Context.currentPos();
+				{ expr : EUntyped( { expr : ECall( { expr : EConst(CIdent("__js__")), pos : p }, [ { expr : EConst(CString(f)), pos : p } ]), pos : p } ), pos : p };
+			case Top | Closure:
+				load("include_file", 2)(untyped file.__s, untyped position.__s);
+				macro {};
+			case _:
+				Context.error("unknown includeFile position: " + position, Context.currentPos());
 		}
-		if( str == null ) Context.error("Should be a constant string", fileName.pos);
-		var f = try sys.io.File.getContent(Context.resolvePath(str)) catch( e : Dynamic ) Context.error(Std.string(e), fileName.pos);
-		var p = Context.currentPos();
-		return { expr : EUntyped( { expr : ECall( { expr : EConst(CIdent("__js__")), pos : p }, [ { expr : EConst(CString(f)), pos : p } ]), pos : p } ), pos : p };
 	}
 	#end
 
+}
+
+@:enum abstract IncludePosition(String) from String to String {
+	/**
+		Prepend the file content to the output file.
+	*/
+	var Top = "top";
+	/**
+		Prepend the file content to the body of the top-level closure.
+
+		Since the closure is in strict-mode, there may be run-time error if the input is not strict-mode-compatible.
+	*/
+	var Closure = "closure";
+	/**
+		Directly inject the file content at the call site.
+	*/
+	var Inline = "inline";
 }

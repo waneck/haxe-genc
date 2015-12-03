@@ -1,23 +1,20 @@
 (*
- * Copyright (C)2005-2013 Haxe Foundation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
 
 open Ast
@@ -47,6 +44,7 @@ type ctx = {
 	smap : sourcemap;
 	js_modern : bool;
 	js_flatten : bool;
+	store_exception_stack : bool;
 	mutable current : tclass;
 	mutable statics : (tclass * string * texpr) list;
 	mutable inits : texpr list;
@@ -66,8 +64,7 @@ type object_store = {
 }
 
 let get_exposed ctx path meta =
-	if not ctx.js_modern then []
-	else try
+	try
 		let (_, args, pos) = Meta.get Meta.Expose meta in
 		(match args with
 			| [ EConst (String s), _ ] -> [s]
@@ -435,6 +432,8 @@ let rec gen_call ctx e el in_value =
 		else match eelse with
 			| [] -> ()
 			| e :: _ -> gen_value ctx e)
+	| TLocal { v_name = "__rethrow__" }, [] ->
+		spr ctx "throw $hx_rethrow";
 	| TLocal { v_name = "__resources__" }, [] ->
 		spr ctx "[";
 		concat ctx "," (fun (name,data) ->
@@ -507,11 +506,11 @@ and gen_expr ctx e =
 			gen_value ctx x;
 			print ctx ",";
 			gen_value ctx x;
-			print ctx "%s)" (field f.cf_name)
+			print ctx "%s)" (if Meta.has Meta.SelfCall f.cf_meta then "" else (field f.cf_name))
 		| _ ->
 			print ctx "($_=";
 			gen_value ctx x;
-			print ctx ",$bind($_,$_%s))" (field f.cf_name))
+			print ctx ",$bind($_,$_%s))" (if Meta.has Meta.SelfCall f.cf_meta then "" else (field f.cf_name)))
 	| TEnumParameter (x,_,i) ->
 		gen_value ctx x;
 		print ctx "[%i]" (i + 2)
@@ -669,9 +668,23 @@ and gen_expr ctx e =
 		let last = ref false in
 		let else_block = ref false in
 
-		if (has_feature ctx "haxe.CallStack.exceptionStack") then begin
+		if ctx.store_exception_stack then begin
 			newline ctx;
 			print ctx "%s.lastException = %s" (ctx.type_accessor (TClassDecl { null_class with cl_path = ["haxe"],"CallStack" })) vname
+		end;
+
+		if (has_feature ctx "js.Lib.rethrow") then begin
+			let has_rethrow (_,e) =
+				let rec loop e = match e.eexpr with 
+				| TCall({eexpr = TLocal {v_name = "__rethrow__"}}, []) -> raise Exit
+				| _ -> Type.iter loop e
+				in
+				try (loop e; false) with Exit -> true
+			in
+			if List.exists has_rethrow catchs then begin
+				newline ctx;
+				print ctx "var $hx_rethrow = %s" vname;
+			end
 		end;
 
 		if (has_feature ctx "js.Boot.HaxeError") then begin
@@ -938,6 +951,11 @@ let check_field_name c f =
 		error ("The field name '" ^ f.cf_name ^ "'  is not allowed in JS") (match f.cf_expr with None -> c.cl_pos | Some e -> e.epos);
 	| _ -> ()
 
+(* convert a.b.c to ["a"]["b"]["c"] *)
+let path_to_brackets path =
+	let parts = ExtString.String.nsplit path "." in
+	"[\"" ^ (String.concat "\"][\"" parts) ^ "\"]"
+
 let gen_class_static_field ctx c f =
 	match f.cf_expr with
 	| None | Some { eexpr = TConst TNull } when not (has_feature ctx "Type.getClassFields") ->
@@ -954,7 +972,7 @@ let gen_class_static_field ctx c f =
 			let dot_path = (dot_path c.cl_path) ^ (static_field c f.cf_name) in
 			ctx.id_counter <- 0;
 			print ctx "%s = " path;
-			(match (get_exposed ctx dot_path f.cf_meta) with [s] -> print ctx "$hx_exports.%s = " s | _ -> ());
+			(match (get_exposed ctx dot_path f.cf_meta) with [s] -> print ctx "$hx_exports%s = " (path_to_brackets s) | _ -> ());
 			gen_value ctx e;
 			newline ctx;
 		| _ ->
@@ -1007,7 +1025,7 @@ let generate_class ctx c =
 		print ctx "%s = " p
 	else
 		print ctx "%s = $hxClasses[\"%s\"] = " p (dot_path c.cl_path);
-	(match (get_exposed ctx (dot_path c.cl_path) c.cl_meta) with [s] -> print ctx "$hx_exports.%s = " s | _ -> ());
+	(match (get_exposed ctx (dot_path c.cl_path) c.cl_meta) with [s] -> print ctx "$hx_exports%s = " (path_to_brackets s) | _ -> ());
 	(match c.cl_kind with
 		| KAbstractImpl _ ->
 			(* abstract implementations only contain static members and don't need to have constructor functions *)
@@ -1211,6 +1229,7 @@ let alloc_ctx com =
 		};
 		js_modern = not (Common.defined com Define.JsClassic);
 		js_flatten = not (Common.defined com Define.JsUnflatten);
+		store_exception_stack = if Common.has_dce com then (Common.has_feature com "haxe.CallStack.exceptionStack") else List.exists (function TClassDecl { cl_path=["haxe"],"CallStack" } -> true | _ -> false) com.types;
 		statics = [];
 		inits = [];
 		current = null_class;
@@ -1245,9 +1264,11 @@ let generate com =
 	| Some g -> g()
 	| None ->
 	let ctx = alloc_ctx com in
-
+	Codegen.map_source_header com (fun s -> print ctx "// %s\n" s);
 	if has_feature ctx "Class" || has_feature ctx "Type.getClassName" then add_feature ctx "js.Boot.isClass";
 	if has_feature ctx "Enum" || has_feature ctx "Type.getEnumName" then add_feature ctx "js.Boot.isEnum";
+
+	let nodejs = Common.raw_defined com "nodejs" in
 
 	let exposed = List.concat (List.map (fun t ->
 		match t with
@@ -1282,57 +1303,97 @@ let generate com =
 		in loop parts "";
 	)) exposed;
 
+	let include_files = List.rev com.include_files in
+
+	List.iter (fun file ->
+		match file with
+		| path, "top" ->
+			let file_content = Std.input_file ~bin:true (fst file) in
+			print ctx "%s\n" file_content;
+			()
+		| _ -> ()
+	) include_files;
+
+	let var_console = (
+		"console",
+		"typeof console != \"undefined\" ? console : {log:function(){}}"
+	) in
+
+	let var_exports = (
+		"$hx_exports",
+		"typeof window != \"undefined\" ? window : typeof exports != \"undefined\" ? exports : typeof self != \"undefined\" ? self : this"
+	) in
+
+	let var_global = (
+		"$global",
+		"typeof window != \"undefined\" ? window : typeof global != \"undefined\" ? global : typeof self != \"undefined\" ? self : this"
+	) in
 
 	let closureArgs = [] in
+	let closureArgs = if has_feature ctx "js.Lib.global" then
+		var_global :: closureArgs
+	else
+		closureArgs
+	in
 	let closureArgs = if (anyExposed && not (Common.defined com Define.ShallowExpose)) then
-		(
-			"$hx_exports",
-			(* TODO(bruno): Remove runtime branching when standard node haxelib is available *)
-			"typeof window != \"undefined\" ? window : exports"
-		) :: closureArgs
+		var_exports :: closureArgs
 	else
 		closureArgs
 	in
 	(* Provide console for environments that may not have it. *)
 	let closureArgs = if (not (Common.defined com Define.JsEs5)) then
-		(
-			"console",
-			"typeof console != \"undefined\" ? console : {log:function(){}}"
-		) :: closureArgs
+		var_console :: closureArgs
 	else
 		closureArgs
 	in
 
-	if Common.raw_defined com "nodejs" then
+	if nodejs then
 		(* Add node globals to pseudo-keywords, so they are not shadowed by local vars *)
 		List.iter (fun s -> Hashtbl.replace kwds2 s ()) [ "global"; "process"; "__filename"; "__dirname"; "module" ];
+
+	if (anyExposed && ((Common.defined com Define.ShallowExpose) || not ctx.js_modern)) then (
+		print ctx "var %s = %s" (fst var_exports) (snd var_exports);
+		ctx.separator <- true;
+		newline ctx
+	);
 
 	if ctx.js_modern then begin
 		(* Additional ES5 strict mode keywords. *)
 		List.iter (fun s -> Hashtbl.replace kwds s ()) [ "arguments"; "eval" ];
 
 		(* Wrap output in a closure *)
-		if (anyExposed && (Common.defined com Define.ShallowExpose)) then (
-			print ctx "var $hx_exports = $hx_exports || {}";
-			ctx.separator <- true;
-			newline ctx
-		);
 		print ctx "(function (%s) { \"use strict\"" (String.concat ", " (List.map fst closureArgs));
 		newline ctx;
-		let rec print_obj f root = (
-			let path = root ^ "." ^ f.os_name in
-			print ctx "%s = %s || {}" path path;
-			ctx.separator <- true;
-			newline ctx;
-			concat ctx ";" (fun g -> print_obj g path) f.os_fields
-		)
-		in
-		List.iter (fun f -> print_obj f "$hx_exports") exposedObject.os_fields;
 	end;
+
+	let rec print_obj f root = (
+		let path = root ^ (path_to_brackets f.os_name) in
+		print ctx "%s = %s || {}" path path;
+		ctx.separator <- true;
+		newline ctx;
+		concat ctx ";" (fun g -> print_obj g path) f.os_fields
+	)
+	in
+	List.iter (fun f -> print_obj f "$hx_exports") exposedObject.os_fields;
+
+	List.iter (fun file ->
+		match file with
+		| path, "closure" ->
+			let file_content = Std.input_file ~bin:true (fst file) in
+			print ctx "%s\n" file_content;
+			()
+		| _ -> ()
+	) include_files;
 
 	(* If ctx.js_modern, console is defined in closureArgs. *)
 	if (not ctx.js_modern) && (not (Common.defined com Define.JsEs5)) then
-		spr ctx "var console = Function(\"return typeof console != 'undefined' ? console : {log:function(){}}\")();\n";
+		add_feature ctx "js.Lib.global"; (* console polyfill will check console from $global *)
+
+	if (not ctx.js_modern) && (has_feature ctx "js.Lib.global") then
+		print ctx "var %s = %s;\n" (fst var_global) (snd var_global);
+
+	if (not ctx.js_modern) && (not (Common.defined com Define.JsEs5)) then
+		spr ctx "var console = $global.console || {log:function(){}};\n";
 
 	(* TODO: fix $estr *)
 	let vars = [] in
@@ -1392,19 +1453,21 @@ let generate com =
 	if ctx.js_modern then begin
 		print ctx "})(%s)" (String.concat ", " (List.map snd closureArgs));
 		newline ctx;
-		if (anyExposed && (Common.defined com Define.ShallowExpose)) then (
-			List.iter (fun f ->
-				print ctx "var %s = $hx_exports.%s" f.os_name f.os_name;
-				ctx.separator <- true;
-				newline ctx
-			) exposedObject.os_fields;
-			List.iter (fun f ->
-				print ctx "var %s = $hx_exports.%s" f f;
-				ctx.separator <- true;
-				newline ctx
-			) !toplevelExposed
-		);
 	end;
+
+	if (anyExposed && (Common.defined com Define.ShallowExpose)) then (
+		List.iter (fun f ->
+			print ctx "var %s = $hx_exports%s" f.os_name (path_to_brackets f.os_name);
+			ctx.separator <- true;
+			newline ctx
+		) exposedObject.os_fields;
+		List.iter (fun f ->
+			print ctx "var %s = $hx_exports%s" f (path_to_brackets f);
+			ctx.separator <- true;
+			newline ctx
+		) !toplevelExposed
+	);
+
 	if com.debug then write_mappings ctx else (try Sys.remove (com.file ^ ".map") with _ -> ());
 	flush ctx;
 	close_out ctx.chan)

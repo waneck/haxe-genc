@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2012 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -312,13 +312,13 @@ class Template {
 			var e1:Dynamic = makeExpr(l);
 			var p = l.pop();
 			if( p == null || p.s )
-				throw p.p;
+				throw p;
 			if( p.p == ")" )
 				return e1;
 			var e2:Dynamic = makeExpr(l);
 			var p2 = l.pop();
 			if( p2 == null || p2.p != ")" )
-				throw p2.p;
+				throw p2;
 			return switch( p.p ) {
 			case "+": function() { return cast e1() + e2(); };
 			case "-": function() { return cast e1() - e2(); };

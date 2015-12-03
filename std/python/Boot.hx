@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2012 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -254,14 +254,14 @@ class Boot {
 				var handler = unhandleKeywords;
 
 				Syntax.pythonCode("for k in keys:");
-				Syntax.pythonCode("	a.append(handler(k))");
+				Syntax.pythonCode("    a.append(handler(k))");
 			}
 			else if (UBuiltins.hasattr(o, "__dict__")) {
 				var a = [];
 				var d = Syntax.field(o, "__dict__");
 				var keys1  = Syntax.callField(d, "keys");
 				Syntax.pythonCode("for k in keys1:");
-				Syntax.pythonCode("	a.append(k)");
+				Syntax.pythonCode("    a.append(k)");
 
 			}
 		}

@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2014 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,6 +21,7 @@
  */
 package js.html.compat;
 
+#if !nodejs
 @:keep
 class Float64Array {
 
@@ -110,7 +111,8 @@ class Float64Array {
 	}
 
 	static function __init__() {
-		var Float64Array = untyped Function("return typeof Float64Array != 'undefined' ? Float64Array : (typeof Float32Array != 'undefined' ? 'notsupported' : null)")() || _new;
+		var Float64Array = untyped js.Lib.global.Float64Array || (js.Lib.global.Float32Array ? 'notsupported' : null) || _new;
 	}
 
 }
+#end

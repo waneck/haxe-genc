@@ -1,23 +1,20 @@
 (*
- * Copyright (C)2005-2013 Haxe Foundation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
 
 open Gencommon.ReflectionCFs
@@ -885,6 +882,7 @@ let configure gen =
 			| TInst( { cl_path = ([], "Enum") }, _ ) -> TInst(ttype,[])
 			| TInst( ({ cl_kind = KTypeParameter _ } as cl), _ ) when erase_generics && not (Meta.has Meta.NativeGeneric cl.cl_meta) ->
 				t_dynamic
+			| TInst({ cl_kind = KExpr _ }, _) -> t_dynamic
 			| TEnum(_, [])
 			| TInst(_, []) -> t
 			| TInst(cl, params) when
@@ -1136,9 +1134,15 @@ let configure gen =
 		if skip_line_directives then
 			fun w p -> ()
 		else fun w p ->
+			if p.pfile <> Ast.null_pos.pfile then (* Compiler Error CS1560 https://msdn.microsoft.com/en-us/library/z3t5e5sw(v=vs.90).aspx *)
 			let cur_line = Lexer.get_error_line p in
 			let file = Common.get_full_path p.pfile in
-			if cur_line <> ((!last_line)+1) then begin print w "#line %d \"%s\"" cur_line (Ast.s_escape file); newline w end;
+			if cur_line <> ((!last_line)+1) then
+				let line = Ast.s_escape file in
+				if String.length line <= 256 then
+					begin print w "#line %d \"%s\"" cur_line line; newline w end
+				else (* Compiler Error CS1560 https://msdn.microsoft.com/en-us/library/z3t5e5sw(v=vs.90).aspx *)
+					begin print w "//line %d \"%s\"" cur_line line; newline w end;
 			last_line := cur_line
 	in
 	let line_reset_directive =
@@ -2595,11 +2599,15 @@ let configure gen =
 	in
 
 	let module_type_gen w md_tp =
+		let file_start = len w = 0 in
+		let requires_root = no_root && file_start in
+		if file_start then
+			Codegen.map_source_header gen.gcon (fun s -> print w "// %s\n" s);
 		reset_temps();
 		match md_tp with
 			| TClassDecl cl ->
 				if not cl.cl_extern then begin
-					(if no_root && len w = 0 then write w "using haxe.root;\n"; newline w;);
+					(if requires_root then write w "using haxe.root;\n"; newline w;);
 					gen_class w cl;
 					newline w;
 					newline w
@@ -2607,7 +2615,7 @@ let configure gen =
 				(not cl.cl_extern)
 			| TEnumDecl e ->
 				if not e.e_extern && not (Meta.has Meta.Class e.e_meta) then begin
-					(if no_root && len w = 0 then write w "using haxe.root;\n"; newline w;);
+					(if requires_root then write w "using haxe.root;\n"; newline w;);
 					gen_enum w e;
 					newline w;
 					newline w
@@ -3956,23 +3964,6 @@ let convert_delegate ctx p ilcls =
 		f_type = Some( mk_type_path ctx ilcls.cpath params );
 		f_expr = Some( EReturn( Some (mk_special_call "__delegate__" p [EConst(Ident "hxfunc"),p] )), p);
 	} in
-	let i = ref 0 in
-	let j = ref 0 in
-	let fn_invoke = FFun {
-		f_params = [];
-		f_args = List.map (fun arg ->
-			incr i;
-			"arg" ^ string_of_int !i, false, Some (convert_fun_arg ctx p arg), None
-		) args;
-		f_type = Some(convert_signature ctx p ret);
-		f_expr = Some(
-			EReturn( Some (
-				mk_this_call "Invoke" p (List.map (fun arg ->
-					incr j; (EConst( Ident ("arg" ^ string_of_int !j) ), p)
-				) args )
-			)), p
-		);
-	} in
 	let fn_asdel = FFun {
 		f_params = [];
 		f_args = [];
@@ -3983,16 +3974,15 @@ let convert_delegate ctx p ilcls =
 	} in
 	let fn_new = mk_abstract_fun "new" p fn_new [Meta.Extern] [APublic;AInline] in
 	let fn_from_hx = mk_abstract_fun "FromHaxeFunction" p fn_from_hx [Meta.Extern;Meta.From] [APublic;AInline;AStatic] in
-	let fn_invoke = mk_abstract_fun "Invoke" p fn_invoke [Meta.Extern] [APublic;AInline] in
 	let fn_asdel = mk_abstract_fun "AsDelegate" p fn_asdel [Meta.Extern] [APublic;AInline] in
 	let _, c = netpath_to_hx ctx.nstd ilcls.cpath in
 	EAbstract {
 		d_name = netname_to_hx c;
 		d_doc = None;
 		d_params = types;
-		d_meta = mk_metas [Meta.Delegate] p;
+		d_meta = mk_metas [Meta.Delegate; Meta.Forward] p;
 		d_flags = [AIsType underlying_type];
-		d_data = [fn_new;fn_from_hx;fn_invoke;fn_asdel;mk_op Ast.OpAdd "Add";mk_op Ast.OpSub "Remove"];
+		d_data = [fn_new;fn_from_hx;fn_asdel;mk_op Ast.OpAdd "Add";mk_op Ast.OpSub "Remove"];
 	}
 
 let convert_ilclass ctx p ?(delegate=false) ilcls = match ilcls.csuper with

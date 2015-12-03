@@ -21,7 +21,9 @@
  */
 package haxe.io;
 
+#if !nodejs
 import js.html.compat.Float64Array;
+#end
 
 typedef Float64ArrayData = js.html.Float64Array;
 
@@ -64,7 +66,7 @@ abstract Float64Array(Float64ArrayData) {
 		return this;
 	}
 
-	public static function fromData( d : Float64ArrayData ) : Float64Array {
+	public static inline function fromData( d : Float64ArrayData ) : Float64Array {
 		return cast d;
 	}
 

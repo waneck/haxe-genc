@@ -1,4 +1,25 @@
-package java.lang;
+/*
+ * Copyright (C)2005-2015 Haxe Foundation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+ package java.lang;
 
 @:native("") // make sure the generator won't see this
 @:forward abstract Double(DoubleClass) from DoubleClass to DoubleClass
@@ -8,25 +29,25 @@ package java.lang;
 	@:from @:extern inline public static function fromFloat(b:Float):Double
 		return DoubleClass.valueOf(b);
 
-	public static var MAX_EXPONENT(get,never):Int;
+	@:extern public static var MAX_EXPONENT(get,never):Int;
 	@:extern static inline function get_MAX_EXPONENT():Int return DoubleClass.MAX_EXPONENT;
-	public static var MAX_VALUE(get,never):Float;
+	@:extern public static var MAX_VALUE(get,never):Float;
 	@:extern static inline function get_MAX_VALUE():Float return DoubleClass.MAX_VALUE;
-	public static var MIN_EXPONENT(get,never):Int;
+	@:extern public static var MIN_EXPONENT(get,never):Int;
 	@:extern static inline function get_MIN_EXPONENT():Int return DoubleClass.MIN_EXPONENT;
-	public static var MIN_NORMAL(get,never):Float;
+	@:extern public static var MIN_NORMAL(get,never):Float;
 	@:extern static inline function get_MIN_NORMAL():Float return DoubleClass.MIN_NORMAL;
-	public static var MIN_VALUE(get,never):Float;
+	@:extern public static var MIN_VALUE(get,never):Float;
 	@:extern static inline function get_MIN_VALUE():Float return DoubleClass.MIN_VALUE;
-	public static var NEGATIVE_INFINITY(get,never):Float;
+	@:extern public static var NEGATIVE_INFINITY(get,never):Float;
 	@:extern static inline function get_NEGATIVE_INFINITY():Float return DoubleClass.NEGATIVE_INFINITY;
-	public static var NaN(get,never):Float;
+	@:extern public static var NaN(get,never):Float;
 	@:extern static inline function get_NaN():Float return DoubleClass.NaN;
-	public static var POSITIVE_INFINITY(get,never):Float;
+	@:extern public static var POSITIVE_INFINITY(get,never):Float;
 	@:extern static inline function get_POSITIVE_INFINITY():Float return DoubleClass.POSITIVE_INFINITY;
-	public static var SIZE(get,never):Int;
+	@:extern public static var SIZE(get,never):Int;
 	@:extern static inline function get_SIZE():Int return DoubleClass.SIZE;
-	public static var TYPE(get,set):Class<java.lang.Double>;
+	@:extern public static var TYPE(get,set):Class<java.lang.Double>;
 	@:extern static inline function get_TYPE():Class<java.lang.Double> return DoubleClass.TYPE;
 	@:extern static inline function set_TYPE(val:Class<java.lang.Double>):Class<java.lang.Double> return DoubleClass.TYPE = val;
 	@:extern @:overload inline public static function compare(param1:Float, param2:Float):Int return DoubleClass.compare(param1, param2);

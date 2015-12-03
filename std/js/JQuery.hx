@@ -1,5 +1,5 @@
 /*
- * Copyright (C)2005-2012 Haxe Foundation
+ * Copyright (C)2005-2015 Haxe Foundation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -24,6 +24,7 @@ package js;
 import js.html.Window;
 import js.html.Element;
 
+@:deprecated("Use js.jquery.Event instead.")
 typedef JqEvent = {
 	var target : Element;
 	var currentTarget : Element;
@@ -62,6 +63,7 @@ typedef JqEvent = {
 	function stopPropagation() : Void;
 }
 
+@:deprecated("Use js.jquery.Helper instead.")
 extern class JQueryHelper {
 	@:overload(function(j:JQuery):JQuery{})
 	@:overload(function(j:Window):JQuery{})
@@ -79,6 +81,7 @@ extern class JQueryHelper {
 
 }
 
+@:deprecated("Use js.jquery.JQuery instead.")
 @:initPackage
 extern class JQuery implements ArrayAccess<Element> {
 

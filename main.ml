@@ -1,23 +1,20 @@
 (*
- * Copyright (C)2005-2013 Haxe Foundation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+	The Haxe Compiler
+	Copyright (C) 2005-2015  Haxe Foundation
+
+	This program is free software; you can redistribute it and/or
+	modify it under the terms of the GNU General Public License
+	as published by the Free Software Foundation; either version 2
+	of the License, or (at your option) any later version.
+
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
+
+	You should have received a copy of the GNU General Public License
+	along with this program; if not, write to the Free Software
+	Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *)
 
 (*
@@ -204,12 +201,7 @@ let report_times print =
 	end
 
 let make_path f =
-	let f = String.concat "/" (ExtString.String.nsplit f "\\") in
-	let cl = ExtString.String.nsplit f "." in
-	let cl = (match List.rev cl with
-		| ["hx";path] -> ExtString.String.nsplit path "/"
-		| _ -> cl
-	) in
+	let cl = get_path_parts f in
 	let error msg =
 		let msg = "Could not process argument " ^ f ^ "\n" ^ msg in
 		failwith msg
@@ -225,10 +217,6 @@ let make_path f =
 		| [] ->
 			error "empty part"
 		| [x] ->
-			if String.length x = 0 then
-				error "empty part"
-			else if not (x.[0] = '_' || (x.[0] >= 'A' && x.[0] <= 'Z')) then
-				error "Class name must start with uppercase character";
 			invalid_char x;
 			[],x
 		| x :: l ->
@@ -241,6 +229,20 @@ let make_path f =
 			x :: path,name
 	in
 	loop cl
+
+let starts_uppercase x =
+	x.[0] = '_' || (x.[0] >= 'A' && x.[0] <= 'Z')
+
+let check_uppercase x =
+	if String.length x = 0 then
+		failwith "empty part"
+	else if not (starts_uppercase x) then
+		failwith "Class name must start with uppercase character"
+
+let make_type_path f =
+	let pack,name = make_path f in
+	check_uppercase name;
+	pack,name
 
 let unique l =
 	let rec _unique = function
@@ -380,7 +382,7 @@ let lookup_classes com spath =
 			if clen < String.length spath && String.sub spath 0 clen = c then begin
 				let path = String.sub spath clen (String.length spath - clen) in
 				(try
-					let path = make_path path in
+					let path = make_type_path path in
 					(match loop l with
 					| [x] when String.length (Ast.s_type_path x) < String.length (Ast.s_type_path path) -> [x]
 					| _ -> [path])
@@ -789,7 +791,7 @@ and wait_loop boot_com host port =
 				(match m0.m_extra.m_kind, m.m_extra.m_kind with
 				| MCode, MMacro | MMacro, MCode ->
 					(* this was just a dependency to check : do not add to the context *)
-					()
+					PMap.iter (Hashtbl.replace com2.resources) m.m_extra.m_binded_res;
 				| _ ->
 					if verbose then print_endline ("Reusing  cached module " ^ Ast.s_type_path m.m_path);
 					m.m_extra.m_added <- !compilation_step;
@@ -810,7 +812,7 @@ and wait_loop boot_com host port =
 						| _ -> ()
 					) m.m_types;
 					if m.m_extra.m_kind <> MSub then Typeload.add_module ctx m p;
-					PMap.iter (Hashtbl.add com2.resources) m.m_extra.m_binded_res;
+					PMap.iter (Hashtbl.replace com2.resources) m.m_extra.m_binded_res;
 					PMap.iter (fun _ m2 -> add_modules m0 m2) m.m_extra.m_deps);
 					List.iter (Typer.call_init_macro ctx) m.m_extra.m_macro_calls
 			end
@@ -1090,7 +1092,7 @@ try
 		),"<file> : generate XML types description");
 		("-main",Arg.String (fun cl ->
 			if com.main_class <> None then raise (Arg.Bad "Multiple -main");
-			let cpath = make_path cl in
+			let cpath = make_type_path cl in
 			com.main_class <- Some cpath;
 			classes := cpath :: !classes
 		),"<class> : select startup class");
@@ -1171,7 +1173,7 @@ try
 			let neko_file = file ^ ".n" in
 			set_platform Neko neko_file;
 			if com.main_class = None then begin
-				let cpath = make_path file in
+				let cpath = make_type_path file in
 				com.main_class <- Some cpath;
 				classes := cpath :: !classes
 			end;
@@ -1380,7 +1382,15 @@ try
 			did_something := true
 		),": print help for all compiler metadatas");
 	] in
-	let args_callback cl = classes := make_path cl :: !classes in
+	let args_callback cl =
+		let path,name = make_path cl in
+		if starts_uppercase name then
+			classes := (path,name) :: !classes
+		else begin
+			force_typing := true;
+			config_macros := (Printf.sprintf "include('%s')" cl) :: !config_macros;
+		end
+	in
 	let all_args_spec = basic_args_spec @ adv_args_spec in
 	let process args =
 		let current = ref 0 in
@@ -1443,6 +1453,8 @@ try
 			add_std "neko";
 			"n"
 		| Js ->
+			if not (PMap.exists (fst (Define.infos Define.JqueryVer)) com.defines) then
+				Common.define_value com Define.JqueryVer "11103";
 			add_std "js";
 			"js"
 		| Php ->

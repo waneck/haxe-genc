@@ -32,21 +32,22 @@ For more information about Haxe, head to the [offical Haxe website](http://haxe.
 The Haxe project has several licenses, covering different parts of the projects.
 
  * The Haxe compiler is released under the GNU General Public License version 2 or any later version.
- * The Haxe libraries are released under a "two-clause" BSD license.
- * The Neko runtime is licensed under the GNU Lesser General Public License version 2.1 or any later version.
+ * The Haxe standard library is released under the MIT license.
+ * The Neko virtual machine is released under the MIT license. Its bundled runtime libraries (ndll) and tools are released under open source licenses as described in https://github.com/HaxeFoundation/neko/blob/master/LICENSE
 
 For the complete Haxe licenses, please see http://haxe.org/foundation/open-source.html or [extra/LICENSE.txt](extra/LICENSE.txt).
 
 ## Installing Haxe
 
-The latest stable release is [Haxe 3.2.0](http://haxe.org/download/version/3.2.0/). Pre-built binaries are available for your platform:
+The latest stable release is [Haxe 3.2.1](http://haxe.org/download/version/3.2.1/). Pre-built binaries are available for your platform:
 
- * **[Windows installer](http://haxe.org/download/file/3.2.0/haxe-3.2.0-win.exe)**
- * **[Windows binaries](http://haxe.org/download/file/3.2.0/haxe-3.2.0-win.zip)**
- * **[OSX installer](http://haxe.org/download/file/3.2.0/haxe-3.2.0-osx-installer.pkg)**
- * **[OSX binaries](http://haxe.org/download/file/3.2.0/haxe-3.2.0-osx.tar.gz)**
- * **[Linux 32-bit binaries](http://haxe.org/download/file/3.2.0/haxe-3.2.0-linux32.tar.gz)**
- * **[Linux 64-bit binaries](http://haxe.org/download/file/3.2.0/haxe-3.2.0-linux64.tar.gz)**
+ * **[Windows installer](http://haxe.org/download/file/3.2.1/haxe-3.2.1-win.exe)**
+ * **[Windows binaries](http://haxe.org/download/file/3.2.1/haxe-3.2.1-win.zip)**
+ * **[OSX installer](http://haxe.org/download/file/3.2.1/haxe-3.2.1-osx-installer.pkg)**
+ * **[OSX binaries](http://haxe.org/download/file/3.2.1/haxe-3.2.1-osx.tar.gz)**
+ * **[Linux Software Packages](http://haxe.org/download/linux)**
+ * **[Linux 32-bit binaries](http://haxe.org/download/file/3.2.1/haxe-3.2.1-linux32.tar.gz)**
+ * **[Linux 64-bit binaries](http://haxe.org/download/file/3.2.1/haxe-3.2.1-linux64.tar.gz)**
 
 Automated development builds are available from [build.haxe.org](http://build.haxe.org).
 
@@ -72,8 +73,12 @@ For information on on using Haxe, consult the [Haxe documentation](http://haxe.o
 
 You can get help and talk with fellow Haxers from around the world via:
 
+ * [Haxe on Stack Overflow](http://stackoverflow.com/questions/tagged/haxe)
  * the [official Haxe Google Group](https://groups.google.com/forum/#!forum/haxelang)
+ * [#Haxe on Twitter](https://twitter.com/hashtag/haxe?src=hash)
  * the [Haxe IRC chatroom](http://unic0rn.github.io/tiramisu/haxe), #haxe on chat.freenode.net
+
+:+1: Get notified of the latest Haxe news, follow us on [Twitter](https://twitter.com/haxelang), [Facebook](https://www.facebook.com/haxe.org) or [Google+](https://plus.google.com/+HaxeOrg)
 
 ## Version compatibility
 
