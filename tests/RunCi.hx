@@ -27,6 +27,7 @@ private typedef TravisConfig = {
 	var Cs = "cs";
 	var Python = "python";
 	var ThirdParty = "third-party";
+	var Llvm = "llvm";
 }
 
 enum Ci {
@@ -526,6 +527,7 @@ class RunCi {
 	static var repoDir(default, never) = FileSystem.fullPath("..") + "/";
 	static var unitDir(default, never) = cwd + "unit/";
 	static var sysDir(default, never) = cwd + "sys/";
+	static var llvmDir(default, never) = cwd + "llvm/";
 	static var optDir(default, never) = cwd + "optimization/";
 	static var miscDir(default, never) = cwd + "misc/";
 	static var gitInfo(get, null):{repo:String, branch:String, commit:String, date:String};
@@ -748,8 +750,8 @@ class RunCi {
 
 					var env = Sys.environment();
 					if (
-						env.exists("SAUCE") && 
-						env.exists("SAUCE_USERNAME") && 
+						env.exists("SAUCE") &&
+						env.exists("SAUCE_USERNAME") &&
 						env.exists("SAUCE_ACCESS_KEY")
 					) {
 						// sauce-connect should have been started
@@ -890,6 +892,19 @@ class RunCi {
 					testMUnit();
 					//testOpenflSamples();
 					//testFlixelDemos();
+				case Llvm:
+					changeDirectory(llvmDir);
+					runCommand("haxe", ["build.hxml"]);
+					changeDirectory(llvmDir + "/bin");
+					switch (systemName) {
+						case "Windows":
+							runCommand("make", ["MSVC=1"]);
+							runCommand("Main.exe", []);
+						case _:
+							runCommand("make", []);
+							runCommand("./Main", []);
+					}
+
 				case t:
 					throw "unknown target: " + t;
 			}
