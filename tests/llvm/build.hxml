@@ -2,4 +2,6 @@
 -main Main
 -D dump
 -dce std
+-D analyzer
+-D analyzer-no-const-propagation
 -llvm bin

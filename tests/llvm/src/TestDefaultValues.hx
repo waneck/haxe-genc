@@ -20,8 +20,8 @@ class TestDefaultValues {
 	}
 
 	static function objEqual(obj1:TestObject, obj2:TestObject) {
-		//c.CStdio.prFloatf("%i %i %i %i %i\n", [obj1.a, obj1.b, obj1.c, obj1.d, obj1.e]);
-		//c.CStdio.prFloatf("%i %i %i %i %i\n", [obj2.a, obj2.b, obj2.c, obj2.d, obj2.e]);
+		//c.CStdio.printf("%i %i %i %i %i\n", [obj1.a, obj1.b, obj1.c, obj1.d, obj1.e]);
+		//c.CStdio.printf("%i %i %i %i %i\n", [obj2.a, obj2.b, obj2.c, obj2.d, obj2.e]);
 		return obj1.a == obj2.a && obj1.b == obj2.b && obj1.c == obj2.c && obj1.d == obj2.d && obj1.e == obj2.e;
 	}
 
