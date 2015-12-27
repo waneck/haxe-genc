@@ -244,7 +244,7 @@ let check_local_vars_init e =
 			let init = (try PMap.find v.v_id !vars with Not_found -> true) in
 			if not init && not (IntMap.mem v.v_id !outside_vars) then begin
 				if v.v_name = "this" then error "Missing this = value" e.epos
-				else () (*error ("Local variable " ^ v.v_name ^ " used without being initialized") e.epos*)
+				else error ("Local variable " ^ v.v_name ^ " used without being initialized") e.epos
 			end
 		| TVar (v,eo) ->
 			begin
@@ -791,24 +791,11 @@ let check_unification ctx e t =
 	begin match e.eexpr,t with
 		| TLocal v,TType({t_path = ["cs"],("Ref" | "Out")},_) ->
 			(* TODO: this smells of hack, but we have to deal with it somehow *)
-			v.v_capture <- true;
-			e
-		| TObjectDecl fl,t ->
-			begin match follow t with
-				| (TAnon an as ta) ->
-					let fl = PMap.foldi (fun n cf fl->
-						if not (List.exists (fun (n2,_) -> n = n2) fl) then
-							(n,(mk (TConst TNull) cf.cf_type cf.cf_pos)) :: fl
-						else
-							fl
-					) an.a_fields fl in
-					{ e with eexpr = TObjectDecl fl; etype = ta}
-				| _ ->
-					e
-			end
+			v.v_capture <- true
 		| _ ->
-			e
-	end
+			()
+	end;
+	e
 
 (* PASS 1 end *)
 
@@ -1231,11 +1218,10 @@ let run com tctx main =
 			check_local_vars_init;
 			Optimizer.inline_constructors tctx;
 			Optimizer.reduce_expression tctx;
-			blockify_ast;
 			captured_vars com;
 		] in
 		List.iter (run_expression_filters tctx filters) new_types;
-		Analyzer.Run.run_on_types tctx new_types;
+		Analyzer.Run.run_on_types tctx true new_types;
 		List.iter (iter_expressions [verify_ast tctx]) new_types;
 		let filters = [
 			Optimizer.sanitize com;
@@ -1251,17 +1237,13 @@ let run com tctx main =
 			blockify_ast;
 			check_local_vars_init;
 			Optimizer.inline_constructors tctx;
-			( if (Common.defined com Define.NoSimplify) || (Common.defined com Define.Cppia) ||
-						( match com.platform with Cpp | C -> defined com Define.Llvm | _ -> true ) then
-					fun e -> e
-				else
-					fun e ->
-						let save = save_locals tctx in
-						let timer = timer "analyzer-simplify-apply" in
-						let e = try snd (Analyzer.Simplifier.apply com e) with Exit -> e in
-						timer();
-						save();
-					e );
+		] in
+		List.iter (run_expression_filters tctx filters) new_types;
+		begin match com.platform with
+			| Cpp when not (Common.defined com Define.Cppia) -> Analyzer.Run.run_on_types tctx false new_types;
+			| _ -> ()
+		end;
+		let filters = [
 			if com.foptimize then (fun e -> Optimizer.reduce_expression tctx e) else Optimizer.sanitize com;
 			captured_vars com;
 			promote_complex_rhs com;

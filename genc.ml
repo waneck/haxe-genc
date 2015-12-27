@@ -932,7 +932,7 @@ module DefaultValues = struct
 			in
 			fstack := List.tl !fstack;
 			e
-		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) when not !Analyzer.assigns_to_trace ->
+		| TCall({eexpr = TField(_,FStatic({cl_path=["haxe"],"Log"},{cf_name="trace"}))}, e1 :: {eexpr = TObjectDecl fl} :: _) ->
 			let s = match follow e1.etype with
 				| TAbstract({a_path=[],("Int"|"hx_int8"|"hx_int16"|"hx_int32"|"hx_short"|"hx_long")},_) -> "d"
 				| TAbstract({a_path=[],("hx_uint8"|"hx_uint16"|"hx_uint32"|"hx_ushort"|"hx_ulong")},_) -> "u"

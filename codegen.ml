@@ -200,7 +200,7 @@ let extend_remoting ctx c t p async prot =
 				f_type = if async then None else ftype;
 				f_expr = Some (EBlock [expr],p);
 			} in
-			{ cff_name = f.cff_name; cff_pos = p; cff_doc = None; cff_meta = []; cff_access = [APublic]; cff_kind = FFun fd } :: acc
+			{ cff_name = f.cff_name; cff_pos = f.cff_pos; cff_doc = None; cff_meta = []; cff_access = [APublic]; cff_kind = FFun fd } :: acc
 		| _ -> acc
 	in
 	let decls = List.map (fun d ->
@@ -1049,6 +1049,7 @@ module PatternMatchConversion = struct
 		let v_known = ref IntMap.empty in
 		let copy v =
 			let v' = alloc_var v.v_name v.v_type in
+			v'.v_meta <- v.v_meta;
 			v_known := IntMap.add v.v_id v' !v_known;
 			v'
 		in
@@ -1511,22 +1512,26 @@ let make_valid_filename s =
 	let r = Str.regexp "[^A-Za-z0-9_\\-\\.,]" in
 	Str.global_substitute r (fun s -> "_") s
 
-(*
-	Make a dump of the full typed AST of all types
-*)
-let rec create_dumpfile acc = function
+let rec create_file ext acc = function
 	| [] -> assert false
 	| d :: [] ->
 		let d = make_valid_filename d in
-		let ch = open_out (String.concat "/" (List.rev (d :: acc)) ^ ".dump") in
-		let buf = Buffer.create 0 in
-		buf, (fun () ->
-			output_string ch (Buffer.contents buf);
-			close_out ch)
+		let ch = open_out (String.concat "/" (List.rev (d :: acc)) ^ ext) in
+		ch
 	| d :: l ->
 		let dir = String.concat "/" (List.rev (d :: acc)) in
 		if not (Sys.file_exists dir) then Unix.mkdir dir 0o755;
-		create_dumpfile (d :: acc) l
+		create_file ext (d :: acc) l
+
+(*
+	Make a dump of the full typed AST of all types
+*)
+let create_dumpfile acc l =
+	let ch = create_file ".dump" acc l in
+	let buf = Buffer.create 0 in
+	buf, (fun () ->
+		output_string ch (Buffer.contents buf);
+		close_out ch)
 
 let dump_types com =
 	let s_type = s_type (Type.print_context()) in

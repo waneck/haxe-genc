@@ -220,6 +220,37 @@ let api_inline ctx c field params p = match c.cl_path, field, params with
 	| _ ->
 		api_inline2 ctx.com c field params p
 
+let is_affected_type t = match follow t with
+	| TAbstract({a_path = [],("Int" | "Float" | "Bool")},_) -> true
+	| TDynamic _ -> true (* sadly *)
+	| _ -> false
+
+let create_affection_checker () =
+	let modified_locals = Hashtbl.create 0 in
+	let rec might_be_affected e =
+		let rec loop e = match e.eexpr with
+			| TConst _ | TFunction _ | TTypeExpr _ -> ()
+			| TLocal v when Hashtbl.mem modified_locals v.v_id -> raise Exit
+			| TField _ when is_affected_type e.etype -> raise Exit
+			| _ -> Type.iter loop e
+		in
+		try
+			loop e;
+			false
+		with Exit ->
+			true
+	in
+	let rec collect_modified_locals e = match e.eexpr with
+		| TUnop((Increment | Decrement),_,{eexpr = TLocal v}) when is_affected_type v.v_type ->
+			Hashtbl.add modified_locals v.v_id true
+		| TBinop((OpAssign | OpAssignOp _),{eexpr = TLocal v},e2) when is_affected_type v.v_type ->
+			collect_modified_locals e2;
+			Hashtbl.add modified_locals v.v_id true
+		| _ ->
+			Type.iter collect_modified_locals e
+	in
+	might_be_affected,collect_modified_locals
+
 (* ---------------------------------------------------------------------- *)
 (* INLINING *)
 
@@ -321,7 +352,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 				if we cast from Dynamic, create a local var as well to do the cast
 				once and allow DCE to perform properly.
 			*)
-			if v.v_type != t_dynamic && follow e.etype == t_dynamic then (local v).i_write <- true;
+			let e = if v.v_type != t_dynamic && follow e.etype == t_dynamic then mk (TCast(e,None)) v.v_type e.epos else e in
 			(match e.eexpr, opt with
 			| TConst TNull , Some c -> mk (TConst c) v.v_type e.epos
 			(*
@@ -341,33 +372,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 	*)
 	let ethis = (match ethis.eexpr with TConst TSuper -> { ethis with eexpr = TConst TThis } | _ -> ethis) in
 	let vthis = alloc_var "_this" ethis.etype in
-	let is_affected_type t = match follow t with
-		| TAbstract({a_path = [],("Int" | "Float" | "Bool")},_) -> true
-		| _ -> false
-	in
-	let modified_locals = Hashtbl.create 0 in
-	let rec might_be_affected e =
-		let rec loop e = match e.eexpr with
-			| TConst _ | TFunction _ | TTypeExpr _ -> ()
-			| TLocal v when Hashtbl.mem modified_locals v.v_id -> raise Exit
-			| TField _ when is_affected_type e.etype -> raise Exit
-			| _ -> Type.iter loop e
-		in
-		try
-			loop e;
-			false
-		with Exit ->
-			true
-	in
-	let rec collect_modified_locals e = match e.eexpr with
-		| TUnop((Increment | Decrement),_,{eexpr = TLocal v}) when is_affected_type v.v_type ->
-			Hashtbl.add modified_locals v.v_id true
-		| TBinop((OpAssign | OpAssignOp _),{eexpr = TLocal v},e2) when is_affected_type v.v_type ->
-			collect_modified_locals e2;
-			Hashtbl.add modified_locals v.v_id true
-		| _ ->
-			Type.iter collect_modified_locals e
-	in
+	let might_be_affected,collect_modified_locals = create_affection_checker() in
 	let had_side_effect = ref false in
 	let inlined_vars = List.map2 (fun e (v,_) ->
 		let l = local v in
@@ -378,7 +383,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		end;
 		l, e
 	) (ethis :: loop params f.tf_args true) ((vthis,None) :: f.tf_args) in
-	if !had_side_effect then List.iter (fun (l,e) ->
+	if !had_side_effect || (Common.defined ctx.com Define.Analyzer) then List.iter (fun (l,e) ->
 		if might_be_affected e then l.i_force_temp <- true;
 	) inlined_vars;
 	let inlined_vars = List.rev inlined_vars in
@@ -531,7 +536,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 				| Some e -> map term e
 				| None -> error "Could not inline super constructor call" po
 				end
-			| _ -> error "Cannot inline function containint super" po
+			| _ -> error "Cannot inline function containing super" po
 			end
 		| TConst TSuper ->
 			error "Cannot inline function containing super" po
@@ -585,8 +590,12 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		if flag then begin
 			subst := PMap.add i.i_subst.v_id e !subst;
 			acc
-		end else
+		end else begin
+			(* mark the replacement local for the analyzer *)
+			if i.i_read <= 1 && not i.i_write then
+				i.i_subst.v_meta <- (Meta.CompilerGenerated,[],p) :: i.i_subst.v_meta;
 			(i.i_subst,Some e) :: acc
+		end
 	) [] inlined_vars in
 	let subst = !subst in
 	let rec inline_params e =
@@ -1157,6 +1166,8 @@ let optimize_binop e op e1 e2 =
 		| OpLt -> ebool (<)
 		| OpLte -> ebool (<=)
 		| _ -> e)
+	| TConst (TString ""),TConst (TString s) | TConst (TString s),TConst (TString "") when op = OpAdd ->
+		{e with eexpr = TConst (TString s)}
 	| TConst (TBool a), TConst (TBool b) ->
 		let ebool f =
 			{ e with eexpr = TConst (TBool (f a b)) }
@@ -1200,6 +1211,21 @@ let optimize_binop e op e1 e2 =
 let optimize_unop e op flag esub =
 	match op, esub.eexpr with
 		| Not, (TConst (TBool f) | TParenthesis({eexpr = TConst (TBool f)})) -> { e with eexpr = TConst (TBool (not f)) }
+		| Not, (TBinop(op,e1,e2) | TParenthesis({eexpr = TBinop(op,e1,e2)})) ->
+			begin try
+				let op = match op with
+					| OpGt -> OpLte
+					| OpGte -> OpLt
+					| OpLt -> OpGte
+					| OpLte -> OpGt
+					| OpEq -> OpNotEq
+					| OpNotEq -> OpEq
+					| _ -> raise Exit
+				in
+				{e with eexpr = TBinop(op,e1,e2)}
+			with Exit ->
+				e
+			end
 		| Neg, TConst (TInt i) -> { e with eexpr = TConst (TInt (Int32.neg i)) }
 		| NegBits, TConst (TInt i) -> { e with eexpr = TConst (TInt (Int32.lognot i)) }
 		| Neg, TConst (TFloat f) ->

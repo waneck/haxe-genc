@@ -197,4 +197,10 @@ abstract Int32(Int) from Int to Int {
 		return (x);
 		#end
 	}
+
+	#if js
+	static function __init__() {
+		untyped __feature__("haxe._Int32.Int32_Impl_.mul", if (Math.imul != null) Int32.mul = Math.imul);
+	}
+	#end
 }

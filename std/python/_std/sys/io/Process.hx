@@ -52,7 +52,19 @@ class Process {
 		return p.wait();
 	}
 	public function close() : Void {
-		p.terminate();
+		var ver = python.lib.Sys.version_info;
+		if (ver[0] > 3 || (ver[0] == 3 && ver[1] >= 3)) // >= 3.3
+			try {
+				p.terminate();
+			} catch (e:python.Exceptions.ProcessLookupError) {
+				// it has already terminated 
+			}
+		else
+			try {
+				p.terminate();
+			} catch (e:python.Exceptions.OSError) {
+				// it has already terminated 
+			}
 	}
 	public function kill() : Void {
 		p.kill();
