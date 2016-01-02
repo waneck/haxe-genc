@@ -1036,6 +1036,8 @@ let rec acc_get ctx g p =
 				mk (TField (e,cmode)) t p
 			else
 				error "Recursive inline is not supported" p
+		| Some _ when ctx.com.display <> DMNone ->
+			mk (TField (e,cmode)) t p
 		| Some { eexpr = TFunction _ } ->
 			let chk_class c = (c.cl_extern || Meta.has Meta.Extern f.cf_meta) && not (Meta.has Meta.Runtime f.cf_meta) in
 			let wrap_extern c =
@@ -2400,9 +2402,9 @@ and type_binop2 ctx op (e1 : texpr) (e2 : Ast.expr) is_assign_op wt p =
 	with Not_found -> try
 		begin match follow e2.etype with
 			| TAbstract({a_impl = Some c} as a,tl) -> find_overload a c tl false
-								| _ -> raise Not_found
-							end
-						with Not_found ->
+			| _ -> raise Not_found
+		end
+	with Not_found ->
 		make e1 e2
 
 and type_unop ctx op flag e p =
@@ -2816,13 +2818,16 @@ and format_string ctx s p =
 	let e = ref None in
 	let pmin = ref p.pmin in
 	let min = ref (p.pmin + 1) in
-	let add enext len =
-		let p = { p with pmin = !min; pmax = !min + len } in
+	let add_expr (enext,p) len =
 		min := !min + len;
 		match !e with
 		| None -> e := Some (enext,p)
 		| Some prev ->
 			e := Some (EBinop (OpAdd,prev,(enext,p)),punion (pos prev) p)
+	in
+	let add enext len =
+		let p = { p with pmin = !min; pmax = !min + len } in
+		add_expr (enext,p) len
 	in
 	let add_sub start pos =
 		let len = pos - start in
@@ -2891,7 +2896,7 @@ and format_string ctx s p =
 		if warn_escape then warn (pos + 1) slen;
 		min := !min + 2;
 		if slen > 0 then
-			add (fst (parse_expr_string ctx scode { p with pmin = !pmin + pos + 2; pmax = !pmin + send + 1 } true)) slen;
+			add_expr (parse_expr_string ctx scode { p with pmin = !pmin + pos + 2; pmax = !pmin + send + 1 } true) slen;
 		min := !min + 1;
 		parse (send + 1) (send + 1)
 	in
@@ -2977,7 +2982,7 @@ and type_expr ctx (e,p) (with_type:with_type) =
 		let opt = mk (TConst (TString opt)) ctx.t.tstring p in
 		let t = Typeload.load_core_type ctx "EReg" in
 		mk (TNew ((match t with TInst (c,[]) -> c | _ -> assert false),[],[str;opt])) t p
-	| EConst (String s) when Lexer.is_fmt_string p ->
+	| EConst (String s) when s <> "" && Lexer.is_fmt_string p ->
 		type_expr ctx (format_string ctx s p) with_type
 	| EConst c ->
 		Codegen.type_constant ctx.com c p

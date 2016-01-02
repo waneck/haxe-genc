@@ -44,14 +44,16 @@ class TestJs {
 		for (v in a) { }
 	}
 
-	@:js("var a = 1;var tmp;var v2 = a;tmp = a + v2;tmp;")
+	@:js('var a = 1;var v2 = a;if(a + v2 > 0) TestJs["use"](a);')
 	@:analyzer(no_const_propagation)
 	@:analyzer(no_copy_propagation)
 	@:analyzer(no_check_has_effect)
 	@:analyzer(no_local_dce)
 	static function testInlineWithArgumentUsedMoreThanOnce() {
 		var a = 1;
-		if (_inlineWithArgumentUsedMoreThanOnce(a) > 0) { }
+		if (_inlineWithArgumentUsedMoreThanOnce(a) > 0) {
+			use(a);
+		}
 	}
 
 	inline static function _inlineWithArgumentUsedMoreThanOnce(v) {
@@ -228,25 +230,19 @@ class TestJs {
 
 	@:js('
 		var map = new haxe_ds_StringMap();
-		var tmp;
 		if(__map_reserved.some != null) map.setReserved("some",2); else map.h["some"] = 2;
-		tmp = 2;
-		var i = tmp;
-		TestJs["use"](i);
+		TestJs["use"](2);
 	')
 	static function testIssue4731() {
         var map = new Map();
         var i = map["some"] = 2;
 		use(i);
-		// This is not const-propagated because StringMap introduced unbound variables
 	}
 
 	@:js('
 		var x = TestJs.getInt();
-		var tmp;
 		TestJs.getInt();
-		tmp = TestJs.getInt();
-		TestJs.call([x,"foo"],tmp);
+		TestJs.call([x,"foo"],TestJs.getInt());
 	')
 	static function testMightBeAffected1() {
 		var x = getInt();
@@ -259,10 +255,8 @@ class TestJs {
 	@:js('
 		var x = TestJs.getInt();
 		var tmp = [x,"foo"];
-		var tmp1;
 		x = TestJs.getInt();
-		tmp1 = TestJs.getInt();
-		TestJs.call(tmp,tmp1);
+		TestJs.call(tmp,TestJs.getInt());
 	')
 	static function testMightBeAffected2() {
 		var x = getInt();
@@ -275,10 +269,8 @@ class TestJs {
 	@:js('
 		var x = TestJs.getInt();
 		var tmp = x;
-		var tmp1;
 		++x;
-		tmp1 = TestJs.getInt();
-		TestJs.call(tmp,tmp1);
+		TestJs.call(tmp,TestJs.getInt());
 	')
 	static function testMightBeAffected3() {
 		var x = getInt();
@@ -518,26 +510,20 @@ class TestJs {
 	}
 
 	@:js('
-		var d1;
-		var d11 = TestJs.call(1,2);
-		d1 = TestJs.call(TestJs.call(3,4),d11);
-		var d2;
+		var d1 = TestJs.call(1,2);
+		var d11 = TestJs.call(TestJs.call(3,4),d1);
 		var d12 = TestJs.call(5,6);
-		d2 = TestJs.call(TestJs.call(7,8),d12);
-		TestJs.call(d2,d1);
+		TestJs.call(TestJs.call(TestJs.call(7,8),d12),d11);
 	')
 	static function testInlineRebuilding7() {
 		inlineCall(inlineCall(call(1, 2), call(3, 4)), inlineCall(call(5, 6), call(7, 8)));
 	}
 
 	@:js('
-		var d1;
-		var d11 = TestJs.call(1,2);
-		d1 = TestJs.call(TestJs.intField,d11);
-		var d2;
+		var d1 = TestJs.call(1,2);
+		var d11 = TestJs.call(TestJs.intField,d1);
 		var d12 = TestJs.intField;
-		d2 = TestJs.call(TestJs.call(5,6),d12);
-		TestJs.call(d2,d1);
+		TestJs.call(TestJs.call(TestJs.call(5,6),d12),d11);
 	')
 	static function testInlineRebuilding8() {
 		inlineCall(inlineCall(call(1, 2), intField), inlineCall(intField, call(5, 6)));
@@ -549,6 +535,17 @@ class TestJs {
 	')
 	static function testInlineRebuilding9() {
 		inlineCall(inlineCall(call(1, 2), stringField), inlineCall(stringField, call(5, 6)));
+	}
+
+	@:js('
+		var i = TestJs.getInt();
+		var a = TestJs.getArray();
+		a[i++] = i++;
+	')
+	static function testAssignmentSideEffect() {
+		var i = getInt();
+		var a = getArray();
+		a[i++] = i++;
 	}
 
 	static inline function inlineCall(d1:Dynamic, d2:Dynamic) {

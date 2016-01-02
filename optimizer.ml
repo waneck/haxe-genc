@@ -220,8 +220,10 @@ let api_inline ctx c field params p = match c.cl_path, field, params with
 	| _ ->
 		api_inline2 ctx.com c field params p
 
-let is_affected_type t = match follow t with
+let rec is_affected_type t = match follow t with
 	| TAbstract({a_path = [],("Int" | "Float" | "Bool")},_) -> true
+	| TAbstract({a_path = ["haxe"],("Int64" | "Int32")},_) -> true
+	| TAbstract(a,tl) -> is_affected_type (Abstract.get_underlying_type a tl)
 	| TDynamic _ -> true (* sadly *)
 	| _ -> false
 
@@ -383,7 +385,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 		end;
 		l, e
 	) (ethis :: loop params f.tf_args true) ((vthis,None) :: f.tf_args) in
-	if !had_side_effect || (Common.defined ctx.com Define.Analyzer) then List.iter (fun (l,e) ->
+	List.iter (fun (l,e) ->
 		if might_be_affected e then l.i_force_temp <- true;
 	) inlined_vars;
 	let inlined_vars = List.rev inlined_vars in
@@ -611,7 +613,7 @@ let rec type_inline ctx cf f ethis params tret config p ?(self_calling_closure=f
 
 		This could be fixed with better post process code cleanup (planed)
 	*)
-	if !cancel_inlining || (not (Common.defined ctx.com Define.Analyzer) && Common.platform ctx.com Js && not !force && (init <> None || !has_vars)) then
+	if !cancel_inlining then
 		None
 	else
 		let wrap e =

@@ -38,12 +38,24 @@ let rec is_const_expression e = match e.eexpr with
 		false
 
 let map_values ?(allow_control_flow=true) f e =
+	let branching = ref false in
+	let efinal = ref None in
+	let f e =
+		if !branching then
+			f e
+		else begin
+			efinal := Some e;
+			mk (TConst TNull) e.etype e.epos
+		end
+	in
 	let rec loop complex e = match e.eexpr with
 		| TIf(e1,e2,Some e3) ->
+			branching := true;
 			let e2 = loop true e2 in
 			let e3 = loop true e3 in
 			{e with eexpr = TIf(e1,e2,Some e3)}
 		| TSwitch(e1,cases,edef) ->
+			branching := true;
 			let cases = List.map (fun (el,e) -> el,loop true e) cases in
 			let edef = Option.map (loop true) edef in
 			{e with eexpr = TSwitch(e1,cases,edef)}
@@ -53,11 +65,13 @@ let map_values ?(allow_control_flow=true) f e =
 			begin match List.rev el with
 			| e1 :: el ->
 				let e1 = loop true e1 in
-				{e with eexpr = TBlock (List.rev (e1 :: el))}
+				let e = {e with eexpr = TBlock (List.rev (e1 :: el))} in
+				{e with eexpr = TMeta((Meta.MergeBlock,[],e.epos),e)}
 			| [] ->
 				f e
 			end
 		| TTry(e1,catches) ->
+			branching := true;
 			let e1 = loop true e1 in
 			let catches = List.map (fun (v,e) -> v,loop true e) catches in
 			{e with eexpr = TTry(e1,catches)}
@@ -72,7 +86,8 @@ let map_values ?(allow_control_flow=true) f e =
 			if not complex then raise Exit;
 			f e
 	in
-	loop false e
+	let e = loop false e in
+	e,!efinal
 
 let can_throw e =
 	let rec loop e = match e.eexpr with
@@ -119,7 +134,10 @@ let rec expr_eq e1 e2 = match e1.eexpr,e2.eexpr with
 	| _ -> false
 
 let is_unbound v =
-	v.v_name <> "`trace" && Meta.has Meta.Unbound v.v_meta
+	Meta.has Meta.Unbound v.v_meta
+
+let is_really_unbound v =
+	v.v_name <> "`trace" && is_unbound v
 
 let is_ref_type = function
 	| TType({t_path = ["cs"],("Ref" | "Out")},_) -> true
@@ -245,6 +263,7 @@ end
 	- OpAssignOp on a variable is rewritten to OpAssign
 	- Prefix increment/decrement operations are rewritten to OpAssign
 	- Postfix increment/decrement operations are rewritten to a TBlock with OpAssign and OpAdd/OpSub
+	- `do {} while(true)` is rewritten to `while(true) {}`
 	- TWhile expressions are rewritten to `while (true)` with appropriate conditional TBreak
 	- TFor is rewritten to TWhile
 *)
@@ -274,6 +293,8 @@ module TexprFilter = struct
 				]) e.etype e.epos
 			in
 			loop e
+		| TWhile(e1,e2,DoWhile) when is_true_expr e1 ->
+			loop {e with eexpr = TWhile(e1,e2,NormalWhile)}
 		| TWhile(e1,e2,flag) when not (is_true_expr e1) ->
 			let p = e.epos in
 			let e_break = mk TBreak t_dynamic p in
@@ -300,7 +321,7 @@ module TexprFilter = struct
 			let ehasnext = mk (TCall(ehasnext,[])) com.basic.tbool ehasnext.epos in
 			let enext = mk (TField(ev',quick_field e1.etype "next")) (tfun [] v.v_type) e1.epos in
 			let enext = mk (TCall(enext,[])) v.v_type e1.epos in
-			let eassign = mk (TVar(v,Some enext)) v.v_type e.epos in
+			let eassign = mk (TVar(v,Some enext)) com.basic.tvoid e.epos in
 			let ebody = Type.concat eassign e2 in
 			let e = mk (TBlock [
 				mk (TVar (v',Some e1)) com.basic.tvoid e1.epos;
@@ -313,33 +334,33 @@ module TexprFilter = struct
 		loop e
 
 	let unapply com config e =
-		let rec block_element el = match el with
+		let rec block_element acc el = match el with
 			| {eexpr = TBinop((OpAssign | OpAssignOp _),_,_) | TUnop((Increment | Decrement),_,_)} as e1 :: el ->
-				e1 :: block_element el
+				block_element (e1 :: acc) el
 			| {eexpr = TLocal _} as e1 :: el when not config.Config.local_dce ->
-				e1 :: block_element el
+				block_element (e1 :: acc) el
 			(* no-side-effect *)
 			| {eexpr = TEnumParameter _ | TFunction _ | TConst _ | TTypeExpr _ | TLocal _} :: el ->
-				block_element el
+				block_element acc el
 			(* no-side-effect composites *)
 			| {eexpr = TParenthesis e1 | TMeta(_,e1) | TCast(e1,None) | TField(e1,_) | TUnop(_,_,e1)} :: el ->
-				block_element (e1 :: el)
+				block_element acc (e1 :: el)
 			| {eexpr = TArray(e1,e2) | TBinop(_,e1,e2)} :: el ->
-				block_element (e1 :: e2 :: el)
+				block_element acc (e1 :: e2 :: el)
 			| {eexpr = TArrayDecl el1 | TCall({eexpr = TField(_,FEnum _)},el1)} :: el2 -> (* TODO: check e1 of FEnum *)
-				block_element (el1 @ el2)
+				block_element acc (el1 @ el2)
 			| {eexpr = TObjectDecl fl} :: el ->
-				block_element ((List.map snd fl) @ el)
+				block_element acc ((List.map snd fl) @ el)
 			| {eexpr = TIf(e1,{eexpr = TBlock []},(Some {eexpr = TBlock []} | None))} :: el ->
-				block_element (e1 :: el)
+				block_element acc (e1 :: el)
 			| {eexpr = TBlock [e1]} :: el ->
-				block_element (e1 :: el)
+				block_element acc (e1 :: el)
 			| {eexpr = TBlock []} :: el ->
-				block_element el
+				block_element acc el
 			| e1 :: el ->
-				e1 :: block_element el
+				block_element (e1 :: acc) el
 			| [] ->
-				[]
+				acc
 		in
 		let changed = ref false in
 		let var_uses = ref IntMap.empty in
@@ -358,20 +379,20 @@ module TexprFilter = struct
 				Type.iter loop e
 		in
 		loop e;
-		let rec fuse el = match el with
+		let rec fuse acc el = match el with
 			| ({eexpr = TVar(v1,None)} as e1) :: {eexpr = TBinop(OpAssign,{eexpr = TLocal v2},e2)} :: el when v1 == v2 ->
 				changed := true;
 				let e1 = {e1 with eexpr = TVar(v1,Some e2)} in
 				change_num_uses v1 (-1);
-				fuse (e1 :: el)
-			| ({eexpr = TVar(v1,None)} as e1) :: ({eexpr = TIf(eif,_,Some _)} as e2) :: el when can_be_used_as_value com e2 && (match com.platform with C | Cpp | Php -> false | _ -> true) ->
+				fuse (e1 :: acc) el
+			| ({eexpr = TVar(v1,None)} as e1) :: ({eexpr = TIf(eif,_,Some _)} as e2) :: el when can_be_used_as_value com e2 && (match com.platform with Php | C -> false | Cpp when not (Common.defined com Define.Cppia) -> false | _ -> true) ->
 				begin try
 					let i = ref 0 in
 					let check_assign e = match e.eexpr with
 						| TBinop(OpAssign,{eexpr = TLocal v2},e2) when v1 == v2 -> incr i; e2
 						| _ -> raise Exit
 					in
-					let e = map_values ~allow_control_flow:false check_assign e2 in
+					let e,_ = map_values ~allow_control_flow:false check_assign e2 in
 					let e = match follow e.etype with
 						| TAbstract({a_path=[],"Void"},_) -> {e with etype = v1.v_type}
 						| _ -> e
@@ -379,9 +400,9 @@ module TexprFilter = struct
 					let e1 = {e1 with eexpr = TVar(v1,Some e)} in
 					changed := true;
 					change_num_uses v1 (- !i);
-					fuse (e1 :: el)
+					fuse (e1 :: acc) el
 				with Exit ->
-					e1 :: fuse (e2 :: el)
+					fuse (e1 :: acc) (e2 :: el)
 				end
 			| ({eexpr = TVar(v1,Some e1)} as ev) :: e2 :: el when Meta.has Meta.CompilerGenerated v1.v_meta && get_num_uses v1 <= 1 && can_be_used_as_value com e1 ->
 				let found = ref false in
@@ -420,7 +441,8 @@ module TexprFilter = struct
 						check e2 e1;
 					with Exit ->
 						begin match com.platform with
-							| Cpp | Php -> raise Exit (* They don't define evaluation order, so let's exit *)
+							| Cpp when not (Common.defined com Define.Cppia) -> raise Exit
+							| Php -> raise Exit (* They don't define evaluation order, so let's exit *)
 							| _ -> affected := true;
 						end
 				in
@@ -431,10 +453,18 @@ module TexprFilter = struct
 						| TLocal v2 when v1 == v2 && not !affected ->
 							found := true;
 							e1
+						| TBinop((OpAssign | OpAssignOp _ as op),({eexpr = TArray(e1,e2)} as ea),e3) ->
+							let e1 = replace e1 in
+							let e2 = replace e2 in
+							let ea = {ea with eexpr = TArray(e1,e2)} in
+							let e3 = replace e3 in
+							{e with eexpr = TBinop(op,ea,e3)}
 						| TBinop((OpAssign | OpAssignOp _ as op),e1,e2) ->
 							let e2 = replace e2 in
 							let e1 = replace e1 in
 							{e with eexpr = TBinop(op,e1,e2)}
+						| TCall({eexpr = TLocal v},_) when is_really_unbound v ->
+							e
 						| _ ->
 							Type.map_expr replace e
 					in
@@ -446,15 +476,16 @@ module TexprFilter = struct
 					if not !found then raise Exit;
 					changed := true;
 					change_num_uses v1 (-1);
-					fuse (e :: el)
+					fuse (e :: acc) el
 				with Exit ->
-					ev :: fuse (e2 :: el)
+					fuse (ev :: acc) (e2 :: el)
 				end
 			| {eexpr = TUnop((Increment | Decrement as op,Prefix,({eexpr = TLocal v} as ev)))} as e1 :: e2 :: el ->
 				begin try
 					let e2,f = match e2.eexpr with
 						| TReturn (Some e2) -> e2,(fun e -> {e2 with eexpr = TReturn (Some e)})
 						| TBinop(OpAssign,e21,e22) -> e22,(fun e -> {e2 with eexpr = TBinop(OpAssign,e21,e)})
+						| TVar(v,Some e2) -> e2,(fun e -> {e2 with eexpr = TVar(v,Some e)})
 						| _ -> raise Exit
 					in
 					let ops_match op1 op2 = match op1,op2 with
@@ -468,30 +499,34 @@ module TexprFilter = struct
 						| TBinop(op2,{eexpr = TLocal v2},{eexpr = TConst (TInt i32)}) when v == v2 && Int32.to_int i32 = 1 && ops_match op op2 ->
 							changed := true;
 							change_num_uses v2 (-1);
-							(f {e1 with eexpr = TUnop(op,Postfix,ev)}) :: fuse el
+							let e = (f {e1 with eexpr = TUnop(op,Postfix,ev)}) in
+							fuse (e :: acc) el
 						| _ ->
 							raise Exit
 					end
 				with Exit ->
-					e1 :: fuse (e2 :: el)
+					fuse (e1 :: acc) (e2 :: el)
 				end
 			| e1 :: el ->
-				e1 :: fuse el
+				fuse (e1 :: acc) el
 			| [] ->
-				[]
+				acc
 		in
 		let rec loop e = match e.eexpr with
 			| TBlock el ->
 				let el = List.map loop el in
+				(* fuse flips element order, but block_element doesn't care and flips it back *)
+				let el = fuse [] el in
+				let el = block_element [] el in
 				let rec fuse_loop el =
 					changed := false;
-					let el = block_element el in
-					let el = fuse el in
+					let el = fuse [] el in
+					let el = block_element [] el in
 					if !changed then fuse_loop el else el
 				in
 				let el = fuse_loop el in
 				{e with eexpr = TBlock el}
-			| TCall({eexpr = TLocal v},_) when is_unbound v ->
+			| TCall({eexpr = TLocal v},_) when is_really_unbound v ->
 				e
 			| _ ->
 				Type.map_expr loop e
@@ -634,8 +669,8 @@ module BasicBlock = struct
 			bb_type = t;
 			bb_pos = p;
 			bb_closed = false;
-			bb_el = DynArray.make 5;
-			bb_phi = DynArray.make 1;
+			bb_el = DynArray.create();
+			bb_phi = DynArray.create();
 			bb_outgoing = [];
 			bb_incoming = [];
 			bb_dominator = bb;
@@ -658,20 +693,46 @@ module Graph = struct
 
 	type texpr_lookup = BasicBlock.t * bool * int
 	type tfunc_info = BasicBlock.t * Type.t * pos * tfunc
-	type var_write = tvar * BasicBlock.t list
+	type var_write = BasicBlock.t list
+
+	type var_info = {
+		vi_var : tvar;                            (* The variable itself *)
+		vi_extra : tvar_extra;                    (* The original v_extra *)
+		mutable vi_origin : tvar;                 (* The origin variable of this variable *)
+		mutable vi_writes : var_write;            (* A list of blocks that assign to this variable *)
+		mutable vi_value : texpr_lookup option;   (* The value of this variable, if known *)
+		mutable vi_ssa_edges : texpr_lookup list; (* The expressions this variable influences *)
+		mutable vi_reaching_def : tvar option;    (* The current reaching definition variable of this variable *)
+	}
 
 	type t = {
-		mutable g_root : BasicBlock.t;                    (* The unique root block *)
-		mutable g_exit : BasicBlock.t;                    (* The unique exit block *)
-		mutable g_functions : tfunc_info IntMap.t;        (* A map of functions, indexed by their block IDs *)
-		mutable g_nodes : BasicBlock.t IntMap.t;          (* A map of all blocks *)
-		mutable g_cfg_edges : cfg_edge list;              (* A list of all CFG edges *)
-		mutable g_var_writes :  var_write IntMap.t;       (* A map tracking which blocks write which variables *)
-		mutable g_var_values : texpr_lookup IntMap.t;     (* A map containing expression lookup information for each variable *)
-		mutable g_ssa_edges : texpr_lookup list IntMap.t; (* A map containing def-use lookup information for each variable *)
-		mutable g_var_origins : tvar IntMap.t;            (* A map keeping track of original variables for SSA variables *)
-		mutable g_loops : BasicBlock.t IntMap.t;          (* A map containing loop information *)
+		mutable g_root : BasicBlock.t;             (* The unique root block *)
+		mutable g_exit : BasicBlock.t;             (* The unique exit block *)
+		mutable g_unreachable : BasicBlock.t;      (* The unique unreachable block *)
+		mutable g_functions : tfunc_info IntMap.t; (* A map of functions, indexed by their block IDs *)
+		mutable g_nodes : BasicBlock.t IntMap.t;   (* A map of all blocks *)
+		mutable g_cfg_edges : cfg_edge list;       (* A list of all CFG edges *)
+		mutable g_var_infos : var_info DynArray.t; (* A map of variable information *)
+		mutable g_loops : BasicBlock.t IntMap.t;   (* A map containing loop information *)
 	}
+
+	let create_var_info g v =
+		let vi = {
+			vi_var = v;
+			vi_extra = v.v_extra;
+			vi_origin = v;
+			vi_writes = [];
+			vi_value = None;
+			vi_ssa_edges = [];
+			vi_reaching_def = None;
+		} in
+		DynArray.add g.g_var_infos vi;
+		let i = DynArray.length g.g_var_infos - 1 in
+		v.v_extra <- Some([],Some (mk (TConst (TInt (Int32.of_int i))) t_dynamic null_pos))
+
+	let get_var_info g v = match v.v_extra with
+		| Some(_,Some {eexpr = TConst (TInt i32)}) -> DynArray.get g.g_var_infos (Int32.to_int i32)
+		| _ -> assert false
 
 	(* edges *)
 
@@ -690,11 +751,10 @@ module Graph = struct
 		end
 
 	let add_ssa_edge g v bb is_phi i =
-		g.g_ssa_edges <- IntMap.add v.v_id (try (bb,is_phi,i) :: IntMap.find v.v_id g.g_ssa_edges with Not_found -> [bb,is_phi,i]) g.g_ssa_edges
+		let vi = get_var_info g v in
+		vi.vi_ssa_edges <- (bb,is_phi,i) :: vi.vi_ssa_edges
 
 	(* nodes *)
-
-	let rec bb_unreachable = BasicBlock._create 0 BKUnreachable [] t_dynamic null_pos
 
 	let add_function g tf t p bb =
 		g.g_functions <- IntMap.add bb.bb_id (bb,t,p,tf) g.g_functions
@@ -736,49 +796,55 @@ module Graph = struct
 
 	(* variables *)
 
+	let declare_var g v =
+		create_var_info g v
+
 	let add_var_def g bb v =
 		if bb.bb_id > 0 then begin
 			bb.bb_var_writes <- v :: bb.bb_var_writes;
-			let l = try snd (IntMap.find v.v_id g.g_var_writes) with Not_found -> [] in
-			g.g_var_writes <- IntMap.add v.v_id (v,bb :: l) g.g_var_writes;
+			let vi = get_var_info g v in
+			vi.vi_writes <- bb :: vi.vi_writes;
 		end
 
 	let set_var_value g v bb is_phi i =
-		g.g_var_values <- IntMap.add v.v_id (bb,is_phi,i) g.g_var_values
+		(get_var_info g v).vi_value <- Some (bb,is_phi,i)
 
 	let get_var_value g v =
-		let bb,is_phi,i = IntMap.find v.v_id g.g_var_values in
+		let value = (get_var_info g v).vi_value in
+		let bb,is_phi,i = match value with
+			| None -> raise Not_found
+			| Some l -> l
+		in
 		match (get_texpr g bb is_phi i).eexpr with
 		| TVar(_,Some e) | TBinop(OpAssign,_,e) -> e
 		| _ -> assert false
 
 	let add_var_origin g v v_origin =
-		g.g_var_origins <- IntMap.add v.v_id v_origin g.g_var_origins
+		(get_var_info g v).vi_origin <- v_origin
 
 	let get_var_origin g v =
-		try IntMap.find v.v_id g.g_var_origins with Not_found -> v
+		(get_var_info g v).vi_origin
 
 	(* graph *)
 
 	let create t p =
 		let bb_root = BasicBlock._create 1 BKRoot [] t p; in
+		let bb_unreachable = BasicBlock._create 0 BKUnreachable [] t_dynamic null_pos in
 		{
 			g_root = bb_root;
 			g_exit = bb_unreachable;
+			g_unreachable = bb_unreachable;
 			g_functions = IntMap.empty;
 			g_nodes = IntMap.add bb_root.bb_id bb_root IntMap.empty;
 			g_cfg_edges = [];
-			g_var_writes = IntMap.empty;
-			g_var_values = IntMap.empty;
-			g_ssa_edges = IntMap.empty;
-			g_var_origins = IntMap.empty;
+			g_var_infos = DynArray.create();
 			g_loops = IntMap.empty;
 		}
 
 	let calculate_df g =
 		List.iter (fun edge ->
 			let rec loop bb =
-				if bb != bb_unreachable && bb != edge.cfg_to && bb != edge.cfg_to.bb_dominator then begin
+				if bb != g.g_unreachable && bb != edge.cfg_to && bb != edge.cfg_to.bb_dominator then begin
 					bb.bb_df <- edge.cfg_to :: bb.bb_df;
 					if bb.bb_dominator != bb then loop bb.bb_dominator
 				end
@@ -797,7 +863,6 @@ type analyzer_context = {
 	graph : Graph.t;
 	mutable entry : BasicBlock.t;
 	mutable has_unbound : bool;
-	mutable saved_v_extra : (type_params * texpr option) option IntMap.t;
 	mutable loop_counter : int;
 	mutable loop_stack : int list;
 	mutable scopes : int list;
@@ -814,13 +879,6 @@ module TexprTransformer = struct
 	open BasicBlock
 	open Graph
 
-	let save_v_extra ctx v =
-		if not (IntMap.mem v.v_id ctx.saved_v_extra) then
-			ctx.saved_v_extra <- IntMap.add v.v_id v.v_extra ctx.saved_v_extra
-
-	let restore_v_extra ctx v =
-		try v.v_extra <- IntMap.find v.v_id ctx.saved_v_extra with Not_found -> ()
-
 	let rec func ctx bb tf t p =
 		let g = ctx.graph in
 		let create_node kind bb t p =
@@ -830,18 +888,22 @@ module TexprTransformer = struct
 		in
 		let bb_root = create_node BKFunctionBegin bb tf.tf_expr.etype tf.tf_expr.epos in
 		let bb_exit = create_node BKFunctionEnd bb_root tf.tf_expr.etype tf.tf_expr.epos in
+		List.iter (fun (v,_) ->
+			declare_var g v;
+			add_var_def g bb_root v
+		) tf.tf_args;
 		add_function g tf t p bb_root;
 		add_cfg_edge g bb bb_root CFGFunction;
 		let make_block_meta b =
 			let e = mk (TConst (TInt (Int32.of_int b.bb_id))) ctx.com.basic.tint b.bb_pos in
 			wrap_meta ":block" e
 		in
-		let bb_break = ref None in
+		let bb_breaks = ref [] in
 		let bb_continue = ref None in
 		let b_try_stack = ref [] in
-		let begin_loop bb_loop_pre bb_break' bb_continue' =
-			let old = !bb_break,!bb_continue in
-			bb_break := Some bb_break';
+		let begin_loop bb_loop_pre bb_continue' =
+			let old = !bb_breaks,!bb_continue in
+			bb_breaks := [];
 			bb_continue := Some bb_continue';
 			let id = ctx.loop_counter in
 			g.g_loops <- IntMap.add id bb_loop_pre g.g_loops;
@@ -849,9 +911,11 @@ module TexprTransformer = struct
 			bb_continue'.bb_loop_groups <- id :: bb_continue'.bb_loop_groups;
 			ctx.loop_counter <- id + 1;
 			(fun () ->
-				bb_break := fst old;
+				let breaks = !bb_breaks in
+				bb_breaks := fst old;
 				bb_continue := snd old;
 				ctx.loop_stack <- List.tl ctx.loop_stack;
+				breaks;
 			)
 		in
 		let begin_try b =
@@ -870,7 +934,12 @@ module TexprTransformer = struct
 		let add_terminator bb e =
 			add_texpr g bb e;
 			close_node g bb;
-			bb_unreachable
+			g.g_unreachable
+		in
+		let r = Str.regexp "^\\([A-Za-z0-9_]\\)+$" in
+		let check_unbound_call v el = match v.v_name,el with
+			| "__js__",[{eexpr = TConst (TString s)}] when Str.string_match r s 0 -> ()
+			| _ -> ctx.has_unbound <- true
 		in
 		let rec value bb e = match e.eexpr with
 			| TLocal v ->
@@ -883,8 +952,8 @@ module TexprTransformer = struct
 				bind_to_temp bb false e
 			| TFor _ | TWhile _ ->
 				assert false
-			| TCall({eexpr = TLocal v},_) when is_unbound v ->
-				ctx.has_unbound <- true;
+			| TCall({eexpr = TLocal v},el) when is_really_unbound v ->
+				check_unbound_call v el;
 				bb,e
 			| TCall(e1,el) ->
 				call bb e e1 el
@@ -908,6 +977,8 @@ module TexprTransformer = struct
 				let el = List.map snd fl in
 				let bb,el = ordered_value_list bb el in
 				bb,{e with eexpr = TObjectDecl (List.map2 (fun (s,_) e -> s,e) fl el)}
+			| TField({eexpr = TTypeExpr _},fa) ->
+				bb,e
 			| TField(e1,fa) ->
 				let bb,e1 = value bb e1 in
 				bb,{e with eexpr = TField(e1,fa)}
@@ -943,6 +1014,8 @@ module TexprTransformer = struct
 				close_node g bb;
 				add_cfg_edge g bb_func_end bb_next CFGGoto;
 				bb_next,ec
+			| TTypeExpr(TClassDecl {cl_kind = KAbstractImpl a}) when not (Meta.has Meta.RuntimeValue a.a_meta) ->
+				error "Cannot use abstract as value" e.epos
 			| TConst _ | TTypeExpr _ ->
 				bb,e
 			| TContinue | TBreak | TThrow _ | TReturn _ | TVar _ ->
@@ -970,13 +1043,18 @@ module TexprTransformer = struct
 			bb,List.rev values
 		and bind_to_temp bb sequential e =
 			let v = alloc_var "tmp" e.etype in
+			declare_var g v;
 			begin match ctx.com.platform with
-				| Cpp when sequential -> ()
+				| Cpp when sequential && not (Common.defined ctx.com Define.Cppia) -> ()
 				| _ -> v.v_meta <- [Meta.CompilerGenerated,[],e.epos];
 			end;
 			let bb = declare_var_and_assign bb v e in
 			bb,{e with eexpr = TLocal v}
 		and declare_var_and_assign bb v e =
+			begin match follow v.v_type with
+				| TAbstract({a_path=[],"Void"},_) -> error "Cannot use Void as value" e.epos
+				| _ -> ()
+			end;
 			let ev = mk (TLocal v) v.v_type e.epos in
 			let was_assigned = ref false in
 			let assign e =
@@ -987,14 +1065,23 @@ module TexprTransformer = struct
 				mk (TBinop(OpAssign,ev,e)) ev.etype e.epos
 			in
 			begin try
-				let e = map_values assign e in
-				block_element bb e
+				block_element_plus bb (map_values assign e) (fun e -> mk (TVar(v,Some e)) ctx.com.basic.tvoid e.epos)
 			with Exit ->
 				let bb,e = value bb e in
 				add_var_def g bb v;
 				add_texpr g bb (mk (TVar(v,Some e)) ctx.com.basic.tvoid ev.epos);
 				bb
-			end;
+			end
+		and block_element_plus bb (e,efinal) f =
+			let bb = block_element bb e in
+			let bb = match efinal with
+				| None -> bb
+				| Some e -> block_element bb (f e)
+			in
+			bb
+		and block_element_value bb e f =
+			let e,efinal = map_values f e in
+			block_element_plus bb (e,efinal) f
 		and call bb e e1 el =
 			begin match e1.eexpr with
 				| TConst TSuper when ctx.com.platform = Java || ctx.com.platform = Cs ->
@@ -1015,19 +1102,18 @@ module TexprTransformer = struct
 		and block_element bb e = match e.eexpr with
 			(* variables *)
 			| TVar(v,None) ->
-				save_v_extra ctx v;
+				declare_var g v;
 				add_texpr g bb e;
 				bb
 			| TVar(v,Some e1) ->
-				save_v_extra ctx v;
+				declare_var g v;
 				declare_var_and_assign bb v e1
 			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
 				let assign e =
 					mk (TBinop(OpAssign,e1,e)) e.etype e.epos
 				in
 				begin try
-					let e = map_values assign e2 in
-					block_element bb e
+					block_element_value bb e2 assign
 				with Exit ->
 					let bb,e2 = value bb e2 in
 					add_var_def g bb v;
@@ -1035,6 +1121,8 @@ module TexprTransformer = struct
 					bb
 				end
 			(* branching *)
+			| TMeta((Meta.MergeBlock,_,_),{eexpr = TBlock el}) ->
+				block_el bb el
 			| TBlock el ->
 				let scope = increase_scope() in
 				let bb_sub = create_node BKSub bb e.etype e.epos in
@@ -1074,7 +1162,15 @@ module TexprTransformer = struct
 				let bb_then_next = block bb_then e2 in
 				let bb_else_next = block bb_else e3 in
 				scope();
-				let bb_next = create_node BKNormal bb bb.bb_type bb.bb_pos in (* TODO: dominator might be wrong if either branch is unreachable *)
+				let dead_then = bb_then_next == g.g_unreachable in
+				let dead_else = bb_else_next == g.g_unreachable in
+				let dom = match dead_then,dead_else with
+					| false,false -> bb
+					| true,true -> g.g_unreachable
+					| true,false -> bb_else_next
+					| false,true -> bb_then_next
+				in
+				let bb_next = create_node BKNormal dom bb.bb_type bb.bb_pos in
 				set_syntax_edge g bb (SEIfThenElse(bb_then,bb_else,bb_next,e.etype));
 				add_cfg_edge g bb_then_next bb_next CFGGoto;
 				add_cfg_edge g bb_else_next bb_next CFGGoto;
@@ -1085,14 +1181,14 @@ module TexprTransformer = struct
 				let is_exhaustive = edef <> None || Optimizer.is_exhaustive e1 in
 				let bb,e1 = bind_to_temp bb false e1 in
 				add_texpr g bb (wrap_meta ":cond-branch" e1);
-				let bb_next = create_node BKNormal bb bb.bb_type bb.bb_pos in
-				if not is_exhaustive then add_cfg_edge g bb bb_next CFGGoto;
+				let reachable = ref [] in
 				let make_case e =
 					let scope = increase_scope() in
 					let bb_case = create_node BKConditional bb e.etype e.epos in
 					let bb_case_next = block bb_case e in
 					scope();
-					add_cfg_edge g bb_case_next bb_next CFGGoto;
+					if bb_case_next != g.g_unreachable then
+						reachable := bb_case_next :: !reachable;
 					close_node g bb_case_next;
 					bb_case
 				in
@@ -1109,6 +1205,16 @@ module TexprTransformer = struct
 						add_cfg_edge g bb bb_case (CFGCondElse);
 						Some (bb_case)
 				in
+				let bb_next = if not is_exhaustive then begin
+					let bb_next = create_node BKNormal bb bb.bb_type bb.bb_pos in
+					add_cfg_edge g bb bb_next CFGGoto;
+					bb_next
+				end else match !reachable with
+					| [] -> g.g_unreachable
+					| [bb_case] -> create_node BKNormal bb_case bb.bb_type bb.bb_pos
+					| _ -> create_node BKNormal bb bb.bb_type bb.bb_pos
+				in
+				List.iter (fun bb -> add_cfg_edge g bb bb_next CFGGoto) !reachable;
 				set_syntax_edge g bb (SESwitch(cases,def,bb_next));
 				close_node g bb;
 				bb_next
@@ -1119,13 +1225,21 @@ module TexprTransformer = struct
 				close_node g bb;
 				let bb_loop_head = create_node BKLoopHead bb_loop_pre e1.etype e1.epos in
 				add_cfg_edge g bb_loop_pre bb_loop_head CFGGoto;
-				let bb_next = create_node BKNormal bb_loop_head bb.bb_type bb.bb_pos in
 				let scope = increase_scope() in
-				let close = begin_loop bb bb_next bb_loop_head in
+				let close = begin_loop bb bb_loop_head in
 				let bb_loop_body = create_node BKNormal bb_loop_head e2.etype e2.epos in
 				let bb_loop_body_next = block bb_loop_body e2 in
-				close();
+				let bb_breaks = close() in
 				scope();
+				let dom = match bb_breaks with
+					| [] ->
+						add_cfg_edge g bb_loop_body_next bb_exit CFGGoto;
+						g.g_unreachable
+					| [bb_break] -> bb_break
+					| _ -> bb_loop_body (* TODO: this is not accurate for while(true) loops *)
+				in
+				let bb_next = create_node BKNormal dom bb.bb_type bb.bb_pos in
+				List.iter (fun bb -> add_cfg_edge g bb bb_next CFGGoto) bb_breaks;
 				set_syntax_edge g bb_loop_pre (SEWhile(bb_loop_body,bb_next));
 				close_node g bb_loop_pre;
 				add_texpr g bb_loop_pre {e with eexpr = TWhile(e1,make_block_meta bb_loop_body,NormalWhile)};
@@ -1150,6 +1264,7 @@ module TexprTransformer = struct
 					set_syntax_edge g bb (SESubBlock(bb_try,bb_next))
 				else begin
 					let catches = List.map (fun (v,e) ->
+						declare_var ctx.graph v;
 						let scope = increase_scope() in
 						let bb_catch = create_node BKNormal bb_exc e.etype e.epos in
 						add_cfg_edge g bb_exc bb_catch CFGGoto;
@@ -1171,18 +1286,14 @@ module TexprTransformer = struct
 			| TReturn (Some e1) ->
 				begin try
 					let mk_return e1 = mk (TReturn (Some e1)) t_dynamic e.epos in
-					let e1 = map_values mk_return e1 in
-					block_element bb e1
+					block_element_value bb e1 mk_return
 				with Exit ->
 					let bb,e1 = value bb e1 in
 					add_cfg_edge g bb bb_exit CFGGoto;
 					add_terminator bb {e with eexpr = TReturn(Some e1)};
 				end
 			| TBreak ->
-				begin match !bb_break with
-					| Some bb_break -> add_cfg_edge g bb bb_break CFGGoto
-					| _ -> assert false
-				end;
+				bb_breaks := bb :: !bb_breaks;
 				add_terminator bb e
 			| TContinue ->
 				begin match !bb_continue with
@@ -1193,8 +1304,7 @@ module TexprTransformer = struct
 			| TThrow e1 ->
 				begin try
 					let mk_throw e1 = mk (TThrow e1) t_dynamic e.epos in
-					let e1 = map_values mk_throw e1 in
-					block_element bb e1
+					block_element_value bb e1 mk_throw
 				with Exit ->
 					let bb,e1 = value bb e1 in
 					begin match !b_try_stack with
@@ -1204,8 +1314,8 @@ module TexprTransformer = struct
 					add_terminator bb {e with eexpr = TThrow e1};
 				end
 			(* side_effects *)
-			| TCall({eexpr = TLocal v},_) when is_unbound v ->
-				ctx.has_unbound <- true;
+			| TCall({eexpr = TLocal v},el) when is_really_unbound v ->
+				check_unbound_call v el;
 				add_texpr g bb e;
 				bb
 			| TCall(e1,el) ->
@@ -1290,9 +1400,8 @@ module TexprTransformer = struct
 			com = com;
 			config = config;
 			graph = g;
-			entry = bb_unreachable;
+			entry = g.g_unreachable;
 			has_unbound = false;
-			saved_v_extra = IntMap.empty;
 			loop_counter = 0;
 			loop_stack = [];
 			scope_depth = 0;
@@ -1308,6 +1417,11 @@ module TexprTransformer = struct
 		close_node g g.g_root;
 		finalize g bb_exit;
 		set_syntax_edge g bb_exit SEEnd;
+		let check_unreachable bb =
+			if DynArray.length bb.bb_el > 0 then
+				com.warning "Unreachable code" (DynArray.get bb.bb_el 0).epos;
+		in
+		List.iter check_unreachable g.g_unreachable.bb_dominated;
 		ctx
 
 	let rec block_to_texpr_el ctx bb =
@@ -1363,12 +1477,12 @@ module TexprTransformer = struct
 		assert(bb.bb_closed);
 		let el = block_to_texpr_el ctx bb in
 		let rec loop e = match e.eexpr with
-			| TLocal v ->
+			| TLocal v when not (is_unbound v) ->
 				{e with eexpr = TLocal (get_var_origin ctx.graph v)}
-			| TVar(v,eo) ->
+			| TVar(v,eo) when not (is_unbound v) ->
 				let eo = Option.map loop eo in
 				let v' = get_var_origin ctx.graph v in
-				restore_v_extra ctx v';
+				(* restore_v_extra ctx v'; *)
 				{e with eexpr = TVar(v',eo)}
 			| TBinop(OpAssign,e1,({eexpr = TBinop(op,e2,e3)} as e4)) ->
 				let e1 = loop e1 in
@@ -1392,6 +1506,8 @@ module TexprTransformer = struct
 					| _ ->
 						{e with eexpr = TBinop(OpAssign,e1,{e4 with eexpr = TBinop(op,e2,e3)})}
 				end
+			| TCall({eexpr = TLocal v},_) when is_really_unbound v ->
+				e
 			| TCall({eexpr = TConst (TString "fun")},[{eexpr = TConst (TInt i32)}]) ->
 				func ctx (Int32.to_int i32)
 			| _ ->
@@ -1433,9 +1549,10 @@ module Ssa = struct
 		DynArray.add bb.bb_phi e
 
 	let insert_phi ctx =
-		IntMap.iter (fun i (v,bbl) ->
+		DynArray.iter (fun vi ->
+			let v = vi.vi_var in
 			let done_list = ref IntMap.empty in
-			let w = ref bbl in
+			let w = ref vi.vi_writes in
 			while !w <> [] do
 				let x = List.hd !w in
 				w := List.tl !w;
@@ -1443,32 +1560,25 @@ module Ssa = struct
 					if not (IntMap.mem y.bb_id !done_list) then begin
 						add_phi ctx.graph y v;
 						done_list := IntMap.add y.bb_id true !done_list;
-						if not (List.memq y bbl) then
+						if not (List.memq y vi.vi_writes) then
 							w := y :: !w
 					end
 				) x.bb_df;
 			done
-		) ctx.graph.g_var_writes
+		) ctx.graph.g_var_infos
 
-	let set_reaching_def v vo =
-		let eo = match vo with
-			| None -> None
-			| Some v' ->
-				let ev = mk (TLocal v') v.v_type null_pos in
-				let ea = mk (TArrayDecl [ev]) t_dynamic null_pos in
-				Some (ea)
-		in
-		v.v_extra <- Some([],eo)
+	let set_reaching_def g v vo =
+		let vi = get_var_info g v in
+		vi.vi_reaching_def <- vo
 
-	let get_reaching_def v = match v.v_extra with
-		| Some (_,Some {eexpr = TArrayDecl[{eexpr = TLocal v'}]}) -> Some v'
-		| _ -> None
+	let get_reaching_def g v =
+		(get_var_info g v).vi_reaching_def
 
 	let rec dominates bb_dom bb =
 		bb_dom == bb || bb.bb_dominator == bb_dom || (bb.bb_dominator != bb && dominates bb_dom bb.bb_dominator)
 
 	let dominates ctx r bb =
-		let _,l = IntMap.find r.v_id ctx.graph.g_var_writes in
+		let l = (get_var_info ctx.graph r).vi_writes in
 		List.exists (fun bb' -> dominates bb' bb) l
 
 	let update_reaching_def ctx v bb =
@@ -1477,16 +1587,16 @@ module Ssa = struct
 				if dominates ctx r bb then
 					Some r
 				else
-					loop (get_reaching_def r)
+					loop (get_reaching_def ctx.graph r)
 			| None ->
 				None
 		in
-		let v' = (loop (get_reaching_def v)) in
-		set_reaching_def v v'
+		let v' = (loop (get_reaching_def ctx.graph v)) in
+		set_reaching_def ctx.graph v v'
 
 	let local ctx e v bb =
 		update_reaching_def ctx v bb;
-		match get_reaching_def v with
+		match get_reaching_def ctx.graph v with
 			| Some v' -> v'
 			| None -> v
 
@@ -1519,25 +1629,26 @@ module Ssa = struct
 		let write_var v is_phi i =
 			update_reaching_def ctx v bb;
 			let v' = alloc_var (v.v_name) v.v_type in
+			declare_var ctx.graph v';
 			v'.v_meta <- v.v_meta;
 			v'.v_capture <- v.v_capture;
 			add_var_def ctx.graph bb v';
-			set_reaching_def v' (get_reaching_def v);
-			set_reaching_def v (Some v');
+			set_reaching_def ctx.graph v' (get_reaching_def ctx.graph v);
+			set_reaching_def ctx.graph v (Some v');
 			set_var_value ctx.graph v' bb is_phi i;
 			add_var_origin ctx.graph v' v;
 			v'
 		in
 		let rec loop is_phi i e = match e.eexpr with
-			| TLocal v ->
+			| TLocal v when not (is_unbound v) ->
 				let v' = local ctx e v bb in
 				add_ssa_edge ctx.graph v' bb is_phi i;
 				{e with eexpr = TLocal v'}
-			| TVar(v,Some e1) ->
+			| TVar(v,Some e1) when not (is_unbound v) ->
 				let e1 = (loop is_phi i) e1 in
 				let v' = write_var v is_phi i in
 				{e with eexpr = TVar(v',Some e1)}
-			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) ->
+			| TBinop(OpAssign,({eexpr = TLocal v} as e1),e2) when not (is_unbound v) ->
 				let e2 = (loop is_phi i) e2 in
 				let v' = write_var v is_phi i in
 				{e with eexpr = TBinop(OpAssign,{e1 with eexpr = TLocal v'},e2)};
@@ -1590,7 +1701,7 @@ module DataFlow (M : DataFlowApi) = struct
 	open BasicBlock
 
 	let get_ssa_edges_from g v =
-		try IntMap.find v.v_id g.g_ssa_edges with Not_found -> []
+		(get_var_info g v).vi_ssa_edges
 
 	let run ctx =
 		let g = ctx.graph in
@@ -1709,6 +1820,10 @@ module DataFlow (M : DataFlowApi) = struct
 		run ctx;
 		M.commit ctx
 end
+
+let type_iseq_strict_no_mono t1 t2 = match follow t1,follow t2 with
+	| TMono _,_ | _,TMono _ -> true
+	| _ -> type_iseq_strict t1 t2
 
 (*
 	ConstPropagation implements sparse conditional constant propagation using the DataFlow algorithm. Its lattice consists of
@@ -1830,7 +1945,7 @@ module ConstPropagation = DataFlow(struct
 				raise Not_found
 			| Const ct ->
 				let e' = Codegen.type_constant ctx.com (tconst_to_const ct) e.epos in
-				if not (type_iseq e'.etype e.etype) then raise Not_found;
+				if not (type_iseq_strict_no_mono e'.etype e.etype) then raise Not_found;
 				e'
 		in
 		let rec commit e = match e.eexpr with
@@ -1860,7 +1975,7 @@ module ConstPropagation = DataFlow(struct
 end)
 
 (*
-	Propagates locals to other locals if data flow analysis it's possible.
+	Propagates local variables to other local variables.
 
 	Respects scopes on targets where it matters (all except JS and As3).
 *)
@@ -1871,12 +1986,12 @@ module CopyPropagation = DataFlow(struct
 	type t =
 		| Top
 		| Bottom
-		| Local of (BasicBlock.t * tvar)
+		| Local of tvar
 
 	let to_string = function
 		| Top -> "Top"
 		| Bottom -> "Bottom"
-		| Local(bb,v) -> Printf.sprintf "%s<%i>" v.v_name v.v_id
+		| Local v -> Printf.sprintf "%s<%i>" v.v_name v.v_id
 
 	let conditional = false
 	let flag = FlagCopyPropagation
@@ -1891,29 +2006,13 @@ module CopyPropagation = DataFlow(struct
 	let equals t1 t2 = match t1,t2 with
 		| Top,Top -> true
 		| Bottom,Bottom -> true
-		| Local(_,v1),Local(_,v2) -> v1.v_id = v2.v_id
+		| Local v1,Local v2 -> v1.v_id = v2.v_id
 		| _ -> false
 
 	let transfer ctx bb e =
-		let local bb v = try
-			begin match get_cell v.v_id with
-				| Bottom -> raise Not_found
-				| t -> t
-			end
-		with Not_found ->
-			Local(bb,v)
-		in
 		let rec loop e = match e.eexpr with
 			| TLocal v when not v.v_capture ->
-				let v' = get_var_origin ctx.graph v in
-				(* This restriction is in place due to how we currently reconstruct the AST. Multiple SSA-vars may be turned back to
-				   the same origin var, which creates interference that is not tracked in the analysis. We address this by only
-				   considering variables whose origin-variables are assigned to at most once. *)
-				let writes = try snd (IntMap.find v'.v_id ctx.graph.g_var_writes) with Not_found -> [] in
-				begin match writes with
-					| [bb] -> local bb v
-					| _ -> Bottom
-				end
+				Local v
 			| TParenthesis e1 | TMeta(_,e1) | TCast(e1,None) ->
 				loop e1
 			| _ ->
@@ -1927,18 +2026,30 @@ module CopyPropagation = DataFlow(struct
 	let commit ctx =
 		(* We don't care about the scope on JS and AS3 because they hoist var declarations. *)
 		let in_scope bb bb' = match ctx.com.platform with
-			| Js _ -> true
+			| Js -> true
 			| Flash when Common.defined ctx.com Define.As3 -> true
 			| _ -> List.mem (List.hd bb'.bb_scopes) bb.bb_scopes
 		in
 		let rec commit bb e = match e.eexpr with
 			| TLocal v when not v.v_capture ->
 				begin try
-					let ct = IntMap.find v.v_id !lattice in
-					begin match ct with
-						| Local(bb',v') when in_scope bb bb' && (type_iseq_strict v.v_type v'.v_type) -> {e with eexpr = TLocal v'}
-						| _ -> raise Not_found
-					end
+					let lat = get_cell v.v_id in
+					let leave () =
+						lattice := IntMap.remove v.v_id !lattice;
+						raise Not_found
+					in
+					let v' = match lat with Local v -> v | _ -> leave() in
+					if not (type_iseq_strict_no_mono v'.v_type v.v_type) then leave();
+					let v'' = get_var_origin ctx.graph v' in
+					(* This restriction is in place due to how we currently reconstruct the AST. Multiple SSA-vars may be turned back to
+					   the same origin var, which creates interference that is not tracked in the analysis. We address this by only
+					   considering variables whose origin-variables are assigned to at most once. *)
+					let writes = (get_var_info ctx.graph v'').vi_writes in
+					begin match writes with
+						| [bb'] when in_scope bb bb' -> ()
+						| _ -> leave()
+					end;
+					commit bb {e with eexpr = TLocal v'}
 				with Not_found ->
 					e
 				end
@@ -1963,7 +2074,7 @@ module CodeMotion = DataFlow(struct
 		| Top
 		| Bottom
 		| Const of tconstant
-		| Local of tvar * BasicBlock.t
+		| Local of tvar
 		| Binop of binop * t * t
 
 	and t = (t_def * Type.t * pos)
@@ -1977,7 +2088,7 @@ module CodeMotion = DataFlow(struct
 			true
 		| Const ct1,Const ct2 ->
 			ct1 = ct2
-		| Local(v1,_),Local(v2,_) ->
+		| Local v1,Local v2 ->
 			v1 == v2
 		| Binop(op1,lat11,lat12),Binop(op2,lat21,lat22) ->
 			op1 = op2 && equals lat11 lat21 && equals lat12 lat22
@@ -1994,8 +2105,7 @@ module CodeMotion = DataFlow(struct
 			| TConst ct ->
 				Const ct
 			| TLocal v ->
-				let bb_def = match IntMap.find v.v_id ctx.graph.g_var_writes with _,[bb] -> bb | _ -> raise Exit in
-				Local(v,bb_def)
+				Local v
 			| TBinop(op,e1,e2) ->
 				let lat1 = transfer ctx bb e1 in
 				let lat2 = transfer ctx bb e2 in
@@ -2012,15 +2122,9 @@ module CodeMotion = DataFlow(struct
 		lattice := IntMap.empty
 
 	let commit ctx =
-		let rec s_lat (lat,_,_) = match lat with
-			| Top -> "Top"
-			| Bottom -> "Bottom"
-			| Const ct -> s_const ct
-			| Local(v,bb) -> Printf.sprintf "(%i) %s<%i>" bb.bb_id v.v_name v.v_id
-			| Binop(op,lat1,lat2) -> Printf.sprintf "%s %s %s" (s_lat lat1) (s_binop op) (s_lat lat2)
-		in
 		let rec filter_loops lat loops = match lat with
-			| Local(v,bb),_,_ ->
+			| Local v,_,_ ->
+				let bb = match (get_var_info ctx.graph v).vi_writes with [bb] -> bb | _ -> raise Exit in
 				let loops2 = List.filter (fun i -> not (List.mem i bb.bb_loop_groups)) loops in
 				if loops2 = [] then filter_loops (get_cell v.v_id) loops else true,lat,loops2
 			| Const _,_,_ ->
@@ -2034,7 +2138,7 @@ module CodeMotion = DataFlow(struct
 		in
 		let rec to_texpr (lat,t,p) =
 			let def = match lat with
-				| Local(v,_) -> TLocal v
+				| Local v -> TLocal v
 				| Const ct -> TConst ct
 				| Binop(op,lat1,lat2) -> TBinop(op,to_texpr lat1,to_texpr lat2)
 				| _ -> raise Exit
@@ -2056,10 +2160,10 @@ module CodeMotion = DataFlow(struct
 					snd (List.find (fun (lat',e) -> equals lat lat') l)
 				with Not_found ->
 					let v' = if decl then begin
-						set_cell v.v_id (Local(v,bb_loop_pre),t,p);
 						v
 					end else begin
 						let v' = alloc_var "tmp" v.v_type in
+						declare_var ctx.graph v';
 						v'.v_meta <- [Meta.CompilerGenerated,[],p];
 						v'
 					end in
@@ -2104,6 +2208,85 @@ module CodeMotion = DataFlow(struct
 		);
 end)
 
+module LoopInductionVariables = struct
+	open Graph
+
+	type book = {
+		tvar : tvar;
+		index : int;
+		mutable lowlink : int;
+		mutable on_stack : bool
+	}
+
+	let find_cycles g =
+		let index = ref 0 in
+		let s = ref [] in
+		let book = ref IntMap.empty in
+		let add_book_entry v =
+			let entry = {
+				tvar = v;
+				index = !index;
+				lowlink = !index;
+				on_stack = true;
+			} in
+			incr index;
+			book := IntMap.add v.v_id entry !book;
+			entry
+		in
+		let rec strong_connect vi =
+			let v_entry = add_book_entry vi.vi_var in
+			s := v_entry :: !s;
+			List.iter (fun (bb,is_phi,i) ->
+				try
+					let e = get_texpr g bb is_phi i in
+					let w = match e.eexpr with
+						| TVar(v,_) | TBinop(OpAssign,{eexpr = TLocal v},_) -> v
+						| _ -> raise Exit
+					in
+					begin try
+						let w_entry = IntMap.find w.v_id !book in
+						if w_entry.on_stack then
+							v_entry.lowlink <- min v_entry.lowlink w_entry.index
+					with Not_found ->
+						let w_entry = strong_connect (get_var_info g w) in
+						v_entry.lowlink <- min v_entry.lowlink w_entry.lowlink;
+					end
+				with Exit ->
+					()
+			) vi.vi_ssa_edges;
+			if v_entry.lowlink = v_entry.index then begin
+				let rec loop acc entries = match entries with
+					| w_entry :: entries ->
+						w_entry.on_stack <- false;
+						if w_entry == v_entry then w_entry :: acc,entries
+						else loop (w_entry :: acc) entries
+					| [] ->
+						acc,[]
+				in
+				let scc,rest = loop [] !s in
+				begin match scc with
+					| [] | [_] ->
+						()
+					| _ ->
+						print_endline "SCC:";
+						List.iter (fun entry -> print_endline (Printf.sprintf "%s<%i>" entry.tvar.v_name entry.tvar.v_id)) scc;
+						(* now what? *)
+				end;
+				s := rest
+			end;
+			v_entry
+		in
+		DynArray.iter (fun vi -> match vi.vi_ssa_edges with
+			| [] ->
+				()
+			| _ ->
+				if not (IntMap.mem vi.vi_var.v_id !book) then
+					ignore(strong_connect vi)
+		) g.g_var_infos
+
+	let apply ctx =
+		find_cycles ctx.graph
+end
 
 (*
 	LocalDce implements a mark & sweep dead code elimination. The mark phase follows the CFG edges of the graphs to find
@@ -2151,15 +2334,15 @@ module LocalDce = struct
 			if not (is_used v) then begin
 				v.v_meta <- (Meta.Used,[],null_pos) :: v.v_meta;
 				(try expr (get_var_value ctx.graph v) with Not_found -> ());
-				begin match Ssa.get_reaching_def v with
+				begin match Ssa.get_reaching_def ctx.graph v with
 					| None -> use (get_var_origin ctx.graph v)
 					| Some v -> use v;
 				end
 			end
 		and expr e = match e.eexpr with
-			| TLocal v ->
+			| TLocal v when not (is_unbound v) ->
 				use v;
-			| TBinop(OpAssign,{eexpr = TLocal v},e1) | TVar(v,Some e1) ->
+			| TBinop(OpAssign,{eexpr = TLocal v},e1) | TVar(v,Some e1) when not (is_unbound v) ->
 				if has_side_effect e1 || keep v then expr e1
 				else ()
 			| _ ->
@@ -2329,18 +2512,18 @@ module Debug = struct
 			nodes := PMap.add n true !nodes;
 			n
 		in
-		IntMap.iter (fun i l ->
+		DynArray.iter (fun vi ->
 			begin try
-				let (bb,is_phi,i) = IntMap.find i g.g_var_values in
+				let (bb,is_phi,i) = match vi.vi_value with None -> raise Not_found | Some i -> i in
 				let n1 = node_name2 bb is_phi i in
 				List.iter (fun (bb',is_phi',i') ->
 					let n2 = node_name2 bb' is_phi' i' in
 					Printf.fprintf ch "%s -> %s;\n" n1 n2
-				) l
+				) vi.vi_ssa_edges
 			with Not_found ->
 				()
 			end
-		) g.g_ssa_edges;
+		) g.g_var_infos;
 		IntMap.iter (fun _ bb ->
 			let f is_phi acc i e =
 				let n = node_name bb is_phi i in
@@ -2367,6 +2550,7 @@ end
 
 module Run = struct
 	open Config
+	open Graph
 
 	let with_timer s f =
 		let timer = timer s in
@@ -2382,6 +2566,9 @@ module Run = struct
 	let back_again ctx =
 		let e = with_timer "analyzer-to-texpr" (fun () -> TexprTransformer.to_texpr ctx) in
 		let e = with_timer "analyzer-filter-unapply" (fun () -> TexprFilter.unapply ctx.com ctx.config e) in
+		DynArray.iter (fun vi ->
+			vi.vi_var.v_extra <- vi.vi_extra;
+		) ctx.graph.g_var_infos;
 		e
 
 	let roundtrip com config e =
@@ -2389,7 +2576,7 @@ module Run = struct
 		let e = back_again ctx in
 		e
 
-	let run_on_expr com config c cf e =
+	let run_on_expr com config e =
 		try
 			let ctx = there com config e in
 			if config.optimize && not ctx.has_unbound then begin
@@ -2399,16 +2586,21 @@ module Run = struct
 				if config.code_motion then with_timer "analyzer-code-motion" (fun () -> CodeMotion.apply ctx);
 				with_timer "analyzer-local-dce" (fun () -> LocalDce.apply ctx);
 			end;
-			if config.dot_debug then Debug.dot_debug ctx c cf;
 			let e = back_again ctx in
-			e
+			Some ctx,e
 		with Exit ->
-			e
+			None,e
 
 	let run_on_field ctx config c cf = match cf.cf_expr with
 		| Some e when not (is_ignored cf.cf_meta) && not (Codegen.is_removable_field ctx cf) ->
 			let config = update_config_from_meta config cf.cf_meta in
-			cf.cf_expr <- Some (run_on_expr ctx.Typecore.com config c cf e);
+			let e =  match run_on_expr ctx.Typecore.com config e with
+				| None,e -> e
+				| Some ctx,e ->
+					if config.dot_debug then Debug.dot_debug ctx c cf;
+					e
+			in
+			cf.cf_expr <- Some e;
 		| _ -> ()
 
 	let run_on_class ctx config c =

@@ -519,6 +519,16 @@ and expr dce e =
 
 let fix_accessors com =
 	List.iter (fun mt -> match mt with
+		(* filter empty abstract implementation classes (issue #1885). *)
+		| TClassDecl({cl_kind = KAbstractImpl _} as c) when c.cl_ordered_statics = [] && c.cl_ordered_fields = [] && not (Meta.has Meta.Used c.cl_meta) ->
+			c.cl_extern <- true
+		| TClassDecl({cl_kind = KAbstractImpl a} as c) when Meta.has Meta.Enum a.a_meta ->
+			let is_runtime_field cf =
+				not (Meta.has Meta.Enum cf.cf_meta)
+			in
+			(* also filter abstract implementation classes that have only @:enum fields (issue #2858) *)
+			if not (List.exists is_runtime_field c.cl_ordered_statics) then
+				c.cl_extern <- true
 		| (TClassDecl c) ->
 			let rec has_accessor c n stat =
 				PMap.mem n (if stat then c.cl_statics else c.cl_fields)
@@ -719,7 +729,9 @@ let run com main full =
 		| _ -> ()
 	) com.types;
 
-	(* mark extern classes as really used if they are extended by non-extern ones *)
+	(*
+		Mark extern classes as really used if they are extended by non-extern ones.
+	*)
 	List.iter (function
 		| TClassDecl ({cl_extern = false; cl_super = Some ({cl_extern = true} as csup, _)}) ->
 			mark_directly_used_class csup
