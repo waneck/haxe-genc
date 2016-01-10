@@ -1,6 +1,6 @@
 (*
 	The Haxe Compiler
-	Copyright (C) 2005-2015  Haxe Foundation
+	Copyright (C) 2005-2016  Haxe Foundation
 
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
@@ -950,8 +950,6 @@ module TexprTransformer = struct
 				value bb e1
 			| TBlock _ | TIf _ | TSwitch _ | TTry _ ->
 				bind_to_temp bb false e
-			| TFor _ | TWhile _ ->
-				assert false
 			| TCall({eexpr = TLocal v},el) when is_really_unbound v ->
 				check_unbound_call v el;
 				bb,e
@@ -1018,8 +1016,8 @@ module TexprTransformer = struct
 				error "Cannot use abstract as value" e.epos
 			| TConst _ | TTypeExpr _ ->
 				bb,e
-			| TContinue | TBreak | TThrow _ | TReturn _ | TVar _ ->
-				assert false
+			| TContinue | TBreak | TThrow _ | TReturn _ | TVar _ | TFor _ | TWhile _ ->
+				error "Cannot use this expression as value" e.epos
 		and ordered_value_list bb el =
 			let might_be_affected,collect_modified_locals = Optimizer.create_affection_checker() in
 			let rec can_be_optimized e = match e.eexpr with
@@ -1267,6 +1265,7 @@ module TexprTransformer = struct
 						declare_var ctx.graph v;
 						let scope = increase_scope() in
 						let bb_catch = create_node BKNormal bb_exc e.etype e.epos in
+						add_var_def g bb_catch v;
 						add_cfg_edge g bb_exc bb_catch CFGGoto;
 						let bb_catch_next = block bb_catch e in
 						scope();
@@ -2026,8 +2025,8 @@ module CopyPropagation = DataFlow(struct
 	let commit ctx =
 		(* We don't care about the scope on JS and AS3 because they hoist var declarations. *)
 		let in_scope bb bb' = match ctx.com.platform with
-			| Js -> true
-			| Flash when Common.defined ctx.com Define.As3 -> true
+(* 			| Js -> true
+			| Flash when Common.defined ctx.com Define.As3 -> true *)
 			| _ -> List.mem (List.hd bb'.bb_scopes) bb.bb_scopes
 		in
 		let rec commit bb e = match e.eexpr with

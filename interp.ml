@@ -1,6 +1,6 @@
 (*
 	The Haxe Compiler
-	Copyright (C) 2005-2015  Haxe Foundation
+	Copyright (C) 2005-2016  Haxe Foundation
 
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
@@ -1862,7 +1862,8 @@ let std_lib =
 	(* process *)
 		"process_run", (Fun2 (fun p args ->
 			match p, args with
-			| VString p, VArray args -> VAbstract (AProcess (Process.run p (Array.map vstring args)))
+			| VString p, VArray args -> VAbstract (AProcess (Process.run p (Some (Array.map vstring args))))
+			| VString p, _ -> VAbstract (AProcess (Process.run p None))
 			| _ -> error()
 		));
 		"process_stdout_read", (Fun4 (fun p str pos len ->
@@ -3429,8 +3430,8 @@ and eval_op ctx op e1 e2 p =
 		let e2 = eval ctx e2 in
 		(fun() ->
 			match e1() with
-			| VBool false as v -> v
-			| _ -> e2())
+			| VBool true -> e2()
+			| _ -> VBool false)
 	| "||" ->
 		let e1 = eval ctx e1 in
 		let e2 = eval ctx e2 in
@@ -3536,7 +3537,7 @@ let rec to_string ctx n v =
 			Buffer.contents b
 
 let rec compare ctx a b =
-	let fcmp (a:float) b = if a = b then CEq else if a < b then CInf else CSup in
+	let fcmp (a:float) b = if a = b then CEq else if a < b then CInf else if a > b then CSup else CUndef in
 	let scmp (a:string) b = if a = b then CEq else if a < b then CInf else CSup in
 	let icmp (a:int32) b = let l = Int32.compare a b in if l = 0 then CEq else if l < 0 then CInf else CSup in
 	match a, b with

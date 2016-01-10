@@ -1,6 +1,6 @@
 (*
 	The Haxe Compiler
-	Copyright (C) 2005-2015  Haxe Foundation
+	Copyright (C) 2005-2016  Haxe Foundation
 
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
@@ -199,7 +199,7 @@ let module_pass_1 com m tdecls loadp =
 				(match !decls with
 				| (TClassDecl c,_) :: _ ->
 					List.iter (fun m -> match m with
-						| ((Meta.Build | Meta.CoreApi | Meta.Allow | Meta.Access | Meta.Enum | Meta.Dce | Meta.Native | Meta.Expose),_,_) ->
+						| ((Meta.Build | Meta.CoreApi | Meta.Allow | Meta.Access | Meta.Enum | Meta.Dce | Meta.Native | Meta.Expose | Meta.Deprecated),_,_) ->
 							c.cl_meta <- m :: c.cl_meta;
 						| _ ->
 							()
@@ -539,6 +539,7 @@ and load_complex_type ctx p t =
 				| None -> error ("Explicit type required for field " ^ n) p
 				| Some t -> load_complex_type ctx p t
 			in
+			if n = "new" then ctx.com.warning "Structures with new are deprecated, use haxe.Constraints.Constructible instead" p;
 			let no_expr = function
 				| None -> ()
 				| Some (_,p) -> error "Expression not allowed here" p
@@ -2557,6 +2558,10 @@ module ClassInitializer = struct
 				if (fctx.is_abstract_member && not (Meta.has Meta.Impl f2.cf_meta)) || (Meta.has Meta.Impl f2.cf_meta && not (fctx.is_abstract_member)) then
 					display_error ctx "Mixing abstract implementation and static properties/accessors is not allowed" f2.cf_pos;
 				(match req_name with None -> () | Some n -> display_error ctx ("Please use " ^ n ^ " to name your property access method") f2.cf_pos);
+				f2.cf_meta <- List.fold_left (fun acc ((m,_,_) as meta) -> match m with
+					| Meta.Deprecated -> meta :: acc
+					| _ -> acc
+				) f2.cf_meta f.cff_meta;
 			with
 				| Error (Unify l,p) -> raise (Error (Stack (Custom ("In method " ^ m ^ " required by property " ^ f.cff_name),Unify l),p))
 				| Not_found ->
@@ -3176,7 +3181,12 @@ let init_module_type ctx context_init do_init (decl,p) =
 				if a.a_impl = None then error "Abstracts with underlying type must have an implementation" a.a_pos;
 				if Meta.has Meta.CoreType a.a_meta then error "@:coreType abstracts cannot have an underlying type" p;
 				let at = load_complex_type ctx p t in
-				(match at with TAbstract(a2,_) when a == a2 -> error "Abstract underlying type cannot be recursive" a.a_pos | _ -> ());
+				delay ctx PForce (fun () ->
+					begin match follow at with
+						| TAbstract(a2,_) when a == a2 -> error "Abstract underlying type cannot be recursive" a.a_pos
+						| _ -> ()
+					end;
+				);
 				a.a_this <- at;
 				is_type := true;
 			| APrivAbstract -> ()
@@ -3254,6 +3264,7 @@ let type_types_into_module ctx m tdecls p =
 		in_display = false;
 		in_loop = false;
 		opened = [];
+		in_call_args = false;
 		vthis = None;
 	} in
 	if ctx.g.std != null_module then begin

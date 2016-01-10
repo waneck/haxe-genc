@@ -1,6 +1,6 @@
 (*
 	The Haxe Compiler
-	Copyright (C) 2005-2015  Haxe Foundation
+	Copyright (C) 2005-2016  Haxe Foundation
 
 	This program is free software; you can redistribute it and/or
 	modify it under the terms of the GNU General Public License
@@ -327,6 +327,7 @@ let has_ctor_constraint c = match c.cl_kind with
 	| KTypeParameter tl ->
 		List.exists (fun t -> match follow t with
 			| TAnon a when PMap.mem "new" a.a_fields -> true
+			| TAbstract({a_path=["haxe"],"Constructible"},_) -> true
 			| _ -> false
 		) tl;
 	| _ -> false
@@ -829,8 +830,8 @@ module AbstractCast = struct
 	let cast_or_unify ctx tleft eright p =
 		try
 			cast_or_unify_raise ctx tleft eright p
-		with Error (Unify _ as err,_) ->
-			if not ctx.untyped then display_error ctx (error_msg err) p;
+		with Error (Unify l,p) ->
+			raise_or_display ctx l p;
 			eright
 
 	let find_array_access_raise ctx a pl e1 e2o p =
@@ -934,7 +935,7 @@ module AbstractCast = struct
 					   let's construct the underlying type. *)
 					match Abstract.get_underlying_type a pl with
 					| TInst(c,tl) as t -> {e with eexpr = TNew(c,tl,el); etype = t}
-					| _ -> assert false
+					| _ -> error ("Cannot construct " ^ (s_type (print_context()) (TAbstract(a,pl)))) e.epos
 				end else begin
 					(* a TNew of an abstract implementation is only generated if it is a multi type abstract *)
 					let cf,m = find_multitype_specialization ctx.com a pl e.epos in

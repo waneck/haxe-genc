@@ -1,6 +1,6 @@
 (*
    The Haxe Compiler
-   Copyright (C) 2005-2015  Haxe Foundation
+   Copyright (C) 2005-2016  Haxe Foundation
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License
@@ -306,6 +306,9 @@ let hash_iterate hash visitor =
 (* Convert function names that can't be written in c++ ... *)
 let keyword_remap name =
    match name with
+   | "__get" | "__set" | "__unsafe_get" | "__unsafe_set" | "__global__"
+   |   "__SetSize" | "__s" | "__trace" -> name
+   (* | _ when (String.length name > 1) && (String.sub name 0 2 = "__") -> "_hx" ^ name *)
    | "int"
    | "auto" | "char" | "const" | "delete" | "double" | "Float" | "enum"
    | "extern" | "float" | "friend" | "goto" | "long" | "operator" | "protected"
@@ -319,6 +322,7 @@ let keyword_remap name =
    | "INT_MIN" | "INT_MAX" | "INT8_MIN" | "INT8_MAX" | "UINT8_MAX" | "INT16_MIN"
    | "INT16_MAX" | "UINT16_MAX" | "INT32_MIN" | "INT32_MAX" | "UINT32_MAX"
    | "asm"
+   | "abstract" | "decltype" | "finally" | "nullptr" | "static_assert"
    | "struct" -> "_hx_" ^ name
    | x -> x
 ;;
